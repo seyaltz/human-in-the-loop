@@ -21,6 +21,8 @@
         <!-- header: level badge + topic -->
         <DockPanel Grid.Row="1" Margin="0,0,0,10">
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="Knowledge about me" Opacity="0.7" VerticalAlignment="Center" Margin="0,0,8,0" />
+                <ComboBox x:Name="KnowledgeChoice" Width="200" Margin="0,0,16,0" />
                 <TextBlock Text="Level for new questions" Opacity="0.7" VerticalAlignment="Center" Margin="0,0,8,0" />
                 <ComboBox x:Name="LevelChoice" Width="190" SelectedIndex="0" />
             </StackPanel>

@@ -40,6 +40,18 @@ public partial class QuestionWindow : Window
             LevelChoice.Items.Add(new ComboBoxItem { Content = level.Name, Tag = level });
         }
         LevelChoice.SelectedIndex = 0;
+        foreach ((KnowledgeSource source, string label) in new[]
+                 {
+                     (KnowledgeSource.Claude, "From my Claude history"),
+                     (KnowledgeSource.File, "From profile.txt"),
+                     (KnowledgeSource.None, "None (generic)"),
+                 })
+        {
+            KnowledgeChoice.Items.Add(new ComboBoxItem { Content = label, Tag = source });
+            if (Knowledge.Source == source) KnowledgeChoice.SelectedIndex = KnowledgeChoice.Items.Count - 1;
+        }
+        KnowledgeChoice.SelectionChanged += (_, _) =>
+            Knowledge.SetSource((KnowledgeSource)((ComboBoxItem)KnowledgeChoice.SelectedItem).Tag);
         foreach (Category category in Category.All)
         {
             Tabs.Items.Add(new TabItem { Header = category.Name, Tag = category });

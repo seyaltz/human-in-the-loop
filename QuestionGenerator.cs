@@ -21,12 +21,12 @@ public sealed record Level(string Name, string Style, IReadOnlyList<string> Topi
 
     public static readonly Level Medium = new("Medium",
         "a focused technical question that needs some reasoning",
-        ["algorithms and complexity", "data structures", "concurrency", "SQL and indexes", "JVM internals",
-         "networking and HTTP", "operating systems", "Spring and JPA", "testing strategy", "design patterns"]);
+        ["algorithms and complexity", "data structures", "concurrency", "SQL and indexes", "runtime internals (memory, GC)",
+         "networking and HTTP", "operating systems", "web frameworks and ORMs", "testing strategy", "design patterns"]);
 
     public static readonly Level Light = new("Light",
         "a quick question answerable in under a minute (a short snippet, a definition, a \"what does this print\")",
-        ["Java language trivia", "git", "HTTP status codes", "Linux / shell commands", "regex", "JavaScript quirks",
+        ["programming language trivia", "git", "HTTP status codes", "Linux / shell commands", "regex", "JavaScript quirks",
          "SQL basics", "CS history", "computer architecture basics", "encoding and Unicode"]);
 
     public static Level At(TimeSpan time) =>
@@ -43,16 +43,17 @@ public sealed record Category(string Name, IReadOnlyList<string> Topics)
         Mix,
         new("Architecture", ["distributed systems", "caching strategy", "messaging and event-driven design",
             "consistency and transactions", "API design", "microservices vs monolith", "resilience (retries, timeouts, circuit breakers)",
-            "scaling a search-heavy system"]),
-        new("GCP", ["Cloud Run scaling and cold starts", "Cloud SQL and connections", "IAM and service accounts",
-            "load balancers, Cloud Armor and IAP", "Pub/Sub", "Cloud Logging and Trace", "GCP cost", "Terraform on GCP"]),
-        new("Java & Spring", ["JVM memory and GC", "concurrency", "Spring Boot internals", "Spring transactions",
-            "JPA / Hibernate", "Java language features", "virtual threads"]),
-        new("Databases", ["PostgreSQL indexes and query plans", "Oracle vs PostgreSQL", "SQL", "locking and isolation levels",
-            "schema design", "Redis data structures and patterns"]),
+            "scaling a read-heavy system"]),
+        new("Cloud", ["serverless and containers (scaling, cold starts)", "managed databases and connection limits",
+            "identity, roles and service accounts", "load balancers, WAF and edge security", "queues and pub/sub",
+            "cloud logging, metrics and tracing", "cloud cost", "infrastructure as code"]),
+        new("Backend", ["memory management and GC", "concurrency", "framework internals (dependency injection, proxies)",
+            "transactions in application code", "ORMs and data access", "language features", "async and threads"]),
+        new("Databases", ["indexes and query plans", "relational vs NoSQL", "SQL", "locking and isolation levels",
+            "schema design", "caches and key-value stores"]),
         new("Algorithms", ["algorithms and complexity", "data structures", "graphs and shortest paths",
             "sorting and searching", "dynamic programming", "hashing"]),
-        new("Frontend", ["Next.js rendering (SSR, SSG, RSC)", "React state and effects", "TypeScript types",
+        new("Frontend", ["rendering strategies (SSR, SSG, client-side)", "React state and effects", "TypeScript types",
             "browser and HTTP caching", "web performance", "JavaScript quirks"]),
         new("DevOps", ["Docker", "CI/CD pipelines", "git", "Terraform", "observability (logs, metrics, traces)",
             "deployments and rollbacks"]),
@@ -70,18 +71,19 @@ public static class QuestionGenerator
     private static readonly string[] ClaudeArgs =
         ["-p", "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence"];
 
-    private static readonly string ProfilePath = Path.Combine(AppContext.BaseDirectory, "profile.txt");
-
     public static async Task<Question> GenerateAsync(Level level, string topic)
     {
-        string profile = File.Exists(ProfilePath) ? await File.ReadAllTextAsync(ProfilePath) : "";
+        string knowledge = await Knowledge.GetAsync();
+        string aboutThem = knowledge.Length == 0 ? "" : $"""
+            About this developer:
+            {knowledge}
+
+            Where it fits naturally, set the question in their stack and domain, but keep it a general lesson that is worth knowing.
+
+            """;
         string prompt = $"""
-            You are quizzing a developer during a short break. Their profile:
-            {profile.Trim()}
-
-            Where it fits naturally, set the question in their stack and domain (their technologies, travel booking
-            examples like flight search, packages, pricing, reservations), but keep it a general lesson that is worth knowing.
-
+            You are quizzing a developer during a short break.
+            {aboutThem}
             Write ONE {level.Name.ToLowerInvariant()} question about: {topic}.
             Style: {level.Style}.
             Keep the question under 120 words. Use plain text: no markdown headings, no bold, no lists markup.
@@ -173,7 +175,7 @@ public static class QuestionGenerator
         return RunClaudeAsync(prompt);
     }
 
-    private static async Task<string> RunClaudeAsync(string prompt)
+    public static async Task<string> RunClaudeAsync(string prompt)
     {
         var start = new ProcessStartInfo("claude")
         {

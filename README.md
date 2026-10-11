@@ -25,8 +25,15 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
 .\install-startup.ps1      # start it at Windows login (-Uninstall to remove)
 ```
 
-## Your profile (optional)
+## Knowledge about you (optional)
 
-Create `profile.txt` next to the project (or the exe) describing your role and stack, e.g.
-"Senior Java backend developer, Spring Boot, PostgreSQL, GCP". Questions will be set in your world.
-It is git-ignored.
+The app itself is generic. To set questions in your own stack, pick a source in **Knowledge about me** - the
+dropdown at the top of the question window, or the tray menu (saved in `settings.json` next to the exe):
+
+- **From my Claude history** - once a day it reads the prompts you typed into Claude Code in the last 7 days
+  (`%USERPROFILE%\.claude\projects`, your own prompts only, max 200) and asks Claude for a short summary of your stack
+  and recent work. The summary is saved as `knowledge-from-claude.txt` next to the exe. Nothing leaves your machine
+  except to your own Claude account.
+- **From profile.txt** (default) - write a few lines about yourself in `profile.txt` next to the exe, e.g.
+  "Senior Java backend developer, Spring Boot, PostgreSQL, GCP". It is git-ignored.
+- **None** - generic questions.

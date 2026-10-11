@@ -30,6 +30,7 @@ public partial class App : Application
 
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("Ask me now", null, (_, _) => Ask());
+        menu.Items.Add(KnowledgeMenu());
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => Shutdown());
 
@@ -90,6 +91,39 @@ public partial class App : Application
         _open.Closed += (_, _) => _open = null;
         _open.Show();
         _open.Activate();
+    }
+
+    /// <summary>"Knowledge" submenu: what new questions know about the user. The choice is saved in settings.json.</summary>
+    private static Forms.ToolStripMenuItem KnowledgeMenu()
+    {
+        var knowledge = new Forms.ToolStripMenuItem("Knowledge about me");
+        foreach ((KnowledgeSource source, string label) in new[]
+                 {
+                     (KnowledgeSource.Claude, "From my Claude history (summary once a day)"),
+                     (KnowledgeSource.File, "From profile.txt"),
+                     (KnowledgeSource.None, "None (generic questions)"),
+                 })
+        {
+            var item = new Forms.ToolStripMenuItem(label) { Checked = Knowledge.Source == source, Tag = source };
+            item.Click += (_, _) =>
+            {
+                Knowledge.SetSource(source);
+                foreach (Forms.ToolStripMenuItem other in knowledge.DropDownItems)
+                {
+                    other.Checked = other == item;
+                }
+            };
+            knowledge.DropDownItems.Add(item);
+        }
+        // the question window can change it too
+        knowledge.DropDownOpening += (_, _) =>
+        {
+            foreach (Forms.ToolStripMenuItem item in knowledge.DropDownItems)
+            {
+                item.Checked = (KnowledgeSource)item.Tag! == Knowledge.Source;
+            }
+        };
+        return knowledge;
     }
 
     private static Icon TrayIcon()
