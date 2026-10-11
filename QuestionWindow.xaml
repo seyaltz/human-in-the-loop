@@ -43,8 +43,13 @@
             </StackPanel>
         </Grid>
 
-        <!-- your answer -->
+        <!-- your answer, with the background theory as an open/close hint above it -->
         <StackPanel Grid.Row="3" Margin="0,12,0,0">
+            <Expander x:Name="TheoryExpander" Header="Hint: background theory" Margin="0,0,0,10"
+                      Expanded="Theory_Toggled" Collapsed="Theory_Toggled">
+                <RichTextBox x:Name="TheoryBox" IsReadOnly="True" IsDocumentEnabled="True" MaxHeight="200"
+                             VerticalScrollBarVisibility="Auto" FontSize="13.5" Padding="10" Margin="0,6,0,0" />
+            </Expander>
             <TextBlock Text="Your answer (optional)" Opacity="0.7" Margin="0,0,0,4" />
             <TextBox x:Name="MineBox" Height="64" TextWrapping="Wrap" AcceptsReturn="True"
                      VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"

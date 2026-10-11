@@ -5,3 +5,5 @@ publish/
 .vs/
 # personal: your own stack and domain, used to tailor questions
 profile.txt
+# local Claude Code skills, not part of the app
+.claude/

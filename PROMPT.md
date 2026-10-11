@@ -99,16 +99,20 @@ Style: <level style>.
 Keep the question under 120 words. Use plain text: no markdown headings, no bold, no lists markup.
 Put every code snippet in a fenced block with its language, e.g. ```java, ```sql, ```javascript, ```bash.
 Short names inside a sentence go in single backticks, e.g. `HashMap`.
+Then give the background theory: the concepts someone needs to know to work it out, as a hint
+(under 120 words). It must not give away the answer.
 Then give the answer: the key insight first, then a short explanation (under 150 words).
 For a design question there may be no single right answer: give the best choice and its trade-offs.
 
 Reply in exactly this format and nothing else:
 QUESTION:
 <the question>
+THEORY:
+<the background theory>
 ANSWER:
 <the answer>
 ```
-Parse by the `QUESTION:` / `ANSWER:` markers into `record Question(Text, Answer)`; wrong format → exception with the
+Parse by the `QUESTION:` / `THEORY:` / `ANSWER:` markers (in that order) into `record Question(Text, Theory, Answer)`; wrong format → exception with the
 raw output.
 
 ## Scoring (`ScoreAsync(question, mine)`)
@@ -158,7 +162,10 @@ So questions appear instantly:
    Light).
 3. The question in a read-only `RichTextBox` (rendered by `CodeRenderer`), with a loading overlay (indeterminate
    progress bar + "Generating a <level> question about <topic>...") while it generates; errors shown in its place.
-4. "Your answer (optional)" multi-line TextBox, 64 px high.
+4. An `Expander` "Hint: background theory", **closed** by default, with the question's theory in a read-only
+   `RichTextBox` (rendered by `CodeRenderer`, max 200 px high, scrolls). Disabled until the question is ready. Each tab
+   remembers whether its hint is open; a new question starts closed. Below it, "Your answer (optional)" multi-line
+   TextBox, 64 px high.
 5. Answer panel, hidden until revealed: "Answer" + score badge ("Your score N/10": green >= 8, orange >= 5, red below)
    or a small progress bar + "Scoring your answer...", the feedback text, and the model answer in a `RichTextBox`.
    When revealed the window grows to the full work-area height so question and answer fit without scrolling, and the
@@ -197,6 +204,6 @@ show it and drop the unanswered message from history.
 ## Verify
 
 Build with 0 errors, then drive the real UI (e.g. UI Automation from PowerShell) and take screenshots:
-a question appears with coloured code; Check my answer shows a score and feedback; Show answer works with an empty
+a question appears with coloured code; the theory hint opens and closes and does not give the answer away; Check my answer shows a score and feedback; Show answer works with an empty
 answer; Next question comes from the queue in about a second; tabs and both dropdowns work; Discuss gets a reply;
 "From my Claude history" writes `knowledge-from-claude.txt` and the next question uses it; the tray icon and menu work.

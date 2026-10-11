@@ -20,6 +20,7 @@ public partial class QuestionWindow : Window
         public string? Error { get; set; }
         public string Mine { get; set; } = "";
         public bool IsAnswerShown { get; set; }
+        public bool IsTheoryOpen { get; set; }
         public bool IsScoring { get; set; }
         public Score? Score { get; set; }
         public string? ScoreError { get; set; }
@@ -119,6 +120,9 @@ public partial class QuestionWindow : Window
             ? "Could not get a question from the claude CLI:\n\n" + state.Error
             : state.Question?.Text ?? "");
         AnswerBox.Document = CodeRenderer.Render(state.Question?.Answer ?? "");
+        TheoryBox.Document = CodeRenderer.Render(state.Question?.Theory ?? "");
+        TheoryExpander.IsEnabled = state.Question != null;
+        TheoryExpander.IsExpanded = state.IsTheoryOpen;
         ShowButton.IsEnabled = state.Question != null && !state.IsAnswerShown;
         UpdateCheckButton(state);
         DiscussButton.IsEnabled = state.IsAnswerShown;
@@ -192,6 +196,14 @@ public partial class QuestionWindow : Window
 
     private void UpdateCheckButton(TabState state) =>
         CheckButton.IsEnabled = state.Question != null && !state.IsAnswerShown && state.Mine.Trim().Length > 0;
+
+    private void Theory_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (Tabs.SelectedItem != null && _tabs.TryGetValue(Current, out TabState? state))
+        {
+            state.IsTheoryOpen = TheoryExpander.IsExpanded;
+        }
+    }
 
     private void Discuss_Click(object sender, RoutedEventArgs e)
     {

@@ -62,7 +62,7 @@ public sealed record Category(string Name, IReadOnlyList<string> Topics)
     public IReadOnlyList<string> TopicsFor(Level level) => Topics.Count > 0 ? Topics : level.Topics;
 }
 
-public sealed record Question(string Text, string Answer);
+public sealed record Question(string Text, string Theory, string Answer);
 
 public sealed record Score(int Points, string Feedback);
 
@@ -89,24 +89,29 @@ public static class QuestionGenerator
             Keep the question under 120 words. Use plain text: no markdown headings, no bold, no lists markup.
             Put every code snippet in a fenced block with its language, e.g. ```java, ```sql, ```javascript, ```bash.
             Short names inside a sentence go in single backticks, e.g. `HashMap`.
+            Then give the background theory: the concepts someone needs to know to work it out, as a hint
+            (under 120 words). It must not give away the answer.
             Then give the answer: the key insight first, then a short explanation (under 150 words).
             For a design question there may be no single right answer: give the best choice and its trade-offs.
 
             Reply in exactly this format and nothing else:
             QUESTION:
             <the question>
+            THEORY:
+            <the background theory>
             ANSWER:
             <the answer>
             """;
 
         string output = await RunClaudeAsync(prompt);
         int q = output.IndexOf("QUESTION:", StringComparison.Ordinal);
+        int t = output.IndexOf("THEORY:", StringComparison.Ordinal);
         int a = output.IndexOf("ANSWER:", StringComparison.Ordinal);
-        if (q < 0 || a < q)
+        if (q < 0 || t < q || a < t)
         {
             throw new InvalidOperationException("unexpected reply format:\n" + output);
         }
-        return new Question(output[(q + 9)..a].Trim(), output[(a + 7)..].Trim());
+        return new Question(output[(q + 9)..t].Trim(), output[(t + 7)..a].Trim(), output[(a + 7)..].Trim());
     }
 
     public static async Task<Score> ScoreAsync(Question question, string mine)
