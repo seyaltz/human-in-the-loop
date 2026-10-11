@@ -1,0 +1,83 @@
+<Window x:Class="DevBreak.QuestionWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Dev break"
+        Width="900" Height="680" MinWidth="560" MinHeight="460"
+        Topmost="True"
+        WindowStartupLocation="Manual">
+    <Grid Margin="20,8,20,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition x:Name="AnswerRow" Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- topic tabs: headers only, the question area below is shared -->
+        <TabControl x:Name="Tabs" Grid.Row="0" SelectionChanged="Tabs_SelectionChanged" Margin="0,0,0,10" />
+
+        <!-- header: level badge + topic -->
+        <DockPanel Grid.Row="1" Margin="0,0,0,10">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="Level for new questions" Opacity="0.7" VerticalAlignment="Center" Margin="0,0,8,0" />
+                <ComboBox x:Name="LevelChoice" Width="190" SelectedIndex="0" />
+            </StackPanel>
+            <Border x:Name="LevelBadge" CornerRadius="10" Padding="10,2" VerticalAlignment="Center">
+                <TextBlock x:Name="LevelText" Foreground="White" FontWeight="SemiBold" FontSize="12" />
+            </Border>
+            <TextBlock x:Name="TopicText" Margin="10,0,0,0" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
+        </DockPanel>
+
+        <!-- question -->
+        <Grid Grid.Row="2">
+            <RichTextBox x:Name="QuestionBox" IsReadOnly="True" IsDocumentEnabled="True"
+                         VerticalScrollBarVisibility="Auto" FontSize="14" Padding="10"
+                         VerticalContentAlignment="Top" />
+            <StackPanel x:Name="Loading" VerticalAlignment="Center" HorizontalAlignment="Center">
+                <ProgressBar IsIndeterminate="True" Width="220" Margin="0,0,0,10" />
+                <TextBlock x:Name="LoadingText" HorizontalAlignment="Center" Opacity="0.7" />
+            </StackPanel>
+        </Grid>
+
+        <!-- your answer -->
+        <StackPanel Grid.Row="3" Margin="0,12,0,0">
+            <TextBlock Text="Your answer (optional)" Opacity="0.7" Margin="0,0,0,4" />
+            <TextBox x:Name="MineBox" Height="64" TextWrapping="Wrap" AcceptsReturn="True"
+                     VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
+                     TextChanged="MineBox_TextChanged" />
+        </StackPanel>
+
+        <!-- answer, hidden until asked -->
+        <DockPanel Grid.Row="4" x:Name="AnswerPanel" Margin="0,12,0,0" Visibility="Collapsed">
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,4">
+                <TextBlock Text="Answer" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <Border x:Name="ScoreBadge" CornerRadius="10" Padding="10,2" Margin="10,0,0,0" Visibility="Collapsed">
+                    <TextBlock x:Name="ScoreText" Foreground="White" FontWeight="SemiBold" />
+                </Border>
+                <ProgressBar x:Name="ScoringBar" IsIndeterminate="True" Width="80" Margin="10,0,6,0"
+                             VerticalAlignment="Center" Visibility="Collapsed" />
+                <TextBlock x:Name="ScoringText" Text="Scoring your answer..." Opacity="0.7"
+                           VerticalAlignment="Center" Visibility="Collapsed" />
+            </StackPanel>
+            <TextBlock DockPanel.Dock="Top" x:Name="FeedbackText" TextWrapping="Wrap" Margin="0,2,0,8"
+                       Visibility="Collapsed" />
+            <RichTextBox x:Name="AnswerBox" IsReadOnly="True" IsDocumentEnabled="True"
+                         VerticalScrollBarVisibility="Auto" FontSize="13.5" Padding="10" />
+        </DockPanel>
+
+        <!-- actions -->
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button x:Name="DiscussButton" Content="Discuss" Margin="0,0,8,0" Padding="14,6" IsEnabled="False"
+                    Click="Discuss_Click" />
+            <Button Content="Next question" Margin="0,0,8,0" Padding="14,6" Click="Next_Click" />
+            <Button x:Name="SnoozeButton" Margin="0,0,8,0" Padding="14,6" Click="Snooze_Click" />
+            <Button Content="Skip" Margin="0,0,8,0" Padding="14,6" Click="Skip_Click" />
+            <Button x:Name="ShowButton" Content="Show answer" Margin="0,0,8,0" Padding="14,6" IsEnabled="False"
+                    Click="Show_Click" />
+            <Button x:Name="CheckButton" Content="Check my answer" Padding="14,6" IsEnabled="False"
+                    Style="{DynamicResource AccentButtonStyle}" Click="Check_Click" />
+        </StackPanel>
+    </Grid>
+</Window>
