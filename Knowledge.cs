@@ -23,6 +23,7 @@ public static class Knowledge
 
     private static readonly string SettingsPath = Path.Combine(AppContext.BaseDirectory, "settings.json");
     private static readonly string ProfilePath = Path.Combine(AppContext.BaseDirectory, "profile.txt");
+    private static readonly string CompanyPath = Path.Combine(AppContext.BaseDirectory, "company.txt");
     private static readonly string ClaudeSummaryPath = Path.Combine(AppContext.BaseDirectory, "knowledge-from-claude.txt");
     private static readonly string ProjectsDir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects");
@@ -44,6 +45,13 @@ public static class Knowledge
         KnowledgeSource.Claude => await ClaudeSummaryAsync(),
         _ => "",
     };
+
+    /// <summary>
+    /// The user's company and its product with its current features, from company.txt next to the exe, for the Business
+    /// and Product tabs; empty if there is none. Read on every use, so edits apply to the next idea.
+    /// </summary>
+    public static async Task<string> CompanyAsync() =>
+        File.Exists(CompanyPath) ? (await File.ReadAllTextAsync(CompanyPath)).Trim() : "";
 
     private static KnowledgeSource LoadSource()
     {

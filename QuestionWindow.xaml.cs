@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace DevBreak;
 
@@ -25,6 +26,7 @@ public partial class QuestionWindow : Window
         public Score? Score { get; set; }
         public string? ScoreError { get; set; }
         public ChatWindow? Chat { get; set; }
+        public PocWindow? Poc { get; set; }
     }
 
     private readonly Dictionary<Category, TabState> _tabs = [];
@@ -63,6 +65,34 @@ public partial class QuestionWindow : Window
             PlaceBottomRight(CollapsedHeight);
             Tabs.SelectedIndex = 0;
         };
+        Deactivated += (_, _) => CollapseIfLeft();
+    }
+
+    /// <summary>Restores the window if it was collapsed and brings it to the front.</summary>
+    public void Bring()
+    {
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        // Windows does not always let a background app take the foreground; a moment of Topmost gets it there
+        Topmost = true;
+        Activate();
+        Topmost = false;
+    }
+
+    /// <summary>
+    /// When the user switches to another app the window collapses to the taskbar (the tray icon brings it back).
+    /// Moving between this window and its own chat / proof-of-concept windows does not count as leaving.
+    /// </summary>
+    private void CollapseIfLeft()
+    {
+        // the newly active window is only known once the switch has finished
+        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
+        {
+            foreach (Window window in Application.Current.Windows)
+            {
+                if (window.IsActive) return;
+            }
+            if (IsLoaded && WindowState != WindowState.Minimized) WindowState = WindowState.Minimized;
+        });
     }
 
     private Category Current => (Category)((TabItem)Tabs.SelectedItem).Tag;
@@ -111,11 +141,20 @@ public partial class QuestionWindow : Window
             : state.Level == Level.Medium ? Color.FromRgb(0xEF, 0x6C, 0x00)
             : Color.FromRgb(0x2E, 0x7D, 0x32));
         TopicText.Text = state.Topic;
+        // business and product tabs bring an idea to discuss, not a question with one right answer
+        bool isIdea = Current.Kind != CategoryKind.Tech;
+        TheoryExpander.Header = isIdea ? "Hint: background and market context" : "Hint: background theory";
+        MineLabel.Text = isIdea ? "Your thoughts (optional): would it work, value, risks, how to test it" : "Your answer (optional)";
+        AnswerLabel.Text = isIdea ? "Claude's take" : "Answer";
+        ShowButton.Content = isIdea ? "Show Claude's take" : "Show answer";
+        CheckButton.Content = isIdea ? "Review my thoughts" : "Check my answer";
         MineBox.Text = state.Mine;
 
         bool isLoading = state.Question == null && state.Error == null;
         Loading.Visibility = isLoading ? Visibility.Visible : Visibility.Collapsed;
-        LoadingText.Text = $"Generating a {state.Level.Name.ToLowerInvariant()} question about {state.Topic}...";
+        LoadingText.Text = Current.Kind == CategoryKind.Tech
+            ? $"Generating a {state.Level.Name.ToLowerInvariant()} question about {state.Topic}..."
+            : $"Coming up with a {Current.Name.ToLowerInvariant()} idea about {state.Topic}...";
         QuestionBox.Document = CodeRenderer.Render(state.Error != null
             ? "Could not get a question from the claude CLI:\n\n" + state.Error
             : state.Question?.Text ?? "");
@@ -126,6 +165,7 @@ public partial class QuestionWindow : Window
         ShowButton.IsEnabled = state.Question != null && !state.IsAnswerShown;
         UpdateCheckButton(state);
         DiscussButton.IsEnabled = state.IsAnswerShown;
+        UpdatePocButton(state);
         MineBox.IsReadOnly = state.IsAnswerShown;
         ShowScore(state);
         SetAnswerVisible(state.IsAnswerShown);
@@ -205,12 +245,39 @@ public partial class QuestionWindow : Window
         }
     }
 
+    /// <summary>The proof of concept gives the answer away, so it opens only once the answer is shown.</summary>
+    private void UpdatePocButton(TabState state)
+    {
+        bool hasPoc = state.Question is { Poc.Length: > 0 };
+        PocButton.IsEnabled = hasPoc && state.IsAnswerShown;
+        PocButton.Content = state.Question?.Check?.Passed == true ? "Show POC ✓" : "Show POC";
+        PocButton.ToolTip = state.Question == null ? null
+            : !hasPoc ? "No proof of concept for this question"
+            : !state.IsAnswerShown ? "Show the answer first"
+            : state.Question!.Check?.Passed == true ? "Open a small example of the answer; it was run here without errors"
+            : "Open a small runnable example of the answer";
+    }
+
+    private void Poc_Click(object sender, RoutedEventArgs e)
+    {
+        TabState state = _tabs[Current];
+        if (state.Poc == null)
+        {
+            state.Poc = new PocWindow(state.Topic, state.Question!) { Owner = this };
+            state.Poc.Closed += (_, _) => state.Poc = null;
+            state.Poc.Left = Math.Max(SystemParameters.WorkArea.Left + 16, Left - state.Poc.Width - 12);
+            state.Poc.Top = Top;
+            state.Poc.Show();
+        }
+        state.Poc.Activate();
+    }
+
     private void Discuss_Click(object sender, RoutedEventArgs e)
     {
         TabState state = _tabs[Current];
         if (state.Chat == null)
         {
-            state.Chat = new ChatWindow(state.Topic, state.Question!, state.Mine);
+            state.Chat = new ChatWindow(state.Topic, state.Question!, state.Mine) { Owner = this };
             state.Chat.Closed += (_, _) => state.Chat = null;
             state.Chat.Left = Math.Max(SystemParameters.WorkArea.Left + 16, Left - state.Chat.Width - 12);
             state.Chat.Top = Top;
@@ -230,6 +297,7 @@ public partial class QuestionWindow : Window
         ShowButton.IsEnabled = false;
         CheckButton.IsEnabled = false;
         DiscussButton.IsEnabled = true;
+        UpdatePocButton(state);
         MineBox.IsReadOnly = true;
         if (score) ScoreMine(Current, state);
         ShowScore(state);

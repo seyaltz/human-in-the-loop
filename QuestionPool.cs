@@ -64,15 +64,17 @@ public sealed class QuestionPool
     {
         IReadOnlyList<string> topics = category.TopicsFor(level);
         string topic = topics[Random.Next(topics.Count)];
-        return new PendingQuestion(topic, isWaited ? QuestionGenerator.GenerateAsync(level, topic) : InBackground(level, topic));
+        return new PendingQuestion(topic, isWaited
+            ? QuestionGenerator.GenerateAsync(category, level, topic)
+            : InBackground(category, level, topic));
     }
 
-    private async Task<Question> InBackground(Level level, string topic)
+    private async Task<Question> InBackground(Category category, Level level, string topic)
     {
         await _background.WaitAsync();
         try
         {
-            return await QuestionGenerator.GenerateAsync(level, topic);
+            return await QuestionGenerator.GenerateAsync(category, level, topic);
         }
         finally
         {

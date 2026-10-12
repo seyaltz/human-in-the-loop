@@ -84,13 +84,13 @@ public partial class App : Application
     {
         if (_open != null)
         {
-            _open.Activate();
+            _open.Bring();
             return;
         }
         _open = new QuestionWindow(_pool);
         _open.Closed += (_, _) => _open = null;
         _open.Show();
-        _open.Activate();
+        _open.Bring();
     }
 
     /// <summary>"Knowledge" submenu: what new questions know about the user. The choice is saved in settings.json.</summary>

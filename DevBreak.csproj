@@ -16,6 +16,7 @@
   <ItemGroup>
     <!-- kept as a plain file next to the exe so it can be edited -->
     <None Update="profile.txt" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <None Update="company.txt" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
 </Project>
