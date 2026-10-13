@@ -168,6 +168,10 @@ one is retried on the next request. UI thread only.
   fenced-code / backtick rules + "Then write one short question that checks the key idea of the lesson, and its answer
   (under 80 words)." Reply format `LESSON:` / `CHECK:` / `ANSWER:`.
 - **Progress**: `learn\progress.json`, `{ "<tab>": [done lesson indexes] }`.
+- **Prepared ahead** so opening a course or carrying on is instant: `PrepareAll()` on tray start writes every course's
+  lesson list and its next lesson not done yet (already written ones are read from disk); `PrepareAsync(tab)` runs
+  again after **Mark as done** to get the next lesson ready. At most **3** courses prepare at a time (`SemaphoreSlim`);
+  failures are swallowed there and shown/retried when the user opens that course or lesson.
 
 ## Tray app (`App.xaml.cs`)
 
@@ -176,7 +180,7 @@ one is retried on the next request. UI thread only.
   every hour". Left-click → ask now. Context menu: "Ask me now", "Learn path" (opens the window on the learn path), "Knowledge about me" submenu (From my Claude history
   (summary once a day) / From profile.txt / None (generic questions), checkable, synced with the window's dropdown
   when opened), separator, "Exit".
-- On start `FillAll(Level.At(now))`. A `DispatcherTimer` every 20 s: `FillAll` for the current level; snooze handling
+- On start `FillAll(Level.At(now))` and `LearnPath.PrepareAll()`. A `DispatcherTimer` every 20 s: `FillAll` for the current level; snooze handling
   (when the snooze time passes, ask); at minute **>= 55** once per hour, show a balloon tip "Time for a 5-minute brain
   break." and open the window.
 - Only one question window at a time (activate the open one). Snooze = 15 minutes.
@@ -260,6 +264,7 @@ Build with 0 errors, then drive the real UI (e.g. UI Automation from PowerShell)
 a question appears with coloured code; the theory hint opens and closes and does not give the answer away; Check my answer shows a score and feedback; Show answer works with an empty
 answer; Next question comes from the queue in about a second; tabs and both dropdowns work; Discuss gets a reply;
 "From my Claude history" writes `knowledge-from-claude.txt` and the next question uses it; the tray icon and menu work;
-Learn path switches the same window to the courses (no course is written before that), a course lists 12 lessons, a
+Learn path switches the same window to the courses; about 2 minutes after tray start every course and its next lesson
+are on disk and open instantly, Mark as done gets the next lesson written, a course lists 12 lessons, a
 lesson has theory, real examples and a check question, Mark as done updates the ✓ and the count and survives a
 restart, Next lesson / Previous move through the course, and Quiz switches back.

@@ -9,7 +9,8 @@ score, see the answer, and discuss it in a follow-up chat.
 Switch the window to **Learn path** (top left, or **Learn path** in the tray menu) for a course per topic -
 Architecture, GCP, Java & Spring, PostgreSQL, Oracle, Redis, Algorithms, Browser & Next.js, DevOps. Claude writes each
 course (12 lessons, from the foundations to what every senior engineer should know) and each lesson the first time you
-open it: the theory, real examples, pitfalls and a check question. Mark lessons as done to track your progress.
+open it: the theory, real examples, pitfalls and a check question. When the app starts it prepares every course and
+your next lesson in the background (about 2 minutes the first time), so they open instantly. Mark lessons as done to track your progress.
 Courses, lessons and progress are saved in `learn\` next to the exe.
 
 ## Requirements

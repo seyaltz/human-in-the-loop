@@ -136,7 +136,10 @@ public partial class LearnView : UserControl
 
     private void Done_Click(object sender, RoutedEventArgs e)
     {
-        LearnPath.SetDone(Current, Index, !LearnPath.IsDone(Current, Index));
+        bool done = !LearnPath.IsDone(Current, Index);
+        LearnPath.SetDone(Current, Index, done);
+        // get the next lesson ready while this one is read
+        if (done) _ = LearnPath.PrepareAsync(Current);
         ((TextBlock)((ListBoxItem)LessonList.Items[Index]).Content).Text = ItemText(Current, Index);
         UpdateProgress();
         UpdateButtons();

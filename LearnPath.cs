@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace DevBreak;
@@ -22,11 +23,15 @@ public static class LearnPath
 {
     private const int LessonsPerCourse = 12;
 
+    // preparing in the background runs a few courses at a time
+    private const int PrepareParallel = 3;
+
     private static readonly string LearnDir = Path.Combine(AppContext.BaseDirectory, "learn");
     private static readonly string ProgressPath = Path.Combine(LearnDir, "progress.json");
 
     private static readonly Dictionary<string, Task<IReadOnlyList<Lesson>>> Syllabi = [];
     private static readonly Dictionary<(string, int), Task<LessonContent>> Lessons = [];
+    private static readonly SemaphoreSlim Preparing = new(PrepareParallel);
     private static Dictionary<string, HashSet<int>>? _done;
 
     /// <summary>Every tab except Mix, which has no topics of its own.</summary>
@@ -50,6 +55,38 @@ public static class LearnPath
             Lessons[(category.Name, index)] = task;
         }
         return task;
+    }
+
+    /// <summary>
+    /// Writes, in the background, every course's lesson list and its next lesson not done yet, so opening a course or
+    /// carrying on is instant. Already written ones are read from disk. Failures are left for when the user opens it.
+    /// </summary>
+    public static void PrepareAll()
+    {
+        foreach (Category category in Courses)
+        {
+            _ = PrepareAsync(category);
+        }
+    }
+
+    /// <summary>Writes the course's lesson list (if needed) and its next lesson not done yet.</summary>
+    public static async Task PrepareAsync(Category category)
+    {
+        await Preparing.WaitAsync();
+        try
+        {
+            IReadOnlyList<Lesson> syllabus = await SyllabusAsync(category);
+            int next = Enumerable.Range(0, syllabus.Count).FirstOrDefault(i => !IsDone(category, i), -1);
+            if (next >= 0) await LessonAsync(category, next, syllabus);
+        }
+        catch (Exception)
+        {
+            // the course or lesson shows its error when it is opened, and is retried then
+        }
+        finally
+        {
+            Preparing.Release();
+        }
     }
 
     public static bool IsDone(Category category, int index) =>

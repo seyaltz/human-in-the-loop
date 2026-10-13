@@ -48,6 +48,7 @@ public partial class App : Application
         };
 
         _pool.FillAll(Level.At(DateTime.Now.TimeOfDay));
+        LearnPath.PrepareAll();
         _timer.Tick += (_, _) => Tick();
         _timer.Start();
     }
