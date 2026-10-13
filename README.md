@@ -4,6 +4,14 @@ A Windows tray app that gives your brain a break from working with AI. In the la
 a coding / architecture question - heavier in the morning, lighter later in the day. Answer it (optional) and get a
 score, see the answer, and discuss it in a follow-up chat.
 
+## Learn path
+
+Switch the window to **Learn path** (top left, or **Learn path** in the tray menu) for a course per topic -
+Architecture, GCP, Java & Spring, PostgreSQL, Oracle, Redis, Algorithms, Browser & Next.js, DevOps. Claude writes each
+course (12 lessons, from the foundations to what every senior engineer should know) and each lesson the first time you
+open it: the theory, real examples, pitfalls and a check question. Mark lessons as done to track your progress.
+Courses, lessons and progress are saved in `learn\` next to the exe.
+
 ## Requirements
 
 - Windows 10/11

@@ -21,12 +21,12 @@ public sealed record Level(string Name, string Style, IReadOnlyList<string> Topi
 
     public static readonly Level Medium = new("Medium",
         "a focused technical question that needs some reasoning",
-        ["algorithms and complexity", "data structures", "concurrency", "SQL and indexes", "runtime internals (memory, GC)",
-         "networking and HTTP", "operating systems", "web frameworks and ORMs", "testing strategy", "design patterns"]);
+        ["algorithms and complexity", "data structures", "concurrency", "SQL and indexes", "JVM internals",
+         "networking and HTTP", "operating systems", "Spring and JPA", "testing strategy", "design patterns"]);
 
     public static readonly Level Light = new("Light",
         "a quick question answerable in under a minute (a short snippet, a definition, a \"what does this print\")",
-        ["programming language trivia", "git", "HTTP status codes", "Linux / shell commands", "regex", "JavaScript quirks",
+        ["Java language trivia", "git", "HTTP status codes", "Linux / shell commands", "regex", "JavaScript quirks",
          "SQL basics", "CS history", "computer architecture basics", "encoding and Unicode"]);
 
     public static Level At(TimeSpan time) =>
@@ -43,20 +43,26 @@ public sealed record Category(string Name, IReadOnlyList<string> Topics)
         Mix,
         new("Architecture", ["distributed systems", "caching strategy", "messaging and event-driven design",
             "consistency and transactions", "API design", "microservices vs monolith", "resilience (retries, timeouts, circuit breakers)",
-            "scaling a read-heavy system"]),
-        new("Cloud", ["serverless and containers (scaling, cold starts)", "managed databases and connection limits",
-            "identity, roles and service accounts", "load balancers, WAF and edge security", "queues and pub/sub",
-            "cloud logging, metrics and tracing", "cloud cost", "infrastructure as code"]),
-        new("Backend", ["memory management and GC", "concurrency", "framework internals (dependency injection, proxies)",
-            "transactions in application code", "ORMs and data access", "language features", "async and threads"]),
-        new("Databases", ["indexes and query plans", "relational vs NoSQL", "SQL", "locking and isolation levels",
-            "schema design", "caches and key-value stores"]),
+            "scaling a search-heavy system"]),
+        new("GCP", ["Cloud Run scaling and cold starts", "Cloud SQL and connections", "IAM and service accounts",
+            "load balancers, Cloud Armor and IAP", "Pub/Sub", "Cloud Logging and Cloud Trace", "Cloud Build and Cloud Deploy",
+            "GCP cost", "Terraform on GCP", "Vertex AI"]),
+        new("Java & Spring", ["JVM memory and GC", "concurrency and java.util.concurrent", "virtual threads",
+            "Spring Boot internals (auto-configuration, proxies)", "Spring transactions", "JPA / Hibernate",
+            "Java language features (records, sealed types, pattern matching, streams)", "Spring Security"]),
+        new("PostgreSQL", ["indexes and query plans (EXPLAIN)", "MVCC and VACUUM", "locking and isolation levels",
+            "partitioning", "JSONB", "connection pooling", "Cloud SQL for PostgreSQL"]),
+        new("Oracle", ["execution plans and the optimizer", "indexes", "PL/SQL", "sequences and identity columns",
+            "read consistency, undo and locking", "partitioning", "Oracle vs PostgreSQL differences", "Oracle on OCI"]),
+        new("Redis", ["Redis data structures", "caching patterns (cache-aside, write-through)", "expiry and eviction",
+            "persistence (RDB, AOF)", "Redis with Spring", "distributed locks", "pub/sub and streams"]),
         new("Algorithms", ["algorithms and complexity", "data structures", "graphs and shortest paths",
             "sorting and searching", "dynamic programming", "hashing"]),
-        new("Frontend", ["rendering strategies (SSR, SSG, client-side)", "React state and effects", "TypeScript types",
-            "browser and HTTP caching", "web performance", "JavaScript quirks"]),
-        new("DevOps", ["Docker", "CI/CD pipelines", "git", "Terraform", "observability (logs, metrics, traces)",
-            "deployments and rollbacks"]),
+        new("Browser & Next.js", ["cookies vs localStorage vs sessionStorage", "browser and HTTP caching",
+            "CORS and the same-origin policy", "the JavaScript event loop", "Next.js rendering (SSR, SSG, RSC)",
+            "React state and effects", "TypeScript types", "web performance (Core Web Vitals)"]),
+        new("DevOps", ["Docker", "Terraform", "Bitbucket Pipelines CI/CD", "git", "observability (logs, metrics, traces)",
+            "deployments and rollbacks (Cloud Run revisions)"]),
     ];
 
     public IReadOnlyList<string> TopicsFor(Level level) => Topics.Count > 0 ? Topics : level.Topics;

@@ -30,6 +30,7 @@ public partial class App : Application
 
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("Ask me now", null, (_, _) => Ask());
+        menu.Items.Add("Learn path", null, (_, _) => ShowLearn());
         menu.Items.Add(KnowledgeMenu());
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => Shutdown());
@@ -94,6 +95,13 @@ public partial class App : Application
     }
 
     /// <summary>"Knowledge" submenu: what new questions know about the user. The choice is saved in settings.json.</summary>
+    /// <summary>Opens the window (or brings it to the front) on the learn path.</summary>
+    private void ShowLearn()
+    {
+        Ask();
+        _open?.ShowLearn();
+    }
+
     private static Forms.ToolStripMenuItem KnowledgeMenu()
     {
         var knowledge = new Forms.ToolStripMenuItem("Knowledge about me");

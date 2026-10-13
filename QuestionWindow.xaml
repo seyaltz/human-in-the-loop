@@ -1,11 +1,28 @@
 <Window x:Class="DevBreak.QuestionWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:DevBreak"
         Title="Dev break"
         Width="900" Height="680" MinWidth="560" MinHeight="460"
         Topmost="True"
         WindowStartupLocation="Manual">
-    <Grid Margin="20,8,20,20">
+    <Grid Margin="20,12,20,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- one window, two modes: the quiz and the learn path -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
+            <RadioButton x:Name="QuizMode" Content="Quiz" GroupName="Mode" IsChecked="True" Padding="18,6"
+                         Style="{StaticResource {x:Type ToggleButton}}" Checked="Mode_Checked" />
+            <RadioButton x:Name="LearnMode" Content="Learn path" GroupName="Mode" Padding="18,6" Margin="6,0,0,0"
+                         Style="{StaticResource {x:Type ToggleButton}}" Checked="Mode_Checked" />
+        </StackPanel>
+
+        <local:LearnView x:Name="LearnView" Grid.Row="1" Visibility="Collapsed" />
+
+    <Grid x:Name="QuizView" Grid.Row="1">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -86,5 +103,6 @@
             <Button x:Name="CheckButton" Content="Check my answer" Padding="14,6" IsEnabled="False"
                     Style="{DynamicResource AccentButtonStyle}" Click="Check_Click" />
         </StackPanel>
+    </Grid>
     </Grid>
 </Window>

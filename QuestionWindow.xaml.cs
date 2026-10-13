@@ -9,6 +9,8 @@ namespace DevBreak;
 public partial class QuestionWindow : Window
 {
     private const double CollapsedHeight = 680;
+    private const double LearnWidth = 1180;
+    private const double LearnHeight = 820;
 
     /// <summary>What one tab holds: its question (null while generating), error, typed answer and whether the answer is shown.</summary>
     private sealed class TabState(Level level, PendingQuestion pending)
@@ -217,6 +219,30 @@ public partial class QuestionWindow : Window
             state.Chat.Show();
         }
         state.Chat.Activate();
+    }
+
+    /// <summary>Switches to the learn path.</summary>
+    public void ShowLearn() => LearnMode.IsChecked = true;
+
+    private void Mode_Checked(object sender, RoutedEventArgs e)
+    {
+        if (LearnView == null || QuizView == null) return;
+        bool learn = LearnMode.IsChecked == true;
+        QuizView.Visibility = learn ? Visibility.Collapsed : Visibility.Visible;
+        LearnView.Visibility = learn ? Visibility.Visible : Visibility.Collapsed;
+        if (learn)
+        {
+            Title = "Dev break - learn path";
+            // a course needs room for the lesson list and the lesson; grow once, never shrink
+            Rect area = SystemParameters.WorkArea;
+            Width = Math.Max(Width, Math.Min(LearnWidth, area.Width - 32));
+            PlaceBottomRight(Math.Min(LearnHeight, area.Height - 32));
+            LearnView.Start();
+        }
+        else if (Tabs.SelectedItem != null && _tabs.ContainsKey(Current))
+        {
+            ShowTab();
+        }
     }
 
     private void Show_Click(object sender, RoutedEventArgs e) => Reveal(score: false);
