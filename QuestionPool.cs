@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -62,8 +63,13 @@ public sealed class QuestionPool
 
     private PendingQuestion Start(Category category, Level level, bool isWaited)
     {
+        // topics answered badly come up more often (up to 3x)
         IReadOnlyList<string> topics = category.TopicsFor(level);
-        string topic = topics[Random.Next(topics.Count)];
+        double[] weights = topics.Select(Game.TopicWeight).ToArray();
+        double pick = Random.NextDouble() * weights.Sum();
+        int i = 0;
+        while (i < topics.Count - 1 && (pick -= weights[i]) >= 0) i++;
+        string topic = topics[i];
         return new PendingQuestion(topic, isWaited ? QuestionGenerator.GenerateAsync(level, topic) : InBackground(level, topic));
     }
 

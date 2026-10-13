@@ -19,7 +19,7 @@ public partial class LearnView : UserControl
         InitializeComponent();
         foreach (Category category in LearnPath.Courses)
         {
-            Tabs.Items.Add(new TabItem { Header = category.Name, Tag = category });
+            Tabs.Items.Add(new ListBoxItem { Content = category.Name, Tag = category });
         }
     }
 
@@ -29,7 +29,7 @@ public partial class LearnView : UserControl
         if (Tabs.SelectedIndex < 0) Tabs.SelectedIndex = 0;
     }
 
-    private Category Current => (Category)((TabItem)Tabs.SelectedItem).Tag;
+    private Category Current => (Category)((ListBoxItem)Tabs.SelectedItem).Tag;
 
     private int Index => LessonList.SelectedIndex;
 
@@ -122,7 +122,7 @@ public partial class LearnView : UserControl
         PreviousButton.IsEnabled = hasLesson && Index > 0;
         NextButton.IsEnabled = hasLesson && Index < _syllabus!.Count - 1;
         DoneButton.IsEnabled = hasLesson;
-        DoneButton.Content = hasLesson && LearnPath.IsDone(Current, Index) ? "Done ✓ (undo)" : "Mark as done";
+        DoneButton.Content = hasLesson && LearnPath.IsDone(Current, Index) ? "Done ✓ (undo)" : $"Mark as done (+{Game.LessonXp} XP)";
     }
 
     private void UpdateProgress()
@@ -138,6 +138,15 @@ public partial class LearnView : UserControl
     {
         bool done = !LearnPath.IsDone(Current, Index);
         LearnPath.SetDone(Current, Index, done);
+        if (done)
+        {
+            bool finished = Enumerable.Range(0, _syllabus!.Count).All(i => LearnPath.IsDone(Current, i));
+            Game.LessonDone(Current, Index, _syllabus[Index].Title, finished);
+        }
+        else
+        {
+            Game.LessonUndone(Current, Index);
+        }
         // get the next lesson ready while this one is read
         if (done) _ = LearnPath.PrepareAsync(Current);
         ((TextBlock)((ListBoxItem)LessonList.Items[Index]).Content).Text = ItemText(Current, Index);

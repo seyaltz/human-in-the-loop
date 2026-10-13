@@ -3,16 +3,17 @@ using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 
 namespace DevBreak;
 
 public partial class QuestionWindow : Window
 {
     private const double CollapsedHeight = 680;
-    private const double LearnWidth = 1180;
-    private const double LearnHeight = 820;
+    private const double WideWidth = 1180;
+    private const double WideHeight = 820;
 
-    /// <summary>What one tab holds: its question (null while generating), error, typed answer and whether the answer is shown.</summary>
+    /// <summary>What one topic holds: its question (null while generating), error, typed answer and whether the answer is shown.</summary>
     private sealed class TabState(Level level, PendingQuestion pending)
     {
         public Level Level { get; } = level;
@@ -32,46 +33,34 @@ public partial class QuestionWindow : Window
     private readonly Dictionary<Category, TabState> _tabs = [];
     private readonly QuestionPool _pool;
 
+    // null = Auto (by the time of day)
+    private Level? _levelChoice;
+
     public QuestionWindow(QuestionPool pool)
     {
         _pool = pool;
         InitializeComponent();
-        SnoozeButton.Content = $"Snooze {App.SnoozeMinutes} min";
-        LevelChoice.Items.Add(new ComboBoxItem { Content = $"Auto (now: {Level.At(DateTime.Now.TimeOfDay).Name})" });
-        foreach (Level level in new[] { Level.Heavy, Level.Medium, Level.Light })
-        {
-            LevelChoice.Items.Add(new ComboBoxItem { Content = level.Name, Tag = level });
-        }
-        LevelChoice.SelectedIndex = 0;
-        foreach ((KnowledgeSource source, string label) in new[]
-                 {
-                     (KnowledgeSource.Claude, "From my Claude history"),
-                     (KnowledgeSource.File, "From profile.txt"),
-                     (KnowledgeSource.None, "None (generic)"),
-                 })
-        {
-            KnowledgeChoice.Items.Add(new ComboBoxItem { Content = label, Tag = source });
-            if (Knowledge.Source == source) KnowledgeChoice.SelectedIndex = KnowledgeChoice.Items.Count - 1;
-        }
-        KnowledgeChoice.SelectionChanged += (_, _) =>
-            Knowledge.SetSource((KnowledgeSource)((ComboBoxItem)KnowledgeChoice.SelectedItem).Tag);
         foreach (Category category in Category.All)
         {
-            Tabs.Items.Add(new TabItem { Header = category.Name, Tag = category });
+            Topics.Items.Add(new ListBoxItem { Content = category.Name, Tag = category });
         }
+
+        Game.Awarded += OnAwarded;
+        Closed += (_, _) => Game.Awarded -= OnAwarded;
+        UpdateHud();
 
         Loaded += (_, _) =>
         {
             PlaceBottomRight(CollapsedHeight);
-            Tabs.SelectedIndex = 0;
+            Topics.SelectedIndex = 0;
         };
     }
 
-    private Category Current => (Category)((TabItem)Tabs.SelectedItem).Tag;
+    private Category Current => (Category)((ListBoxItem)Topics.SelectedItem).Tag;
 
-    private void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void Topics_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (e.Source != Tabs || Tabs.SelectedItem == null) return;
+        if (Topics.SelectedItem == null) return;
         if (!_tabs.ContainsKey(Current)) NewQuestion();
         ShowTab();
     }
@@ -79,7 +68,7 @@ public partial class QuestionWindow : Window
     private void NewQuestion()
     {
         Category category = Current;
-        Level level = (LevelChoice.SelectedItem as ComboBoxItem)?.Tag as Level ?? Level.At(DateTime.Now.TimeOfDay);
+        Level level = _levelChoice ?? Level.At(DateTime.Now.TimeOfDay);
         var state = new TabState(level, _pool.Take(category, level));
         _tabs[category] = state;
         Generate(category, state);
@@ -101,7 +90,7 @@ public partial class QuestionWindow : Window
         {
             state.Error = ex.Message;
         }
-        if (Tabs.SelectedItem != null && Current == category && _tabs[category] == state) ShowTab();
+        if (Topics.SelectedItem != null && Current == category && _tabs[category] == state) ShowTab();
     }
 
     private void ShowTab()
@@ -127,8 +116,8 @@ public partial class QuestionWindow : Window
         TheoryExpander.IsExpanded = state.IsTheoryOpen;
         ShowButton.IsEnabled = state.Question != null && !state.IsAnswerShown;
         UpdateCheckButton(state);
-        DiscussButton.IsEnabled = state.IsAnswerShown;
         MineBox.IsReadOnly = state.IsAnswerShown;
+        MineHint.Visibility = state.IsAnswerShown ? Visibility.Collapsed : Visibility.Visible;
         ShowScore(state);
         SetAnswerVisible(state.IsAnswerShown);
     }
@@ -158,13 +147,14 @@ public partial class QuestionWindow : Window
         try
         {
             state.Score = await QuestionGenerator.ScoreAsync(state.Question!, state.Mine);
+            Game.QuestionAnswered(category, state.Topic, state.Score.Points);
         }
         catch (Exception ex)
         {
             state.ScoreError = ex.Message;
         }
         state.IsScoring = false;
-        if (Tabs.SelectedItem != null && Current == category && _tabs[category] == state) ShowScore(state);
+        if (Topics.SelectedItem != null && Current == category && _tabs[category] == state) ShowScore(state);
     }
 
     private void SetAnswerVisible(bool visible)
@@ -189,7 +179,7 @@ public partial class QuestionWindow : Window
 
     private void MineBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (Tabs.SelectedItem != null && _tabs.TryGetValue(Current, out TabState? state))
+        if (Topics.SelectedItem != null && _tabs.TryGetValue(Current, out TabState? state))
         {
             state.Mine = MineBox.Text;
             UpdateCheckButton(state);
@@ -201,7 +191,7 @@ public partial class QuestionWindow : Window
 
     private void Theory_Toggled(object sender, RoutedEventArgs e)
     {
-        if (Tabs.SelectedItem != null && _tabs.TryGetValue(Current, out TabState? state))
+        if (Topics.SelectedItem != null && _tabs.TryGetValue(Current, out TabState? state))
         {
             state.IsTheoryOpen = TheoryExpander.IsExpanded;
         }
@@ -226,20 +216,23 @@ public partial class QuestionWindow : Window
 
     private void Mode_Checked(object sender, RoutedEventArgs e)
     {
-        if (LearnView == null || QuizView == null) return;
+        if (LearnView == null || StatsView == null || QuizView == null) return;
         bool learn = LearnMode.IsChecked == true;
-        QuizView.Visibility = learn ? Visibility.Collapsed : Visibility.Visible;
+        bool stats = StatsMode.IsChecked == true;
+        QuizView.Visibility = learn || stats ? Visibility.Collapsed : Visibility.Visible;
         LearnView.Visibility = learn ? Visibility.Visible : Visibility.Collapsed;
-        if (learn)
+        StatsView.Visibility = stats ? Visibility.Visible : Visibility.Collapsed;
+        if (learn || stats)
         {
-            Title = "Dev break - learn path";
-            // a course needs room for the lesson list and the lesson; grow once, never shrink
+            Title = learn ? "Dev break - learn path" : "Dev break - stats";
+            // courses and stats need room; grow once, never shrink
             Rect area = SystemParameters.WorkArea;
-            Width = Math.Max(Width, Math.Min(LearnWidth, area.Width - 32));
-            PlaceBottomRight(Math.Min(LearnHeight, area.Height - 32));
-            LearnView.Start();
+            Width = Math.Max(Width, Math.Min(WideWidth, area.Width - 32));
+            PlaceBottomRight(Math.Min(WideHeight, area.Height - 32));
+            if (learn) LearnView.Start();
+            else StatsView.Refresh();
         }
-        else if (Tabs.SelectedItem != null && _tabs.ContainsKey(Current))
+        else if (Topics.SelectedItem != null && _tabs.ContainsKey(Current))
         {
             ShowTab();
         }
@@ -255,18 +248,95 @@ public partial class QuestionWindow : Window
         state.IsAnswerShown = true;
         ShowButton.IsEnabled = false;
         CheckButton.IsEnabled = false;
-        DiscussButton.IsEnabled = true;
         MineBox.IsReadOnly = true;
+        MineHint.Visibility = Visibility.Collapsed;
         if (score) ScoreMine(Current, state);
+        else Game.QuestionSeen(Current, state.Topic);
         ShowScore(state);
         SetAnswerVisible(true);
     }
 
-    private void Skip_Click(object sender, RoutedEventArgs e) => Close();
-
-    private void Snooze_Click(object sender, RoutedEventArgs e)
+    /// <summary>The gear menu: what the questions know about me, the level, and snooze.</summary>
+    private void Settings_Click(object sender, RoutedEventArgs e)
     {
-        (Application.Current as App)?.Snooze();
-        Close();
+        var menu = new ContextMenu { PlacementTarget = SettingsButton };
+
+        var knowledge = new MenuItem { Header = "Knowledge about me" };
+        foreach ((KnowledgeSource source, string label) in new[]
+                 {
+                     (KnowledgeSource.Claude, "From my Claude history"),
+                     (KnowledgeSource.File, "From profile.txt"),
+                     (KnowledgeSource.None, "None (generic)"),
+                 })
+        {
+            var item = new MenuItem { Header = label, IsCheckable = true, IsChecked = Knowledge.Source == source };
+            item.Click += (_, _) => Knowledge.SetSource(source);
+            knowledge.Items.Add(item);
+        }
+        menu.Items.Add(knowledge);
+
+        var levels = new MenuItem { Header = "Level for new questions" };
+        foreach (Level? level in new[] { null, Level.Heavy, Level.Medium, Level.Light })
+        {
+            string label = level?.Name ?? $"Auto (now: {Level.At(DateTime.Now.TimeOfDay).Name})";
+            var item = new MenuItem { Header = label, IsCheckable = true, IsChecked = _levelChoice == level };
+            item.Click += (_, _) => _levelChoice = level;
+            levels.Items.Add(item);
+        }
+        menu.Items.Add(levels);
+
+        menu.Items.Add(new Separator());
+        var snooze = new MenuItem { Header = $"Snooze {App.SnoozeMinutes} min" };
+        snooze.Click += (_, _) =>
+        {
+            (Application.Current as App)?.Snooze();
+            Close();
+        };
+        menu.Items.Add(snooze);
+        menu.IsOpen = true;
+    }
+
+    private void UpdateHud()
+    {
+        int xp = Game.Xp;
+        Rank rank = Game.RankOf(xp);
+        Rank? next = Game.NextRank(xp);
+        RankText.Text = rank.Name.ToUpperInvariant();
+        RankBadge.Background = (Brush)new BrushConverter().ConvertFromString(rank.Color)!;
+        XpBar.Value = next == null ? 1 : (double)(xp - rank.From) / (next.From - rank.From);
+        XpText.Text = next == null ? $"{xp:N0} XP - top rank" : $"{xp:N0} / {next.From:N0} XP";
+        int streak = Game.Streak();
+        StreakText.Text = $"\U0001F525 {streak}";
+        StreakText.ToolTip = $"Daily streak: {streak} day(s) in a row (best {Game.BestStreak()})";
+        int questions = Game.QuestionsOn(DateTime.Today);
+        int lessons = Game.LessonsOn(DateTime.Today);
+        bool met = questions >= Game.GoalQuestions && lessons >= Game.GoalLessons;
+        GoalText.Text = met
+            ? "\U0001F3AF Goal done"
+            : $"\U0001F3AF {Math.Min(questions, Game.GoalQuestions)}/{Game.GoalQuestions} questions · {Math.Min(lessons, Game.GoalLessons)}/{Game.GoalLessons} lesson";
+        GoalText.ToolTip = $"Daily goal: {Game.GoalQuestions} questions and {Game.GoalLessons} lesson (+{Game.GoalBonusXp} XP)";
+    }
+
+    private void OnAwarded(IReadOnlyList<string> lines)
+    {
+        UpdateHud();
+        if (StatsView.Visibility == Visibility.Visible) StatsView.Refresh();
+        if (lines.Count > 0) ShowToast(string.Join("\n", lines));
+    }
+
+    private void ShowToast(string text)
+    {
+        ToastText.Text = text;
+        Toast.Visibility = Visibility.Visible;
+        var fade = new DoubleAnimationUsingKeyFrames();
+        fade.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+        fade.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(250))));
+        fade.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(250 + 2500 + 300 * text.Split('\n').Length))));
+        fade.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(600 + 2500 + 300 * text.Split('\n').Length))));
+        fade.Completed += (_, _) =>
+        {
+            if (ToastText.Text == text) Toast.Visibility = Visibility.Collapsed;
+        };
+        Toast.BeginAnimation(OpacityProperty, fade);
     }
 }

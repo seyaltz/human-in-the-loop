@@ -4,9 +4,16 @@ A Windows tray app that gives your brain a break from working with AI. In the la
 a coding / architecture question - heavier in the morning, lighter later in the day. Answer it (optional) and get a
 score, see the answer, and discuss it in a follow-up chat.
 
+## Game
+
+Every answer, shown answer and finished lesson earns XP (up to 110 for a 10/10). Climb from Junior to Principal, keep
+a daily streak, meet the daily goal (3 questions + 1 lesson, +100 XP) and unlock 13 badges. **Stats** shows your rank,
+streak, badges, the last 14 days and how you do per topic - and topics you answer badly come up more often.
+Everything is stored locally in `game.json` next to the exe.
+
 ## Learn path
 
-Switch the window to **Learn path** (top left, or **Learn path** in the tray menu) for a course per topic -
+Switch the window to **Learn** (top left, or **Learn path** in the tray menu) for a course per topic -
 Architecture, GCP, Java & Spring, PostgreSQL, Oracle, Redis, Algorithms, Browser & Next.js, DevOps. Claude writes each
 course (12 lessons, from the foundations to what every senior engineer should know) and each lesson the first time you
 open it: the theory, real examples, pitfalls and a check question. When the app starts it prepares every course and

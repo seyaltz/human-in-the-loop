@@ -8,3 +8,4 @@ profile.txt
 # local Claude Code skills, not part of the app
 .claude/
 learn/
+game.json

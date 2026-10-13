@@ -8,8 +8,9 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- one course per tab: headers only, the content below is shared -->
-        <TabControl x:Name="Tabs" Grid.Row="0" SelectionChanged="Tabs_SelectionChanged" Margin="0,0,0,10" />
+        <!-- one course per topic, as chips -->
+        <ListBox x:Name="Tabs" Grid.Row="0" Style="{StaticResource ChipList}" Margin="0,0,0,6"
+                 SelectionChanged="Tabs_SelectionChanged" />
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
