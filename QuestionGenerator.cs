@@ -181,12 +181,22 @@ public static class QuestionGenerator
             start.ArgumentList.Add(arg);
         }
 
-        using Process process = Process.Start(start) ?? throw new InvalidOperationException("could not start claude");
+        // starting claude.exe (a 250+ MB file) takes about half a second, so it stays off the UI thread
+        using Process process = await Task.Run(() => Process.Start(start)) ?? throw new InvalidOperationException("could not start claude");
         await process.StandardInput.WriteAsync(prompt);
         process.StandardInput.Close();
         Task<string> stdout = process.StandardOutput.ReadToEndAsync();
         Task<string> stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+        }
+        catch (TimeoutException)
+        {
+            // disposing the Process does not stop it: without this the claude process tree keeps running
+            process.Kill(entireProcessTree: true);
+            throw;
+        }
         string output = (await stdout).Trim();
 
         if (process.ExitCode != 0)

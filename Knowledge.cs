@@ -103,7 +103,8 @@ public static class Knowledge
 
     private static async Task<string> BuildClaudeSummaryAsync()
     {
-        (IReadOnlyList<string> projects, string recent, int _) = RecentPrompts();
+        // reading the session logs can take a while (hundreds of MB), so it stays off the UI thread
+        (IReadOnlyList<string> projects, string recent, int _) = await Task.Run(() => RecentPrompts());
 
         string prompt = $"""
             Below are a developer's own recent prompts to an AI coding assistant (last {HistoryDays} days) and the names of
