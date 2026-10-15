@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.Drawing;
+using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
@@ -174,19 +175,10 @@ public partial class App : Application
         return knowledge;
     }
 
+    /// <summary>The app icon (Assets\DevBreak.ico) at the tray's size: the small sizes are the simplified violet "?".</summary>
     private static Icon TrayIcon()
     {
-        using var bitmap = new Bitmap(32, 32);
-        using (Graphics g = Graphics.FromImage(bitmap))
-        {
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-            using var fill = new SolidBrush(System.Drawing.Color.FromArgb(0x2E, 0x7D, 0x32));
-            g.FillEllipse(fill, 1, 1, 30, 30);
-            using var font = new Font("Segoe UI", 17, System.Drawing.FontStyle.Bold, GraphicsUnit.Pixel);
-            using var centered = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            g.DrawString("?", font, Brushes.White, new RectangleF(0, 0, 32, 32), centered);
-        }
-        return Icon.FromHandle(bitmap.GetHicon());
+        using Stream stream = GetResourceStream(new Uri("pack://application:,,,/Assets/DevBreak.ico")).Stream;
+        return new Icon(stream, Forms.SystemInformation.SmallIconSize);
     }
 }

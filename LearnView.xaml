@@ -9,56 +9,78 @@
         </Grid.RowDefinitions>
 
         <!-- one course per topic, as chips -->
-        <ListBox x:Name="Tabs" Grid.Row="0" Style="{StaticResource ChipList}" Margin="0,0,0,6"
+        <ListBox x:Name="Tabs" Grid.Row="0" Style="{StaticResource ChipList}" Margin="0,0,0,8"
                  SelectionChanged="Tabs_SelectionChanged" />
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="320" />
+                <ColumnDefinition Width="310" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <!-- the course's lessons, with progress -->
-            <DockPanel Grid.Column="0" Margin="0,0,16,0">
-                <TextBlock x:Name="ProgressText" DockPanel.Dock="Top" Opacity="0.7" Margin="0,0,0,6" />
-                <ListBox x:Name="LessonList" SelectionChanged="LessonList_SelectionChanged"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
-            </DockPanel>
+            <!-- the course: a path of lessons, with progress -->
+            <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,18,4" Padding="16,14,10,10">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top" Margin="0,0,6,10">
+                        <TextBlock Text="foundations to senior" Style="{StaticResource HandNote}" FontSize="20" />
+                        <TextBlock x:Name="CourseTitle" Style="{StaticResource Heading}" FontSize="22" Margin="0,2,0,8" />
+                        <DockPanel>
+                            <TextBlock x:Name="ProgressText" DockPanel.Dock="Right" FontWeight="Bold" FontSize="12.5"
+                                       Margin="10,0,0,0" VerticalAlignment="Center" />
+                            <ProgressBar x:Name="ProgressBar" Style="{StaticResource ThinBar}" VerticalAlignment="Center" />
+                        </DockPanel>
+                    </StackPanel>
+                    <ListBox x:Name="LessonList" Style="{StaticResource PathList}" SelectionChanged="LessonList_SelectionChanged" />
+                </DockPanel>
+            </Border>
 
             <!-- the lesson -->
-            <DockPanel Grid.Column="1">
-                <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
-                    <TextBlock x:Name="LessonTitle" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" />
-                    <TextBlock x:Name="LessonSummary" Opacity="0.7" TextWrapping="Wrap" Margin="0,2,0,0" />
-                </StackPanel>
-
-                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-                    <Button x:Name="PreviousButton" Content="Previous" Margin="0,0,8,0" Padding="14,6" Click="Previous_Click" />
-                    <Button x:Name="DoneButton" Content="Mark as done" Margin="0,0,8,0" Padding="14,6" Click="Done_Click" />
-                    <Button x:Name="NextButton" Content="Next lesson" Padding="14,6"
-                            Style="{DynamicResource AccentButtonStyle}" Click="Next_Click" />
-                </StackPanel>
-
-                <!-- check yourself: a question, and its answer behind an open/close -->
-                <StackPanel x:Name="CheckPanel" DockPanel.Dock="Bottom" Margin="0,12,0,0">
-                    <TextBlock Text="Check yourself" FontWeight="SemiBold" Margin="0,0,0,4" />
-                    <RichTextBox x:Name="CheckQuestionBox" IsReadOnly="True" IsDocumentEnabled="True" MaxHeight="140"
-                                 VerticalScrollBarVisibility="Auto" FontSize="13.5" Padding="10" />
-                    <Expander x:Name="AnswerExpander" Header="Answer" Margin="0,8,0,0">
-                        <RichTextBox x:Name="AnswerBox" IsReadOnly="True" IsDocumentEnabled="True" MaxHeight="160"
-                                     VerticalScrollBarVisibility="Auto" FontSize="13.5" Padding="10" Margin="0,6,0,0" />
-                    </Expander>
-                </StackPanel>
-
-                <Grid>
-                    <RichTextBox x:Name="LessonBox" IsReadOnly="True" IsDocumentEnabled="True"
-                                 VerticalScrollBarVisibility="Auto" FontSize="14" Padding="10" />
-                    <StackPanel x:Name="Loading" VerticalAlignment="Center" HorizontalAlignment="Center">
-                        <ProgressBar IsIndeterminate="True" Width="220" Margin="0,0,0,10" />
-                        <TextBlock x:Name="LoadingText" HorizontalAlignment="Center" Opacity="0.7" />
+            <ContentControl Grid.Column="1" Style="{StaticResource ShadowCard}" Padding="22,18,18,16">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                        <TextBlock x:Name="LessonNumber" Style="{StaticResource Eyebrow}" />
+                        <TextBlock x:Name="LessonTitle" Style="{StaticResource Heading}" FontSize="22" Margin="0,2,0,0" />
+                        <TextBlock x:Name="LessonSummary" Style="{StaticResource Caption}" FontSize="13.5" Margin="0,4,0,0" />
                     </StackPanel>
-                </Grid>
-            </DockPanel>
+
+                    <DockPanel DockPanel.Dock="Bottom" Margin="0,14,0,0" LastChildFill="False">
+                        <Button x:Name="PreviousButton" DockPanel.Dock="Left" Content="Previous" Style="{StaticResource SecondaryButton}"
+                                Click="Previous_Click" />
+                        <Button x:Name="NextButton" DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" AutomationProperties.Name="Next lesson"
+                                Click="Next_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Next lesson" VerticalAlignment="Center" />
+                                <Path Data="{StaticResource ArrowIcon}" Style="{StaticResource IconPath}" Stroke="White"
+                                      StrokeThickness="2.2" Width="16" Height="16" Margin="8,0,0,0" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="DoneButton" DockPanel.Dock="Right" Style="{StaticResource MarkerButton}" Margin="0,0,12,0"
+                                Click="Done_Click" />
+                    </DockPanel>
+
+                    <!-- check yourself: a question, and its answer behind an open/close -->
+                    <Border x:Name="CheckPanel" DockPanel.Dock="Bottom" Margin="0,12,0,0" CornerRadius="14" Padding="14,12"
+                            Background="{StaticResource VioletTintBrush}">
+                        <StackPanel>
+                            <TextBlock Text="Check yourself" FontWeight="Bold" FontSize="14.5" Margin="0,0,0,4" />
+                            <RichTextBox x:Name="CheckQuestionBox" Style="{StaticResource ReadingBox}" MaxHeight="140" FontSize="14" />
+                            <Expander x:Name="AnswerExpander" Header="Answer" Style="{StaticResource NoteExpander}" Margin="0,8,0,0">
+                                <Border Style="{StaticResource Card}" Margin="0,8,0,0" Padding="12,10">
+                                    <RichTextBox x:Name="AnswerBox" Style="{StaticResource ReadingBox}" MaxHeight="160" FontSize="14" />
+                                </Border>
+                            </Expander>
+                        </StackPanel>
+                    </Border>
+
+                    <Grid>
+                        <RichTextBox x:Name="LessonBox" Style="{StaticResource ReadingBox}" FontSize="15" />
+                        <StackPanel x:Name="Loading" VerticalAlignment="Center" HorizontalAlignment="Center">
+                            <ProgressBar IsIndeterminate="True" Width="220" Margin="0,0,0,10" />
+                            <TextBlock x:Name="LoadingText" HorizontalAlignment="Center" Style="{StaticResource Caption}" />
+                        </StackPanel>
+                    </Grid>
+                </DockPanel>
+            </ContentControl>
         </Grid>
     </Grid>
 </UserControl>

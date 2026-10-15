@@ -3,41 +3,63 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:DevBreak"
         Title="Dev break"
-        Width="900" Height="680" MinWidth="640" MinHeight="460"
+        Icon="pack://application:,,,/Assets/DevBreak.ico"
+        Width="900" Height="680" MinWidth="680" MinHeight="480"
+        Background="{StaticResource PaperGridBrush}"
+        FontFamily="{StaticResource BodyFont}" FontSize="14" Foreground="{StaticResource InkBrush}"
         Topmost="True"
         WindowStartupLocation="Manual">
-    <Grid Margin="20,12,20,20">
+    <Grid Margin="24,16,24,20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- top bar: modes on the left, the game on the right -->
-        <DockPanel Grid.Row="0" Margin="0,0,0,12">
+        <!-- top bar: logo and modes on the left, the game on the right -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,16">
             <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                <RadioButton x:Name="QuizMode" Content="Quiz" GroupName="Mode" IsChecked="True" Padding="16,5"
-                             Style="{StaticResource {x:Type ToggleButton}}" Checked="Mode_Checked" />
-                <RadioButton x:Name="LearnMode" Content="Learn" GroupName="Mode" Padding="16,5" Margin="4,0,0,0"
-                             Style="{StaticResource {x:Type ToggleButton}}" Checked="Mode_Checked" />
-                <RadioButton x:Name="StatsMode" Content="Stats" GroupName="Mode" Padding="16,5" Margin="4,0,0,0"
-                             Style="{StaticResource {x:Type ToggleButton}}" Checked="Mode_Checked" />
+                <Image Source="{StaticResource LogoImage}" Width="34" Height="34" Margin="0,0,14,0" />
+                <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource InkBrush}" BorderThickness="1.5"
+                        CornerRadius="22" Padding="4">
+                    <StackPanel Orientation="Horizontal">
+                        <RadioButton x:Name="QuizMode" Content="Quiz" GroupName="Mode" IsChecked="True"
+                                     Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
+                        <RadioButton x:Name="LearnMode" Content="Learn" GroupName="Mode" Margin="4,0,0,0"
+                                     Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
+                        <RadioButton x:Name="StatsMode" Content="Stats" GroupName="Mode" Margin="4,0,0,0"
+                                     Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
+                    </StackPanel>
+                </Border>
             </StackPanel>
 
-            <Button x:Name="SettingsButton" DockPanel.Dock="Right" Content="&#x2699;" FontSize="16" Padding="10,2"
-                    Margin="12,0,0,0" ToolTip="Settings" Click="Settings_Click" />
+            <Button x:Name="SettingsButton" DockPanel.Dock="Right" Style="{StaticResource IconButton}" Margin="8,0,0,0"
+                    ToolTip="Settings" AutomationProperties.Name="Settings" Click="Settings_Click">
+                <Path Data="{StaticResource SettingsIcon}" Style="{StaticResource IconPath}" Width="20" Height="20" />
+            </Button>
 
             <!-- rank + XP, streak, today's goal -->
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <Border x:Name="RankBadge" CornerRadius="10" Padding="10,2" VerticalAlignment="Center">
-                    <TextBlock x:Name="RankText" Foreground="White" FontWeight="SemiBold" FontSize="12" />
+                <Border x:Name="XpChip" Style="{StaticResource HudChip}" Background="{StaticResource MarkerBrush}">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Path Data="{StaticResource BoltIcon}" Fill="{StaticResource InkBrush}" Stretch="Uniform"
+                              Width="14" Height="14" Margin="0,0,6,0" />
+                        <TextBlock x:Name="XpText" FontWeight="Bold" FontSize="13.5" VerticalAlignment="Center" />
+                    </StackPanel>
                 </Border>
-                <StackPanel Margin="8,0,0,0" VerticalAlignment="Center" Width="130">
-                    <ProgressBar x:Name="XpBar" Height="6" Maximum="1" />
-                    <TextBlock x:Name="XpText" FontSize="11" Opacity="0.7" Margin="0,2,0,0" />
-                </StackPanel>
-                <TextBlock x:Name="StreakText" FontSize="14" FontWeight="SemiBold" Margin="16,0,0,0"
-                           VerticalAlignment="Center" ToolTip="Daily streak" />
-                <TextBlock x:Name="GoalText" FontSize="12" Margin="16,0,0,0" VerticalAlignment="Center" />
+                <Border x:Name="StreakChip" Style="{StaticResource HudChip}">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Path Data="{StaticResource FlameIcon}" Fill="{StaticResource CoralBrush}" Stroke="{StaticResource InkBrush}"
+                              StrokeThickness="1.5" Stretch="Uniform" Width="16" Height="18" Margin="0,0,6,0" />
+                        <TextBlock x:Name="StreakText" FontWeight="Bold" FontSize="13.5" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+                <Border x:Name="GoalChip" Style="{StaticResource HudChip}">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Path Data="{StaticResource TargetIcon}" Stroke="{StaticResource VioletBrush}" StrokeThickness="2"
+                              Stretch="Uniform" Width="15" Height="15" Margin="0,0,6,0" />
+                        <TextBlock x:Name="GoalText" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </DockPanel>
 
@@ -48,88 +70,142 @@
         <Grid x:Name="QuizView" Grid.Row="1">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
+                <RowDefinition Height="*" MinHeight="120" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition x:Name="AnswerRow" Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <ListBox x:Name="Topics" Grid.Row="0" Style="{StaticResource ChipList}" Margin="0,0,0,6"
-                     SelectionChanged="Topics_SelectionChanged" />
+            <DockPanel Grid.Row="0" Margin="0,0,0,6">
+                <TextBlock x:Name="LevelNote" DockPanel.Dock="Right" Style="{StaticResource HandNote}"
+                           VerticalAlignment="Top" Margin="12,0,0,0" />
+                <ListBox x:Name="Topics" Style="{StaticResource ChipList}" SelectionChanged="Topics_SelectionChanged" />
+            </DockPanel>
 
-            <!-- the question card -->
-            <Border Grid.Row="1" Style="{StaticResource Card}" Padding="4">
-                <DockPanel>
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="10,8,10,0">
-                        <Border x:Name="LevelBadge" CornerRadius="10" Padding="10,2" VerticalAlignment="Center">
-                            <TextBlock x:Name="LevelText" Foreground="White" FontWeight="SemiBold" FontSize="12" />
-                        </Border>
-                        <TextBlock x:Name="TopicText" Margin="10,0,0,0" FontSize="17" FontWeight="SemiBold"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
-                    <Grid>
-                        <RichTextBox x:Name="QuestionBox" IsReadOnly="True" IsDocumentEnabled="True" BorderThickness="0"
-                                     Background="Transparent" VerticalScrollBarVisibility="Auto" FontSize="14"
-                                     Padding="6" VerticalContentAlignment="Top" />
-                        <StackPanel x:Name="Loading" VerticalAlignment="Center" HorizontalAlignment="Center">
-                            <ProgressBar IsIndeterminate="True" Width="220" Margin="0,0,0,10" />
-                            <TextBlock x:Name="LoadingText" HorizontalAlignment="Center" Opacity="0.7" />
+            <!-- the question card: a page with a margin line -->
+            <ContentControl Grid.Row="1" Style="{StaticResource ShadowCard}" Padding="0">
+                <Grid>
+                    <Rectangle Width="2" HorizontalAlignment="Left" Margin="30,0,0,0" Fill="{StaticResource CoralBrush}" Opacity="0.55" />
+                    <DockPanel Margin="48,16,20,12">
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                            <Border x:Name="LevelBadge" CornerRadius="9" Padding="9,2" VerticalAlignment="Center"
+                                    BorderBrush="{StaticResource InkBrush}" BorderThickness="1.2">
+                                <TextBlock x:Name="LevelText" FontFamily="{StaticResource MonoFont}" FontSize="11" />
+                            </Border>
+                            <TextBlock x:Name="TopicText" Style="{StaticResource Heading}" FontSize="19" Margin="10,0,0,0"
+                                       VerticalAlignment="Center" />
                         </StackPanel>
-                    </Grid>
-                </DockPanel>
-            </Border>
+                        <Grid>
+                            <RichTextBox x:Name="QuestionBox" Style="{StaticResource ReadingBox}" FontSize="16" />
+                            <StackPanel x:Name="Loading" VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <ProgressBar IsIndeterminate="True" Width="220" Margin="0,0,0,10" />
+                                <TextBlock x:Name="LoadingText" HorizontalAlignment="Center" Style="{StaticResource Caption}" />
+                            </StackPanel>
+                        </Grid>
+                    </DockPanel>
+                </Grid>
+            </ContentControl>
 
             <!-- hint + your answer -->
-            <StackPanel Grid.Row="2" Margin="0,10,0,0">
-                <Expander x:Name="TheoryExpander" Header="Hint: background theory" Margin="0,0,0,8"
-                          Expanded="Theory_Toggled" Collapsed="Theory_Toggled">
-                    <RichTextBox x:Name="TheoryBox" IsReadOnly="True" IsDocumentEnabled="True" MaxHeight="200"
-                                 VerticalScrollBarVisibility="Auto" FontSize="13.5" Padding="10" Margin="0,6,0,0" />
+            <StackPanel Grid.Row="2" Margin="0,14,0,0">
+                <Expander x:Name="TheoryExpander" Header="Hint: background theory" Style="{StaticResource NoteExpander}"
+                          Margin="0,0,0,12" Expanded="Theory_Toggled" Collapsed="Theory_Toggled">
+                    <Border Style="{StaticResource Card}" Margin="0,8,0,0" Padding="14,10">
+                        <RichTextBox x:Name="TheoryBox" Style="{StaticResource ReadingBox}" MaxHeight="200" FontSize="14" />
+                    </Border>
                 </Expander>
-                <TextBox x:Name="MineBox" Height="64" TextWrapping="Wrap" AcceptsReturn="True"
-                         VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
-                         TextChanged="MineBox_TextChanged" />
-                <TextBlock x:Name="MineHint" Text="Type your answer to earn up to 110 XP, or just show the answer (5 XP)"
-                           Opacity="0.55" FontSize="11" Margin="2,3,0,0" />
+                <TextBlock x:Name="MineLabel" Text="Your answer" FontWeight="Bold" FontSize="15" Margin="2,0,0,6" />
+                <Grid>
+                    <TextBox x:Name="MineBox" Style="{StaticResource NotebookBox}" Height="84" TextWrapping="Wrap"
+                             AcceptsReturn="True" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
+                             AutomationProperties.Name="Your answer"
+                             TextChanged="MineBox_TextChanged" />
+                    <TextBlock x:Name="MinePlaceholder" Text="Explain it in your own words, like to a teammate..."
+                               Foreground="{StaticResource MutedBrush}" FontSize="15" Margin="16,11,0,0"
+                               IsHitTestVisible="False" />
+                </Grid>
+                <TextBlock x:Name="MineHint" Style="{StaticResource Caption}" Margin="2,6,0,0">
+                    Up to <Run Text="110 XP" FontWeight="Bold" Foreground="{StaticResource InkBrush}" /> for a full answer. Just peeking at the answer gives 5 XP.
+                </TextBlock>
             </StackPanel>
 
             <!-- answer, hidden until asked -->
-            <DockPanel Grid.Row="3" x:Name="AnswerPanel" Margin="0,10,0,0" Visibility="Collapsed">
-                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
-                    <Button x:Name="DiscussButton" DockPanel.Dock="Right" Content="&#x1F4AC; Discuss" Padding="12,3"
-                            Click="Discuss_Click" />
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="Answer" FontWeight="SemiBold" VerticalAlignment="Center" />
-                        <Border x:Name="ScoreBadge" CornerRadius="10" Padding="10,2" Margin="10,0,0,0" Visibility="Collapsed">
-                            <TextBlock x:Name="ScoreText" Foreground="White" FontWeight="SemiBold" />
+            <DockPanel Grid.Row="3" x:Name="AnswerPanel" Margin="0,14,0,0" Visibility="Collapsed">
+                <!-- the score: the teacher's stamp, and what to add -->
+                <Border x:Name="FeedbackCard" DockPanel.Dock="Top" Style="{StaticResource Card}" Margin="0,0,0,12"
+                        Padding="16,12" Visibility="Collapsed">
+                    <DockPanel>
+                        <Border x:Name="ScoreBadge" DockPanel.Dock="Right" Width="96" Height="96" CornerRadius="48"
+                                BorderBrush="{StaticResource CoralBrush}" BorderThickness="3" Margin="16,0,4,0"
+                                VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5" Visibility="Collapsed">
+                            <Border.RenderTransform>
+                                <RotateTransform Angle="-10" />
+                            </Border.RenderTransform>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock x:Name="ScoreText" FontFamily="{StaticResource HandFont}" FontWeight="Bold" FontSize="38"
+                                           Foreground="{StaticResource CoralInkBrush}" HorizontalAlignment="Center"
+                                           Margin="0,-6,0,-8" />
+                                <TextBlock x:Name="ScoreWord" FontFamily="{StaticResource HandFont}" FontWeight="Bold" FontSize="18"
+                                           Foreground="{StaticResource CoralInkBrush}" HorizontalAlignment="Center" />
+                            </StackPanel>
                         </Border>
-                        <ProgressBar x:Name="ScoringBar" IsIndeterminate="True" Width="80" Margin="10,0,6,0"
+                        <TextBlock x:Name="FeedbackText" TextWrapping="Wrap" FontSize="14.5" LineHeight="22"
+                                   VerticalAlignment="Center" />
+                    </DockPanel>
+                </Border>
+
+                <DockPanel DockPanel.Dock="Top" Margin="2,0,0,8">
+                    <Button x:Name="DiscussButton" DockPanel.Dock="Right" Style="{StaticResource SecondaryButton}" Height="38"
+                            Padding="14,0" AutomationProperties.Name="Discuss with Claude" Click="Discuss_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{StaticResource ChatIcon}" Style="{StaticResource IconPath}" StrokeThickness="1.8"
+                                  Margin="0,0,8,0" />
+                            <TextBlock Text="Discuss with Claude" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Model answer" Style="{StaticResource Heading}" FontSize="17" VerticalAlignment="Center" />
+                        <ProgressBar x:Name="ScoringBar" IsIndeterminate="True" Width="80" Margin="12,0,8,0"
                                      VerticalAlignment="Center" Visibility="Collapsed" />
-                        <TextBlock x:Name="ScoringText" Text="Scoring your answer..." Opacity="0.7"
+                        <TextBlock x:Name="ScoringText" Text="Scoring your answer..." Style="{StaticResource Caption}"
                                    VerticalAlignment="Center" Visibility="Collapsed" />
                     </StackPanel>
                 </DockPanel>
-                <TextBlock DockPanel.Dock="Top" x:Name="FeedbackText" TextWrapping="Wrap" Margin="0,2,0,8"
-                           Visibility="Collapsed" />
-                <RichTextBox x:Name="AnswerBox" IsReadOnly="True" IsDocumentEnabled="True"
-                             VerticalScrollBarVisibility="Auto" FontSize="13.5" Padding="10" />
+                <Border Style="{StaticResource Card}" Padding="16,12">
+                    <RichTextBox x:Name="AnswerBox" Style="{StaticResource ReadingBox}" FontSize="14.5" />
+                </Border>
             </DockPanel>
 
             <!-- actions: just three -->
-            <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
-                <Button x:Name="ShowButton" Content="Show answer" Margin="0,0,8,0" Padding="14,6" IsEnabled="False"
-                        Click="Show_Click" />
-                <Button Content="Next &#x25B6;" Margin="0,0,8,0" Padding="14,6" Click="Next_Click" />
-                <Button x:Name="CheckButton" Content="Check &#x2713;" Padding="18,6" IsEnabled="False"
-                        Style="{DynamicResource AccentButtonStyle}" Click="Check_Click" />
-            </StackPanel>
+            <DockPanel Grid.Row="4" Margin="0,16,0,0" LastChildFill="False">
+                <Button x:Name="ShowButton" DockPanel.Dock="Left" Content="Show answer" Style="{StaticResource SecondaryButton}"
+                        Margin="0,0,10,0" IsEnabled="False" Click="Show_Click" />
+                <Button DockPanel.Dock="Left" Style="{StaticResource SecondaryButton}" AutomationProperties.Name="Next question"
+                        Click="Next_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Next" VerticalAlignment="Center" />
+                        <Path Data="{StaticResource ArrowIcon}" Style="{StaticResource IconPath}" Width="16" Height="16"
+                              Margin="8,0,0,0" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="CheckButton" DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" IsEnabled="False"
+                        AutomationProperties.Name="Check my answer"
+                        Click="Check_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Data="{StaticResource CheckIcon}" Style="{StaticResource IconPath}" Stroke="White"
+                              StrokeThickness="2.6" Margin="0,0,8,0" />
+                        <TextBlock Text="Check my answer" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+            </DockPanel>
         </Grid>
 
         <!-- celebration toast: +XP, badges, rank up -->
-        <Border x:Name="Toast" Grid.RowSpan="2" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,46,0,0"
-                CornerRadius="12" Padding="18,10" Background="#E6202020" IsHitTestVisible="False" Opacity="0"
-                Visibility="Collapsed">
-            <TextBlock x:Name="ToastText" Foreground="White" FontSize="15" FontWeight="SemiBold" TextAlignment="Center" />
+        <Border x:Name="Toast" Grid.RowSpan="2" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,58,0,0"
+                CornerRadius="14" Padding="20,12" Background="{StaticResource InkBrush}"
+                BorderBrush="{StaticResource MarkerBrush}" BorderThickness="2"
+                IsHitTestVisible="False" Opacity="0" Visibility="Collapsed">
+            <TextBlock x:Name="ToastText" Foreground="White" FontSize="15" FontWeight="Bold" TextAlignment="Center" />
         </Border>
     </Grid>
 </Window>

@@ -8,14 +8,16 @@ using System.Windows.Media;
 namespace DevBreak;
 
 /// <summary>
-/// Turns Claude's reply into a FlowDocument: prose as plain text, ```lang fenced blocks as a dark
-/// code box coloured like VS Code's Dark+ theme, `inline code` in the code font.
+/// Turns Claude's reply into a FlowDocument: prose as plain text, ```lang fenced blocks as an ink
+/// code box coloured like VS Code's Dark+ theme, `inline code` in the code font on a violet tint.
 /// </summary>
 public static class CodeRenderer
 {
-    private static readonly FontFamily CodeFont = new("Cascadia Mono, Consolas");
+    private static readonly FontFamily CodeFont = (FontFamily)Application.Current.FindResource("MonoFont");
+    private static readonly FontFamily ProseFont = (FontFamily)Application.Current.FindResource("BodyFont");
 
-    private static readonly Brush CodeBackground = Frozen(0x1E, 0x1E, 0x1E);
+    private static readonly Brush CodeBackground = Frozen(0x16, 0x1A, 0x33);
+    private static readonly Brush InlineCodeBackground = Frozen(0xF1, 0xEE, 0xFF);
     private static readonly Brush PlainColor = Frozen(0xD4, 0xD4, 0xD4);
     private static readonly Brush KeywordColor = Frozen(0x56, 0x9C, 0xD6);
     private static readonly Brush StringColor = Frozen(0xCE, 0x91, 0x78);
@@ -23,7 +25,7 @@ public static class CodeRenderer
     private static readonly Brush NumberColor = Frozen(0xB5, 0xCE, 0xA8);
     private static readonly Brush TypeColor = Frozen(0x4E, 0xC9, 0xB0);
     private static readonly Brush FunctionColor = Frozen(0xDC, 0xDC, 0xAA);
-    private static readonly Brush InlineCodeColor = Frozen(0xC7, 0x25, 0x4E);
+    private static readonly Brush InlineCodeColor = Frozen(0x3A, 0x22, 0xC4);
 
     private static readonly Regex Fence = new(@"```[ \t]*(\w*)[^\n]*\n([\s\S]*?)```", RegexOptions.Compiled);
     private static readonly Regex InlineCode = new(@"`([^`\n]+)`", RegexOptions.Compiled);
@@ -66,7 +68,7 @@ public static class CodeRenderer
         var document = new FlowDocument
         {
             PagePadding = new Thickness(0),
-            FontFamily = new FontFamily("Segoe UI"),
+            FontFamily = ProseFont,
             TextAlignment = TextAlignment.Left,
         };
         Append(document, text);
@@ -108,7 +110,10 @@ public static class CodeRenderer
         foreach (Match code in InlineCode.Matches(line))
         {
             paragraph.Inlines.Add(new Run(line[at..code.Index]));
-            paragraph.Inlines.Add(new Run(code.Groups[1].Value) { FontFamily = CodeFont, Foreground = InlineCodeColor });
+            paragraph.Inlines.Add(new Run(code.Groups[1].Value)
+            {
+                FontFamily = CodeFont, Foreground = InlineCodeColor, Background = InlineCodeBackground, FontSize = 13.5,
+            });
             at = code.Index + code.Length;
         }
         paragraph.Inlines.Add(new Run(line[at..]));
@@ -122,8 +127,9 @@ public static class CodeRenderer
             Foreground = PlainColor,
             FontFamily = CodeFont,
             FontSize = 13,
-            Padding = new Thickness(12, 10, 12, 10),
+            Padding = new Thickness(14, 12, 14, 12),
             Margin = new Thickness(0, 2, 0, 12),
+            LineHeight = 20,
         };
         (Regex tokens, HashSet<string> keywords) = language switch
         {

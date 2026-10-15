@@ -11,7 +11,15 @@
     <RootNamespace>DevBreak</RootNamespace>
     <!-- Application.ThemeMode (Fluent theme) is still marked experimental -->
     <NoWarn>$(NoWarn);WPF0001</NoWarn>
+    <!-- made by Assets\make-icon.ps1 from the same shapes as Assets\logo.svg -->
+    <ApplicationIcon>Assets\DevBreak.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- the notebook look's fonts (SIL Open Font License), built into the exe -->
+    <Resource Include="Fonts\*.ttf" />
+    <Resource Include="Assets\DevBreak.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- kept as a plain file next to the exe so it can be edited -->

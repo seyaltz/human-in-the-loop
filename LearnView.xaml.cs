@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Shapes;
 
 namespace DevBreak;
 
-/// <summary>The learn path view: a course per tab, its lessons with progress on the left, the open lesson on the right.</summary>
+/// <summary>The learn path view: a course per tab, its lessons as a path with progress on the left, the open lesson on the right.</summary>
 public partial class LearnView : UserControl
 {
     private IReadOnlyList<Lesson>? _syllabus;
@@ -39,6 +41,8 @@ public partial class LearnView : UserControl
         Tabs.SelectionChanged += Tabs_SelectionChanged;
         _syllabus = null;
         LessonList.Items.Clear();
+        CourseTitle.Text = ProgressText.Text = "";
+        ProgressBar.Value = 0;
         ShowLesson(null, null);
         if (wasStarted && IsVisible) Start();
     }
@@ -60,6 +64,9 @@ public partial class LearnView : UserControl
         Category category = Current;
         _syllabus = null;
         LessonList.Items.Clear();
+        CourseTitle.Text = category.Name;
+        ProgressText.Text = "";
+        ProgressBar.Value = 0;
         ShowLesson(null, null);
         ShowLoading($"Writing the {category.Name} course...");
         try
@@ -69,11 +76,7 @@ public partial class LearnView : UserControl
             _syllabus = syllabus;
             for (int i = 0; i < syllabus.Count; i++)
             {
-                LessonList.Items.Add(new ListBoxItem
-                {
-                    Content = new TextBlock { Text = ItemText(category, i), TextWrapping = TextWrapping.Wrap },
-                    ToolTip = syllabus[i].Summary,
-                });
+                LessonList.Items.Add(new ListBoxItem { ToolTip = syllabus[i].Summary });
             }
             UpdateProgress();
             // continue where the course was left: the first lesson not done yet
@@ -95,7 +98,8 @@ public partial class LearnView : UserControl
         int index = Index;
         Lesson lesson = _syllabus[index];
         LessonList.ScrollIntoView(LessonList.SelectedItem);
-        LessonTitle.Text = $"{index + 1}. {lesson.Title}";
+        LessonNumber.Text = $"LESSON {index + 1} OF {_syllabus.Count}";
+        LessonTitle.Text = lesson.Title;
         LessonSummary.Text = lesson.Summary;
         UpdateButtons();
         ShowLesson(null, null);
@@ -131,7 +135,7 @@ public partial class LearnView : UserControl
         CheckPanel.Visibility = content != null ? Visibility.Visible : Visibility.Collapsed;
         if (_syllabus == null)
         {
-            LessonTitle.Text = LessonSummary.Text = "";
+            LessonNumber.Text = LessonTitle.Text = LessonSummary.Text = "";
             UpdateButtons();
         }
     }
@@ -145,14 +149,90 @@ public partial class LearnView : UserControl
         DoneButton.Content = hasLesson && LearnPath.IsDone(Current, Index) ? "Done ✓ (undo)" : $"Mark as done (+{Game.LessonXp} XP)";
     }
 
+    /// <summary>The progress bar, and every stop on the path (the next lesson moves as lessons get done).</summary>
     private void UpdateProgress()
     {
-        int done = Enumerable.Range(0, _syllabus!.Count).Count(i => LearnPath.IsDone(Current, i));
-        ProgressText.Text = $"{done} of {_syllabus.Count} lessons done";
+        Category category = Current;
+        int done = Enumerable.Range(0, _syllabus!.Count).Count(i => LearnPath.IsDone(category, i));
+        ProgressText.Text = $"{done} of {_syllabus.Count} done";
+        ProgressBar.Value = (double)done / _syllabus.Count;
+        int next = Enumerable.Range(0, _syllabus.Count).FirstOrDefault(i => !LearnPath.IsDone(category, i), -1);
+        for (int i = 0; i < _syllabus.Count; i++)
+        {
+            ((ListBoxItem)LessonList.Items[i]).Content = Stop(category, i, i == next);
+        }
     }
 
-    private string ItemText(Category category, int index) =>
-        $"{(LearnPath.IsDone(category, index) ? "✓" : " ")}  {index + 1}. {_syllabus![index].Title}";
+    /// <summary>One stop on the path: a line through a node (ticked when done, violet for up next) and the lesson's title.</summary>
+    private UIElement Stop(Category category, int index, bool isNext)
+    {
+        bool done = LearnPath.IsDone(category, index);
+        bool previousDone = index > 0 && LearnPath.IsDone(category, index - 1);
+        bool isLast = index == _syllabus!.Count - 1;
+
+        var rail = new Grid { Width = 32, Margin = new Thickness(0, 0, 12, 0) };
+        rail.RowDefinitions.Add(new RowDefinition());
+        rail.RowDefinitions.Add(new RowDefinition());
+        if (index > 0) rail.Children.Add(Line(previousDone, row: 0));
+        if (!isLast) rail.Children.Add(Line(done, row: 1));
+
+        var node = new Border
+        {
+            Width = 32, Height = 32, CornerRadius = new CornerRadius(16), BorderThickness = new Thickness(2),
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = Res(done ? "MarkerBrush" : isNext ? "VioletBrush" : "CardBrush"),
+            BorderBrush = Res(done || isNext ? "InkBrush" : "MutedBrush"),
+        };
+        if (done)
+        {
+            node.Child = new Path
+            {
+                Data = (Geometry)FindResource("CheckIcon"), Style = (Style)FindResource("IconPath"), Width = 14, Height = 14,
+                Stroke = Res("InkBrush"), StrokeThickness = 3,
+            };
+        }
+        else
+        {
+            node.Child = new TextBlock
+            {
+                Text = (index + 1).ToString(), FontWeight = FontWeights.Bold, FontSize = 13,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                Foreground = isNext ? Brushes.White : Res("InkSoftBrush"),
+            };
+        }
+        Grid.SetRowSpan(node, 2);
+        rail.Children.Add(node);
+
+        var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 8, 4, 8) };
+        text.Children.Add(new TextBlock
+        {
+            Text = _syllabus[index].Title, TextWrapping = TextWrapping.Wrap, FontSize = 14,
+            FontWeight = isNext ? FontWeights.Bold : done ? FontWeights.SemiBold : FontWeights.Normal,
+            Foreground = Res(done || isNext ? "InkBrush" : "InkSoftBrush"),
+        });
+        if (done || isNext)
+        {
+            text.Children.Add(new TextBlock
+            {
+                Text = done ? "Done" : "Up next", FontSize = 11.5, Foreground = Res("InkSoftBrush"),
+            });
+        }
+
+        var stop = new DockPanel { MinHeight = 48 };
+        DockPanel.SetDock(rail, Dock.Left);
+        stop.Children.Add(rail);
+        stop.Children.Add(text);
+        return stop;
+    }
+
+    private Rectangle Line(bool isWalked, int row)
+    {
+        var line = new Rectangle { Width = 2, Fill = Res(isWalked ? "InkBrush" : "LineBrush"), HorizontalAlignment = HorizontalAlignment.Center };
+        Grid.SetRow(line, row);
+        return line;
+    }
+
+    private Brush Res(string key) => (Brush)FindResource(key);
 
     private void Done_Click(object sender, RoutedEventArgs e)
     {
@@ -169,7 +249,6 @@ public partial class LearnView : UserControl
         }
         // get the next lesson ready while this one is read
         if (done) _ = LearnPath.PrepareAsync(Current);
-        ((TextBlock)((ListBoxItem)LessonList.Items[Index]).Content).Text = ItemText(Current, Index);
         UpdateProgress();
         UpdateButtons();
     }

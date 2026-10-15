@@ -1,8 +1,17 @@
 # human-in-the-loop
 
+<img src="Assets/logo-256.png" width="72" alt="Dev break logo: a question mark in a speech bubble on a violet tile">
+
 A Windows tray app that gives your brain a break from working with AI. In the last 5 minutes of every hour it pops up
 a coding / architecture question - heavier in the morning, lighter later in the day. Answer it (optional) and get a
 score, see the answer, and discuss it in a follow-up chat.
+
+## Look
+
+A notebook: grid paper, ink outlines, a violet pen, a lime highlighter for what you got right and a coral teacher's
+pen for the score stamp. The styles live in `App.xaml`; the fonts (Bricolage Grotesque, DM Sans, Caveat, JetBrains
+Mono, all under the SIL Open Font License, see `Fonts\`) are built into the exe. The logo is `Assets\logo.svg`;
+`Assets\make-icon.ps1` draws the same shapes into `Assets\DevBreak.ico` (the exe, window and tray icon).
 
 ## Game
 
