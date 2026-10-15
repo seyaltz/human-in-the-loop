@@ -1,5 +1,7 @@
 using System;
+using System.ComponentModel;
 using System.Drawing;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using Forms = System.Windows.Forms;
@@ -18,9 +20,27 @@ public partial class App : Application
     private DateTime? _lastShownHour;
     private DateTime? _snoozedUntil;
 
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (!Topics.IsSetUp)
+        {
+            // first run: Claude Code must work, then the user picks their topics
+            string? problem = await ClaudeProblemAsync();
+            if (problem != null)
+            {
+                MessageBox.Show(problem, "Dev break", MessageBoxButton.OK, MessageBoxImage.Error);
+                Shutdown(1);
+                return;
+            }
+            new TopicsWindow(isFirstRun: true).ShowDialog();
+        }
+        Topics.Changed += () =>
+        {
+            _pool.FillAll(Level.At(DateTime.Now.TimeOfDay));
+            LearnPath.PrepareAll();
+        };
+
         if (e.Args.Length > 0 && e.Args[0] == "--now")
         {
             ShutdownMode = ShutdownMode.OnLastWindowClose;
@@ -95,7 +115,25 @@ public partial class App : Application
         _open.Activate();
     }
 
-    /// <summary>"Knowledge" submenu: what new questions know about the user. The choice is saved in settings.json.</summary>
+    /// <summary>Why the claude CLI cannot answer (not installed, or not logged in), or null when it works.</summary>
+    private static async Task<string?> ClaudeProblemAsync()
+    {
+        try
+        {
+            await QuestionGenerator.RunClaudeAsync("Reply with just: OK");
+            return null;
+        }
+        catch (Win32Exception)
+        {
+            return "Claude Code is not installed.\n\nInstall Claude Code, run \"claude\" once and log in, then start Dev break again.";
+        }
+        catch (Exception ex)
+        {
+            return "Claude Code is installed but did not answer - is it logged in?\n\nRun \"claude\" once and log in, "
+                + "then start Dev break again.\n\n" + ex.Message;
+        }
+    }
+
     /// <summary>Opens the window (or brings it to the front) on the learn path.</summary>
     private void ShowLearn()
     {
@@ -103,6 +141,7 @@ public partial class App : Application
         _open?.ShowLearn();
     }
 
+    /// <summary>"Knowledge" submenu: what new questions know about the user. The choice is saved in settings.json.</summary>
     private static Forms.ToolStripMenuItem KnowledgeMenu()
     {
         var knowledge = new Forms.ToolStripMenuItem("Knowledge about me");

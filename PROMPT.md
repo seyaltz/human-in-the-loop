@@ -20,7 +20,7 @@ The look is light and simple: a compact card, topic chips, three buttons, settin
 - No NuGet packages. No database. Everything AI goes through the user's own logged-in `claude` CLI.
 - `profile.txt`: `<None Update="profile.txt" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />`.
 - Single-file publish: `dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish`.
-- `.gitignore`: `bin/ obj/ publish/ *.user .vs/ profile.txt .claude/ learn/ game.json`. MIT license.
+- `.gitignore`: `bin/ obj/ publish/ *.user .vs/ profile.txt .claude/ learn/ game.json topics.json`. MIT license.
 
 ## Calling Claude (`QuestionGenerator.RunClaudeAsync`)
 
@@ -44,35 +44,45 @@ Start `claude` as a child process with arguments (use `ArgumentList`):
   Topics: Java language trivia, git, HTTP status codes, Linux / shell commands, regex, JavaScript quirks, SQL
   basics, CS history, computer architecture basics, encoding and Unicode.
 
-## Tabs (categories) - one per part of the developer's service stack
+## Tabs (categories) - the user's own topics (`Topics.cs`)
 
 `record Category(Name, Topics)`; `TopicsFor(level)` returns its own topics, or the level's topics when it has none.
-- **Mix**: no topics (uses the level's list).
-- **Architecture**: distributed systems, caching strategy, messaging and event-driven design, consistency and
-  transactions, API design, microservices vs monolith, resilience (retries, timeouts, circuit breakers), scaling a
-  search-heavy system.
-- **GCP**: Cloud Run scaling and cold starts, Cloud SQL and connections, IAM and service accounts, load balancers, Cloud
-  Armor and IAP, Pub/Sub, Cloud Logging and Cloud Trace, Cloud Build and Cloud Deploy, GCP cost, Terraform on GCP,
-  Vertex AI.
-- **Java & Spring**: JVM memory and GC, concurrency and java.util.concurrent, virtual threads, Spring Boot internals
-  (auto-configuration, proxies), Spring transactions, JPA / Hibernate, Java language features (records, sealed types,
-  pattern matching, streams), Spring Security.
-- **PostgreSQL**: indexes and query plans (EXPLAIN), MVCC and VACUUM, locking and isolation levels, partitioning, JSONB,
-  connection pooling, Cloud SQL for PostgreSQL.
-- **Oracle**: execution plans and the optimizer, indexes, PL/SQL, sequences and identity columns, read consistency,
-  undo and locking, partitioning, Oracle vs PostgreSQL differences, Oracle on OCI.
-- **Redis**: Redis data structures, caching patterns (cache-aside, write-through), expiry and eviction, persistence
-  (RDB, AOF), Redis with Spring, distributed locks, pub/sub and streams.
-- **Algorithms**: algorithms and complexity, data structures, graphs and shortest paths, sorting and searching, dynamic
-  programming, hashing.
-- **Browser & Next.js**: cookies vs localStorage vs sessionStorage, browser and HTTP caching, CORS and the same-origin
-  policy, the JavaScript event loop, Next.js rendering (SSR, SSG, RSC), React state and effects, TypeScript types, web
-  performance (Core Web Vitals).
-- **DevOps**: Docker, Terraform, Bitbucket Pipelines CI/CD, git, observability (logs, metrics, traces), deployments and
-  rollbacks (Cloud Run revisions).
+`Category.All` = **Mix** (no topics; uses the level's list) followed by the user's chosen topics. Nothing is
+hard-coded: the topics are saved as `[{"Name":..., "Topics":[...]}]` in `topics.json` next to the exe (git-ignored).
+`Topics.IsSetUp` = that file exists. `Topics.Save(chosen)` writes it, keeps the existing `Category` instances for
+unchanged topics (open tabs and queued questions stay attached) and raises `Topics.Changed`.
 
-The tabs name technologies only (no company or personal data). Personalisation of the questions themselves comes from
-"Knowledge" below.
+- **`SuggestAsync()`**: read the user's typed Claude Code prompts exactly as for "Knowledge" below
+  (`Knowledge.RecentPrompts()`: last 7 days, newest 200). No prompts → return an empty list without calling Claude.
+  Otherwise prompt: "Below are a developer's own recent prompts to an AI coding assistant and the names of the project
+  folders they worked in. Suggest up to 10 topics this developer would gain from learning more about, based on the
+  technologies and engineering problems they work with." + "Only general, public high-tech topics (software, data,
+  cloud, AI, security, networks, hardware, engineering practice). Never anything personal or private: no health,
+  family, money or personal life, nothing about the user's employer, company, customers, products or business, no
+  people's names, no internal project names." + "Each topic is a short tab name (1-3 words, e.g. "PostgreSQL",
+  "Kubernetes", "System design") with 4-8 sub-topics." Reply one per line: `<tab name> | <sub>; <sub>; <sub>`,
+  followed by `PROJECT FOLDERS:` and `PROMPTS (newest first):`.
+- **`ShapeAsync(wish)`**: what the user typed ("I want to learn business regulation on PII") → prompt: "A developer
+  typed what they want to learn in a quiz and course app: "<wish>". Turn it into one topic: a short tab name (1-4
+  words) and 4-8 sub-topics that cover it from the basics to what a senior professional should know." Same one-line
+  reply format. The no-personal rule applies only to suggestions: a topic the user asks for is theirs.
+- Parsing: lines with `|`; name trimmed of `-`/`*` bullets; sub-topics split on `;`; skip empty, "Mix" and duplicate
+  names (case-insensitive); no topics at all → exception with the reply.
+
+### Topics window (`TopicsWindow`)
+
+720x680, Topmost, centred. "What do you want to learn?" (20 pt semibold) and an intro line; a card with one
+`CheckBox` per topic (name semibold, sub-topics comma-separated below, small and faded); "Add a topic of your own": a
+`TextBox` + "Add with AI" button (enabled when text is typed; Enter also adds) and a hint "e.g. "I want to learn
+business regulation on PII" - Claude turns it into a topic"; Cancel and Save (accent) at the bottom.
+- **First run** (`isFirstRun`): intro "Suggested from your own Claude Code chats of the last 7 days - general tech
+  topics only, nothing personal. Tick the ones you want, or add your own below."; a loading overlay "Reading your
+  Claude chats to suggest topics..." while `SuggestAsync` runs; suggestions start **unticked**. No chats → "No Claude
+  Code chats found yet, so there is nothing to suggest. Add the topics you want below."; an error is shown in the card.
+- **From the gear menu**: intro "Untick a topic to remove its tab, or add a new one below."; the current topics, ticked.
+- Add with AI: disable the box, hint "Claude is shaping your topic...", then add the topic **ticked** (replacing a
+  row with the same name), clear the box, hint 'Added "<name>". Add another, or Save.'; on error the hint shows it.
+- Save: `Topics.Save(ticked rows in order)`, close with `DialogResult = true`. Cancel changes nothing.
 
 ## Knowledge about the user (`Knowledge.cs`)
 
@@ -82,7 +92,8 @@ The tabs name technologies only (no company or personal data). Personalisation o
 - **Claude**: a summary of the user's own Claude Code history, built **once a day** and cached in
   `knowledge-from-claude.txt` next to the exe (reuse it if its write date is today; share one in-flight Task so
   parallel question generation builds it once; rebuild if that Task faulted).
-  - Read `%USERPROFILE%\.claude\projects\<project-folder>\*.jsonl` files written in the last 7 days
+  - `Knowledge.RecentPrompts()` (shared with topic suggestions): read
+    `%USERPROFILE%\.claude\projects\<project-folder>\*.jsonl` files written in the last 7 days
     (open with `FileShare.ReadWrite`; they may be in use).
   - Each line is JSON. Keep only prompts the user typed: `type == "user"`, `origin.kind == "human"`,
     `message.content` is a **string**, `timestamp` within 7 days. Skip unparsable lines.
@@ -177,6 +188,13 @@ one is retried on the next request. UI thread only.
 
 ## Tray app (`App.xaml.cs`)
 
+- **First run** (no `topics.json`): first check that Claude Code works by running the prompt "Reply with just: OK"
+  through `RunClaudeAsync`. Not installed (`Win32Exception` starting `claude`) → error box "Claude Code is not
+  installed. Install Claude Code, run "claude" once and log in, then start Dev break again."; any other failure → "Claude
+  Code is installed but did not answer - is it logged in? Run "claude" once and log in, then start Dev break again." +
+  the error; then exit. Otherwise show `TopicsWindow(isFirstRun: true)` as a dialog, then continue (the app runs with
+  only Mix when the user cancels, and asks again next start).
+- `Topics.Changed` → `FillAll(Level.At(now))` and `LearnPath.PrepareAll()`.
 - `--now` argument: open one question window, exit when it closes (`OnLastWindowClose`). No tray.
 - Otherwise a `NotifyIcon` with a drawn icon (green circle, white bold "?"), tooltip "Dev break - a question at :55
   every hour". Left-click → ask now. Context menu: "Ask me now", "Learn path" (opens the window on the learn path), "Knowledge about me" submenu (From my Claude history
@@ -225,11 +243,14 @@ with `TextOnAccentFillColorPrimaryBrush` text) and `Card` (a `Border`, corner ra
   "N / next XP"), the streak "🔥 N" (tooltip with the best), today's goal "🎯 q/3 questions · l/1 lesson" or "🎯 Goal
   done", and a gear button.
 - **Gear menu** (a `ContextMenu` built on click): "Knowledge about me" (From my Claude history / From profile.txt /
-  None (generic), checkable; saves the setting), "Level for new questions" (Auto (now: X) / Heavy / Medium / Light,
+  None (generic), checkable; saves the setting), "Topics..." (opens `TopicsWindow` from the gear menu, owned by the
+  window), "Level for new questions" (Auto (now: X) / Heavy / Medium / Light,
   checkable), separator, "Snooze 15 min" (snoozes and closes).
 - The modes swap the content below. Learn and Stats grow the window once to 1180x820 (capped to the work area, placed
   bottom-right; never shrinks). Learn opens the first course only then (a quiz popup never writes a course); Stats
   refreshes. Switching back to Quiz shows the quiz topic again.
+- On `Topics.Changed` the quiz chips are rebuilt (stay on the same tab if it still exists, else Mix) and
+  `LearnView.Reload()` rebuilds the course chips.
 - **Toast**: a dark rounded box (`#E6202020`, white semibold text) at the top centre over everything, not hit-testable;
   on `Game.Awarded` with lines it fades in (250 ms), stays (2.5 s + 300 ms per line) and fades out. Every
   `Awarded` also refreshes the HUD (and Stats when visible).
@@ -305,7 +326,9 @@ show it and drop the unanswered message from history.
 
 ## Extra files
 
-- `install-startup.ps1`: creates a "Dev break.lnk" in the Startup folder pointing to `publish\DevBreak.exe` and starts
+- `install-startup.ps1`: first stops with an error if `claude` is not on the PATH ("Claude Code is not installed...")
+  or if `'Reply with just: OK' | claude -p --no-session-persistence` fails ("Claude Code did not answer - is it logged
+  in?..." + its output); exit code 1. Then creates a "Dev break.lnk" in the Startup folder pointing to `publish\DevBreak.exe` and starts
   it; `-Uninstall` removes the shortcut.
 - `README.md`: requirements (Windows, .NET 10 SDK, Claude Code CLI logged in), `dotnet run` / `dotnet run -- --now`,
   publish + startup, the learn path, and the three knowledge options.
@@ -322,3 +345,8 @@ lesson has theory, real examples and a check question, Mark as done updates the 
 restart, Next lesson / Previous move through the course, and Quiz switches back; the game: Check gives "+N XP" and the first-answer badge in a toast and
 the HUD (rank, XP bar, streak, goal) updates, Mark as done gives +50 XP and the first-lesson badge, Stats shows the
 cards, badges (earned ones bright), the 14-day chart and topics, and a topic answered badly comes up more often.
+First run on a clean Windows (e.g. Windows Sandbox): without Claude Code the install script and the app stop with
+"not installed"; installed but not logged in → "is it logged in?"; logged in with no chats → the topics window says
+there is nothing to suggest; with chats → up to 10 tech-only suggestions (no company, product or personal words), tick
+some, "Add with AI" turns "I want to learn business regulation on PII" into a ticked topic, Save → Quiz and Learn show
+Mix + those tabs; gear → Topics... lists them ticked, unticking one and saving removes its chip at once.

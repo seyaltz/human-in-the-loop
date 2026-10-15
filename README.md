@@ -11,10 +11,18 @@ a daily streak, meet the daily goal (3 questions + 1 lesson, +100 XP) and unlock
 streak, badges, the last 14 days and how you do per topic - and topics you answer badly come up more often.
 Everything is stored locally in `game.json` next to the exe.
 
+## Your topics
+
+On first start the app checks that Claude Code is installed and logged in (it stops with a clear message if not),
+then asks **What do you want to learn?** It reads the prompts you typed into Claude Code in the last 7 days and
+suggests up to 10 topics - general tech topics only, never anything personal (health, money, your company, its
+customers or products). Tick the ones you want. You can also type your own, e.g. *"I want to learn business
+regulation on PII"*, and **Add with AI** turns it into a topic with sub-topics. Change them any time with the gear
+menu -> **Topics...**. They are saved in `topics.json` next to the exe.
+
 ## Learn path
 
-Switch the window to **Learn** (top left, or **Learn path** in the tray menu) for a course per topic -
-Architecture, GCP, Java & Spring, PostgreSQL, Oracle, Redis, Algorithms, Browser & Next.js, DevOps. Claude writes each
+Switch the window to **Learn** (top left, or **Learn path** in the tray menu) for a course per topic. Claude writes each
 course (12 lessons, from the foundations to what every senior engineer should know) and each lesson the first time you
 open it: the theory, real examples, pitfalls and a check question. When the app starts it prepares every course and
 your next lesson in the background (about 2 minutes the first time), so they open instantly. Mark lessons as done to track your progress.
@@ -25,6 +33,8 @@ Courses, lessons and progress are saved in `learn\` next to the exe.
 - Windows 10/11
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) installed and logged in (`claude` on the PATH).
+  On a new machine the installer may not add `%USERPROFILE%\.local\bin` to the PATH - it says so; add it and reopen
+  PowerShell.
   Questions, scores and chat come from your own Claude account.
 
 ## Run

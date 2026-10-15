@@ -12,6 +12,17 @@ if ($Uninstall) {
 
 $exe = Join-Path $PSScriptRoot 'publish\DevBreak.exe'
 
+# every question, course and topic comes from Claude Code: stop here if it is missing or not logged in
+if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+    Write-Error "Claude Code is not installed (no 'claude' on the PATH). Install it, run 'claude' once and log in, then run this again."
+    exit 1
+}
+$reply = 'Reply with just: OK' | claude -p --no-session-persistence 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Claude Code did not answer - is it logged in? Run 'claude' once and log in, then run this again.`n$reply"
+    exit 1
+}
+
 $link = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcut)
 $link.TargetPath = $exe
 $link.WorkingDirectory = Split-Path $exe

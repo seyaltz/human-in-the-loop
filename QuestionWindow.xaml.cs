@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -40,13 +41,15 @@ public partial class QuestionWindow : Window
     {
         _pool = pool;
         InitializeComponent();
-        foreach (Category category in Category.All)
-        {
-            Topics.Items.Add(new ListBoxItem { Content = category.Name, Tag = category });
-        }
+        AddTopicChips();
 
         Game.Awarded += OnAwarded;
-        Closed += (_, _) => Game.Awarded -= OnAwarded;
+        DevBreak.Topics.Changed += OnTopicsChanged;
+        Closed += (_, _) =>
+        {
+            Game.Awarded -= OnAwarded;
+            DevBreak.Topics.Changed -= OnTopicsChanged;
+        };
         UpdateHud();
 
         Loaded += (_, _) =>
@@ -57,6 +60,27 @@ public partial class QuestionWindow : Window
     }
 
     private Category Current => (Category)((ListBoxItem)Topics.SelectedItem).Tag;
+
+    private void AddTopicChips()
+    {
+        foreach (Category category in Category.All)
+        {
+            Topics.Items.Add(new ListBoxItem { Content = category.Name, Tag = category });
+        }
+    }
+
+    /// <summary>Rebuilds the chips after the topics change, staying on the same tab when it is still there.</summary>
+    private void OnTopicsChanged()
+    {
+        Category? selected = Topics.SelectedItem != null ? Current : null;
+        Topics.SelectionChanged -= Topics_SelectionChanged;
+        Topics.Items.Clear();
+        AddTopicChips();
+        Topics.SelectionChanged += Topics_SelectionChanged;
+        int index = Category.All.ToList().FindIndex(c => c == selected);
+        Topics.SelectedIndex = Math.Max(0, index);
+        LearnView.Reload();
+    }
 
     private void Topics_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -274,6 +298,10 @@ public partial class QuestionWindow : Window
             knowledge.Items.Add(item);
         }
         menu.Items.Add(knowledge);
+
+        var topics = new MenuItem { Header = "Topics..." };
+        topics.Click += (_, _) => new TopicsWindow(isFirstRun: false) { Owner = this }.ShowDialog();
+        menu.Items.Add(topics);
 
         var levels = new MenuItem { Header = "Level for new questions" };
         foreach (Level? level in new[] { null, Level.Heavy, Level.Medium, Level.Light })

@@ -17,10 +17,30 @@ public partial class LearnView : UserControl
     public LearnView()
     {
         InitializeComponent();
+        AddCourseChips();
+    }
+
+    private void AddCourseChips()
+    {
         foreach (Category category in LearnPath.Courses)
         {
             Tabs.Items.Add(new ListBoxItem { Content = category.Name, Tag = category });
         }
+    }
+
+    /// <summary>Rebuilds the course chips after the topics change; the first course opens again when the view is shown.</summary>
+    public void Reload()
+    {
+        bool wasStarted = Tabs.SelectedIndex >= 0;
+        ++_version;
+        Tabs.SelectionChanged -= Tabs_SelectionChanged;
+        Tabs.Items.Clear();
+        AddCourseChips();
+        Tabs.SelectionChanged += Tabs_SelectionChanged;
+        _syllabus = null;
+        LessonList.Items.Clear();
+        ShowLesson(null, null);
+        if (wasStarted && IsVisible) Start();
     }
 
     /// <summary>Opens the first course the first time the view is shown, so a quiz popup never writes a course.</summary>

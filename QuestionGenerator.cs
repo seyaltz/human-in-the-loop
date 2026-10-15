@@ -38,32 +38,8 @@ public sealed record Category(string Name, IReadOnlyList<string> Topics)
 {
     public static readonly Category Mix = new("Mix", []);
 
-    public static readonly IReadOnlyList<Category> All =
-    [
-        Mix,
-        new("Architecture", ["distributed systems", "caching strategy", "messaging and event-driven design",
-            "consistency and transactions", "API design", "microservices vs monolith", "resilience (retries, timeouts, circuit breakers)",
-            "scaling a search-heavy system"]),
-        new("GCP", ["Cloud Run scaling and cold starts", "Cloud SQL and connections", "IAM and service accounts",
-            "load balancers, Cloud Armor and IAP", "Pub/Sub", "Cloud Logging and Cloud Trace", "Cloud Build and Cloud Deploy",
-            "GCP cost", "Terraform on GCP", "Vertex AI"]),
-        new("Java & Spring", ["JVM memory and GC", "concurrency and java.util.concurrent", "virtual threads",
-            "Spring Boot internals (auto-configuration, proxies)", "Spring transactions", "JPA / Hibernate",
-            "Java language features (records, sealed types, pattern matching, streams)", "Spring Security"]),
-        new("PostgreSQL", ["indexes and query plans (EXPLAIN)", "MVCC and VACUUM", "locking and isolation levels",
-            "partitioning", "JSONB", "connection pooling", "Cloud SQL for PostgreSQL"]),
-        new("Oracle", ["execution plans and the optimizer", "indexes", "PL/SQL", "sequences and identity columns",
-            "read consistency, undo and locking", "partitioning", "Oracle vs PostgreSQL differences", "Oracle on OCI"]),
-        new("Redis", ["Redis data structures", "caching patterns (cache-aside, write-through)", "expiry and eviction",
-            "persistence (RDB, AOF)", "Redis with Spring", "distributed locks", "pub/sub and streams"]),
-        new("Algorithms", ["algorithms and complexity", "data structures", "graphs and shortest paths",
-            "sorting and searching", "dynamic programming", "hashing"]),
-        new("Browser & Next.js", ["cookies vs localStorage vs sessionStorage", "browser and HTTP caching",
-            "CORS and the same-origin policy", "the JavaScript event loop", "Next.js rendering (SSR, SSG, RSC)",
-            "React state and effects", "TypeScript types", "web performance (Core Web Vitals)"]),
-        new("DevOps", ["Docker", "Terraform", "Bitbucket Pipelines CI/CD", "git", "observability (logs, metrics, traces)",
-            "deployments and rollbacks (Cloud Run revisions)"]),
-    ];
+    /// <summary>Mix, then the user's own topics (see <see cref="DevBreak.Topics"/>).</summary>
+    public static IReadOnlyList<Category> All => DevBreak.Topics.All;
 
     public IReadOnlyList<string> TopicsFor(Level level) => Topics.Count > 0 ? Topics : level.Topics;
 }

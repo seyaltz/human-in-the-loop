@@ -67,7 +67,11 @@ public static class Knowledge
         return _claudeSummary;
     }
 
-    private static async Task<string> BuildClaudeSummaryAsync()
+    /// <summary>
+    /// The prompts the user typed into Claude Code in the last <see cref="HistoryDays"/> days (newest first, at most
+    /// <see cref="MaxPrompts"/>, one "- " line each) and the project folders they were typed in.
+    /// </summary>
+    public static (IReadOnlyList<string> Projects, string Prompts, int Count) RecentPrompts()
     {
         DateTime since = DateTime.Now.AddDays(-HistoryDays);
         var projects = new List<string>();
@@ -87,11 +91,19 @@ public static class Knowledge
         }
 
         var recent = new StringBuilder();
+        int count = 0;
         foreach ((DateTime _, string text) in prompts.OrderByDescending(p => p.At).Take(MaxPrompts))
         {
             string line = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
             recent.Append("- ").AppendLine(line.Length > MaxPromptChars ? line[..MaxPromptChars] : line);
+            count++;
         }
+        return (projects, recent.ToString(), count);
+    }
+
+    private static async Task<string> BuildClaudeSummaryAsync()
+    {
+        (IReadOnlyList<string> projects, string recent, int _) = RecentPrompts();
 
         string prompt = $"""
             Below are a developer's own recent prompts to an AI coding assistant (last {HistoryDays} days) and the names of
