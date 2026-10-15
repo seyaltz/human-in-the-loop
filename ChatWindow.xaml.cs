@@ -19,7 +19,7 @@ public partial class ChatWindow : Window
         _mine = mine;
         InitializeComponent();
         Title = $"Dev break - discuss - {topic}";
-        TopicText.Text = $"Discuss: {topic}";
+        TopicText.Text = topic;
         Transcript.Document = CodeRenderer.Render("");
         AddMessage(false, "Ask anything about this question or its answer: why, what if, a deeper example, or check an idea.");
         Loaded += (_, _) => InputBox.Focus();
@@ -68,10 +68,10 @@ public partial class ChatWindow : Window
     private void AddMessage(bool isMine, string text)
     {
         FlowDocument document = Transcript.Document;
-        document.Blocks.Add(new Paragraph(new Run(isMine ? "You" : "Claude") { FontWeight = FontWeights.SemiBold })
+        document.Blocks.Add(new Paragraph(new Run(isMine ? "You" : "Claude") { FontWeight = FontWeights.Bold })
         {
-            Margin = new Thickness(0, document.Blocks.Count == 0 ? 0 : 8, 0, 2),
-            Foreground = isMine ? System.Windows.Media.Brushes.SteelBlue : System.Windows.Media.Brushes.SeaGreen,
+            Margin = new Thickness(0, document.Blocks.Count == 0 ? 0 : 10, 0, 2),
+            Foreground = (System.Windows.Media.Brush)FindResource(isMine ? "VioletBrush" : "CoralInkBrush"),
         });
         CodeRenderer.Append(document, text);
         Transcript.ScrollToEnd();

@@ -122,11 +122,15 @@ public partial class QuestionWindow : Window
         TabState state = _tabs[Current];
         Title = $"Dev break - {Current.Name} - {state.Level.Name} - {state.Topic}";
         LevelText.Text = state.Level.Name.ToUpperInvariant();
-        LevelBadge.Background = new SolidColorBrush(state.Level == Level.Heavy ? Color.FromRgb(0xC6, 0x28, 0x28)
-            : state.Level == Level.Medium ? Color.FromRgb(0xEF, 0x6C, 0x00)
-            : Color.FromRgb(0x2E, 0x7D, 0x32));
+        LevelBadge.Background = Res(state.Level == Level.Heavy ? "CoralTintBrush"
+            : state.Level == Level.Medium ? "MarkerBrush"
+            : "VioletTintBrush");
+        LevelNote.Text = state.Level == Level.Heavy ? "a meaty one"
+            : state.Level == Level.Medium ? "a medium one"
+            : "a light one";
         TopicText.Text = state.Topic;
         MineBox.Text = state.Mine;
+        UpdatePlaceholder();
 
         bool isLoading = state.Question == null && state.Error == null;
         Loading.Visibility = isLoading ? Visibility.Visible : Visibility.Collapsed;
@@ -142,6 +146,7 @@ public partial class QuestionWindow : Window
         UpdateCheckButton(state);
         MineBox.IsReadOnly = state.IsAnswerShown;
         MineHint.Visibility = state.IsAnswerShown ? Visibility.Collapsed : Visibility.Visible;
+        UpdatePlaceholder();
         ShowScore(state);
         SetAnswerVisible(state.IsAnswerShown);
     }
@@ -150,13 +155,16 @@ public partial class QuestionWindow : Window
     {
         ScoringBar.Visibility = ScoringText.Visibility = state.IsScoring ? Visibility.Visible : Visibility.Collapsed;
         ScoreBadge.Visibility = state.Score != null ? Visibility.Visible : Visibility.Collapsed;
-        FeedbackText.Visibility = state.Score != null || state.ScoreError != null ? Visibility.Visible : Visibility.Collapsed;
+        FeedbackCard.Visibility = state.Score != null || state.ScoreError != null ? Visibility.Visible : Visibility.Collapsed;
         if (state.Score is { } score)
         {
-            ScoreText.Text = $"Your score {score.Points}/10";
-            ScoreBadge.Background = new SolidColorBrush(score.Points >= 8 ? Color.FromRgb(0x2E, 0x7D, 0x32)
-                : score.Points >= 5 ? Color.FromRgb(0xEF, 0x6C, 0x00)
-                : Color.FromRgb(0xC6, 0x28, 0x28));
+            // the teacher's stamp
+            ScoreText.Text = $"{score.Points}/10";
+            ScoreWord.Text = score.Points == 10 ? "perfect!"
+                : score.Points >= 8 ? "nice!"
+                : score.Points >= 5 ? "close!"
+                : "review it";
+            ScoreBadge.ToolTip = $"Your score: {score.Points} out of 10";
             FeedbackText.Text = score.Feedback.Replace("`", "");
         }
         else if (state.ScoreError != null)
@@ -208,7 +216,13 @@ public partial class QuestionWindow : Window
             state.Mine = MineBox.Text;
             UpdateCheckButton(state);
         }
+        UpdatePlaceholder();
     }
+
+    private void UpdatePlaceholder() =>
+        MinePlaceholder.Visibility = MineBox.Text.Length == 0 && !MineBox.IsReadOnly ? Visibility.Visible : Visibility.Collapsed;
+
+    private static Brush Res(string key) => (Brush)Application.Current.FindResource(key);
 
     private void UpdateCheckButton(TabState state) =>
         CheckButton.IsEnabled = state.Question != null && !state.IsAnswerShown && state.Mine.Trim().Length > 0;
@@ -274,6 +288,7 @@ public partial class QuestionWindow : Window
         CheckButton.IsEnabled = false;
         MineBox.IsReadOnly = true;
         MineHint.Visibility = Visibility.Collapsed;
+        UpdatePlaceholder();
         if (score) ScoreMine(Current, state);
         else Game.QuestionSeen(Current, state.Topic);
         ShowScore(state);
@@ -329,20 +344,19 @@ public partial class QuestionWindow : Window
         int xp = Game.Xp;
         Rank rank = Game.RankOf(xp);
         Rank? next = Game.NextRank(xp);
-        RankText.Text = rank.Name.ToUpperInvariant();
-        RankBadge.Background = (Brush)new BrushConverter().ConvertFromString(rank.Color)!;
-        XpBar.Value = next == null ? 1 : (double)(xp - rank.From) / (next.From - rank.From);
-        XpText.Text = next == null ? $"{xp:N0} XP - top rank" : $"{xp:N0} / {next.From:N0} XP";
+        XpText.Text = $"{rank.Name} · {xp:N0} XP";
+        XpChip.ToolTip = next == null ? "Top rank reached" : $"{next.From - xp:N0} XP to {next.Name}";
         int streak = Game.Streak();
-        StreakText.Text = $"\U0001F525 {streak}";
-        StreakText.ToolTip = $"Daily streak: {streak} day(s) in a row (best {Game.BestStreak()})";
+        StreakText.Text = streak == 1 ? "1 day" : $"{streak} days";
+        StreakChip.ToolTip = $"Daily streak: {streak} day(s) in a row (best {Game.BestStreak()})";
         int questions = Game.QuestionsOn(DateTime.Today);
         int lessons = Game.LessonsOn(DateTime.Today);
         bool met = questions >= Game.GoalQuestions && lessons >= Game.GoalLessons;
         GoalText.Text = met
-            ? "\U0001F3AF Goal done"
-            : $"\U0001F3AF {Math.Min(questions, Game.GoalQuestions)}/{Game.GoalQuestions} questions · {Math.Min(lessons, Game.GoalLessons)}/{Game.GoalLessons} lesson";
-        GoalText.ToolTip = $"Daily goal: {Game.GoalQuestions} questions and {Game.GoalLessons} lesson (+{Game.GoalBonusXp} XP)";
+            ? "Goal done"
+            : $"{Math.Min(questions, Game.GoalQuestions)}/{Game.GoalQuestions} · {Math.Min(lessons, Game.GoalLessons)}/{Game.GoalLessons}";
+        GoalChip.Background = Res(met ? "MarkerBrush" : "CardBrush");
+        GoalChip.ToolTip = $"Today's goal: {Game.GoalQuestions} questions and {Game.GoalLessons} lesson (+{Game.GoalBonusXp} XP)";
     }
 
     private void OnAwarded(IReadOnlyList<string> lines)

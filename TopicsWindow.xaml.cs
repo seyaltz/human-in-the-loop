@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Automation;
 using System.Windows.Input;
+using System.Windows.Media;
 
 namespace DevBreak;
 
@@ -16,6 +18,7 @@ public partial class TopicsWindow : Window
     public TopicsWindow(bool isFirstRun)
     {
         InitializeComponent();
+        Greeting.Text = isFirstRun ? "hi! let's set you up" : "your topics";
         if (isFirstRun)
         {
             IntroText.Text = "Suggested from your own Claude Code chats of the last 7 days - general tech topics only, "
@@ -56,16 +59,25 @@ public partial class TopicsWindow : Window
     private void AddRow(Category category, bool isChecked)
     {
         var content = new StackPanel();
-        content.Children.Add(new TextBlock { Text = category.Name, FontWeight = FontWeights.SemiBold });
+        content.Children.Add(new TextBlock { Text = category.Name, FontWeight = FontWeights.Bold, FontSize = 15.5, TextWrapping = TextWrapping.Wrap });
         content.Children.Add(new TextBlock
         {
-            Text = string.Join(", ", category.Topics), TextWrapping = TextWrapping.Wrap, Opacity = 0.65, FontSize = 12,
+            Text = string.Join(", ", category.Topics), TextWrapping = TextWrapping.Wrap, FontSize = 12.5,
+            Margin = new Thickness(0, 2, 0, 0), Foreground = (Brush)FindResource("InkSoftBrush"),
         });
-        TopicList.Children.Add(new CheckBox
-        {
-            Content = content, Tag = category, IsChecked = isChecked, Margin = new Thickness(0, 0, 0, 10),
-            VerticalContentAlignment = VerticalAlignment.Top,
-        });
+        var row = new CheckBox { Content = content, Tag = category, IsChecked = isChecked, Style = (Style)FindResource("TopicCard") };
+        AutomationProperties.SetName(row, category.Name);
+        row.Checked += (_, _) => UpdateCount();
+        row.Unchecked += (_, _) => UpdateCount();
+        TopicList.Children.Add(row);
+        UpdateCount();
+    }
+
+    /// <summary>The handwritten "3 topics picked" next to Save.</summary>
+    private void UpdateCount()
+    {
+        int picked = Rows.Count(r => r.IsChecked == true);
+        CountText.Text = picked == 0 ? "" : picked == 1 ? "1 topic picked" : $"{picked} topics picked";
     }
 
     private void UpdateEmpty(string text)
@@ -76,8 +88,11 @@ public partial class TopicsWindow : Window
 
     private IEnumerable<CheckBox> Rows => TopicList.Children.OfType<CheckBox>();
 
-    private void WishBox_TextChanged(object sender, TextChangedEventArgs e) =>
+    private void WishBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
         AddButton.IsEnabled = WishBox.Text.Trim().Length > 0 && WishBox.IsEnabled;
+        WishPlaceholder.Visibility = WishBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     private void WishBox_KeyDown(object sender, KeyEventArgs e)
     {
