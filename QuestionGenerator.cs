@@ -53,6 +53,11 @@ public static class QuestionGenerator
     private static readonly string[] ClaudeArgs =
         ["-p", "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence"];
 
+    // the TL;DR needs current data: the same, plus web search and fetch, allowed so -p does not stop to ask
+    private static readonly string[] ClaudeWebArgs =
+        ["-p", "--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch", "--strict-mcp-config",
+         "--setting-sources", "", "--no-session-persistence"];
+
     public static async Task<Question> GenerateAsync(Level level, string topic)
     {
         string knowledge = await Knowledge.GetAsync();
@@ -162,7 +167,7 @@ public static class QuestionGenerator
         return RunClaudeAsync(prompt);
     }
 
-    public static async Task<string> RunClaudeAsync(string prompt)
+    public static async Task<string> RunClaudeAsync(string prompt, bool web = false)
     {
         var start = new ProcessStartInfo("claude")
         {
@@ -176,7 +181,7 @@ public static class QuestionGenerator
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        foreach (string arg in ClaudeArgs)
+        foreach (string arg in web ? ClaudeWebArgs : ClaudeArgs)
         {
             start.ArgumentList.Add(arg);
         }

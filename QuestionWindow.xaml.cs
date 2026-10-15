@@ -80,6 +80,7 @@ public partial class QuestionWindow : Window
         int index = Category.All.ToList().FindIndex(c => c == selected);
         Topics.SelectedIndex = Math.Max(0, index);
         LearnView.Reload();
+        TldrView.Reload();
     }
 
     private void Topics_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -254,21 +255,24 @@ public partial class QuestionWindow : Window
 
     private void Mode_Checked(object sender, RoutedEventArgs e)
     {
-        if (LearnView == null || StatsView == null || QuizView == null) return;
+        if (LearnView == null || StatsView == null || TldrView == null || QuizView == null) return;
         bool learn = LearnMode.IsChecked == true;
         bool stats = StatsMode.IsChecked == true;
-        QuizView.Visibility = learn || stats ? Visibility.Collapsed : Visibility.Visible;
+        bool tldr = TldrMode.IsChecked == true;
+        QuizView.Visibility = learn || stats || tldr ? Visibility.Collapsed : Visibility.Visible;
         LearnView.Visibility = learn ? Visibility.Visible : Visibility.Collapsed;
         StatsView.Visibility = stats ? Visibility.Visible : Visibility.Collapsed;
-        if (learn || stats)
+        TldrView.Visibility = tldr ? Visibility.Visible : Visibility.Collapsed;
+        if (learn || stats || tldr)
         {
-            Title = learn ? "Dev break - learn path" : "Dev break - stats";
-            // courses and stats need room; grow once, never shrink
+            Title = learn ? "Dev break - learn path" : stats ? "Dev break - stats" : "Dev break - TL;DR";
+            // courses, stats and the TL;DR need room; grow once, never shrink
             Rect area = SystemParameters.WorkArea;
             Width = Math.Max(Width, Math.Min(WideWidth, area.Width - 32));
             PlaceBottomRight(Math.Min(WideHeight, area.Height - 32));
             if (learn) LearnView.Start();
-            else StatsView.Refresh();
+            else if (stats) StatsView.Refresh();
+            else TldrView.Start();
         }
         else if (Topics.SelectedItem != null && _tabs.ContainsKey(Current))
         {
