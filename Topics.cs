@@ -56,7 +56,8 @@ public static class Topics
     /// </summary>
     public static async Task<IReadOnlyList<Category>> SuggestAsync()
     {
-        (IReadOnlyList<string> projects, string prompts, int count) = Knowledge.RecentPrompts();
+        // reading the session logs can take a while (hundreds of MB), so it stays off the UI thread
+        (IReadOnlyList<string> projects, string prompts, int count) = await Task.Run(() => Knowledge.RecentPrompts());
         if (count == 0) return [];
 
         string prompt = $"""
