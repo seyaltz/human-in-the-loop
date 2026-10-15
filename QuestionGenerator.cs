@@ -186,7 +186,16 @@ public static class QuestionGenerator
         process.StandardInput.Close();
         Task<string> stdout = process.StandardOutput.ReadToEndAsync();
         Task<string> stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+        }
+        catch (TimeoutException)
+        {
+            // disposing the Process does not stop it: without this the claude process tree keeps running
+            process.Kill(entireProcessTree: true);
+            throw;
+        }
         string output = (await stdout).Trim();
 
         if (process.ExitCode != 0)
