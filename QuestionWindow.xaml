@@ -28,6 +28,8 @@
                                      Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
                         <RadioButton x:Name="StatsMode" Content="Stats" GroupName="Mode" Margin="4,0,0,0"
                                      Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
+                        <RadioButton x:Name="TldrMode" Content="TL;DR" GroupName="Mode" Margin="4,0,0,0"
+                                     Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
                     </StackPanel>
                 </Border>
             </StackPanel>
@@ -65,6 +67,7 @@
 
         <local:LearnView x:Name="LearnView" Grid.Row="1" Visibility="Collapsed" />
         <local:StatsView x:Name="StatsView" Grid.Row="1" Visibility="Collapsed" />
+        <local:TldrView x:Name="TldrView" Grid.Row="1" Visibility="Collapsed" />
 
         <!-- quiz -->
         <Grid x:Name="QuizView" Grid.Row="1">

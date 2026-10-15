@@ -114,7 +114,7 @@ public static class LearnPath
     private static string CourseDir(Category category) =>
         Path.Combine(LearnDir, string.Concat(category.Name.Select(c => char.IsLetterOrDigit(c) ? c : '-')));
 
-    private static async Task<string> AboutThemAsync()
+    internal static async Task<string> AboutThemAsync()
     {
         string knowledge = await Knowledge.GetAsync();
         return knowledge.Length == 0 ? "" : $"""
