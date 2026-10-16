@@ -10,24 +10,41 @@
         </Grid.RowDefinitions>
 
         <!-- one TL;DR per topic, as chips -->
-        <ListBox x:Name="Tabs" Grid.Row="0" Style="{StaticResource ChipList}" Margin="0,0,0,6"
+        <ListBox x:Name="Tabs" Grid.Row="0" Style="{StaticResource ChipList}" Margin="0,0,0,8"
                  SelectionChanged="Tabs_SelectionChanged" />
 
-        <DockPanel Grid.Row="1" Margin="0,0,0,8">
-            <Button x:Name="RefreshButton" DockPanel.Dock="Right" Content="Refresh" Padding="14,5" Click="Refresh_Click" />
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock x:Name="TldrTitle" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" />
-                <TextBlock x:Name="WrittenText" Opacity="0.7" Margin="0,2,0,0" />
-            </StackPanel>
-        </DockPanel>
+        <!-- what it is, how fresh, and what to do with it -->
+        <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,12" Padding="20,12,16,12">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="RefreshButton" Content="Refresh" Style="{StaticResource SecondaryButton}" Margin="0,0,10,0"
+                            Click="Refresh_Click" />
+                    <Button x:Name="DiscussButton" Style="{StaticResource PrimaryButton}" AutomationProperties.Name="Discuss"
+                            Click="Discuss_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{StaticResource ChatIcon}" Style="{StaticResource IconPath}" Stroke="White"
+                                  Width="16" Height="16" Margin="0,0,8,0" />
+                            <TextBlock Text="Discuss" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="fresh from the web" Style="{StaticResource HandNote}" FontSize="19" />
+                    <TextBlock x:Name="TldrTitle" Style="{StaticResource Heading}" FontSize="24" Margin="0,2,0,2" />
+                    <TextBlock x:Name="WrittenText" Style="{StaticResource Eyebrow}" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
 
-        <Grid Grid.Row="2">
-            <RichTextBox x:Name="TldrBox" IsReadOnly="True" IsDocumentEnabled="True"
-                         VerticalScrollBarVisibility="Auto" FontSize="14" Padding="10" />
-            <StackPanel x:Name="Loading" VerticalAlignment="Center" HorizontalAlignment="Center">
-                <ProgressBar IsIndeterminate="True" Width="220" Margin="0,0,0,10" />
-                <TextBlock x:Name="LoadingText" HorizontalAlignment="Center" Opacity="0.7" />
-            </StackPanel>
-        </Grid>
+        <!-- the briefing: one block per section, then the sources as links -->
+        <ContentControl Grid.Row="2" Style="{StaticResource ShadowCard}" Padding="18,14,10,14">
+            <Grid>
+                <RichTextBox x:Name="TldrBox" Style="{StaticResource ReadingBox}" FontSize="14.5" />
+                <StackPanel x:Name="Loading" VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <ProgressBar IsIndeterminate="True" Width="220" Margin="0,0,0,10" />
+                    <TextBlock x:Name="LoadingText" HorizontalAlignment="Center" Style="{StaticResource Caption}" />
+                </StackPanel>
+            </Grid>
+        </ContentControl>
     </Grid>
 </UserControl>

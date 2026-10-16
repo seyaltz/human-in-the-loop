@@ -1,27 +1,38 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Input;
 
 namespace DevBreak;
 
-/// <summary>A follow-up conversation with Claude about one question and its answer.</summary>
+/// <summary>A follow-up conversation with Claude: about one question and its answer, or about a TL;DR.</summary>
 public partial class ChatWindow : Window
 {
-    private readonly Question _question;
-    private readonly string _mine;
+    private readonly Func<IReadOnlyList<(bool IsMine, string Text)>, Task<string>> _reply;
     private readonly List<(bool IsMine, string Text)> _history = [];
 
     public ChatWindow(string topic, Question question, string mine)
+        : this(topic, "Ask anything about this question or its answer: why, what if, a deeper example, or check an idea.",
+               history => QuestionGenerator.ChatAsync(question, mine, history))
     {
-        _question = question;
-        _mine = mine;
+    }
+
+    public ChatWindow(string topic, TldrContent tldr)
+        : this(topic, "Ask anything about this TL;DR: what changed and why, how to use it, or what it means for your stack.",
+               history => QuestionGenerator.ChatAboutTldrAsync(topic, tldr, history))
+    {
+    }
+
+    private ChatWindow(string topic, string intro, Func<IReadOnlyList<(bool IsMine, string Text)>, Task<string>> reply)
+    {
+        _reply = reply;
         InitializeComponent();
         Title = $"Dev break - discuss - {topic}";
         TopicText.Text = topic;
         Transcript.Document = CodeRenderer.Render("");
-        AddMessage(false, "Ask anything about this question or its answer: why, what if, a deeper example, or check an idea.");
+        AddMessage(false, intro);
         Loaded += (_, _) => InputBox.Focus();
     }
 
@@ -46,7 +57,7 @@ public partial class ChatWindow : Window
         SetThinking(true);
         try
         {
-            string reply = (await QuestionGenerator.ChatAsync(_question, _mine, _history)).Trim();
+            string reply = (await _reply(_history)).Trim();
             _history.Add((false, reply));
             AddMessage(false, reply);
         }

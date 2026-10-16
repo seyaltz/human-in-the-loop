@@ -40,6 +40,7 @@ public partial class App : Application
         {
             _pool.FillAll(Level.At(DateTime.Now.TimeOfDay));
             LearnPath.PrepareAll();
+            Tldr.PrepareAll();
         };
 
         if (e.Args.Length > 0 && e.Args[0] == "--now")
@@ -70,6 +71,7 @@ public partial class App : Application
 
         _pool.FillAll(Level.At(DateTime.Now.TimeOfDay));
         LearnPath.PrepareAll();
+        Tldr.PrepareAll();
         _timer.Tick += (_, _) => Tick();
         _timer.Start();
     }
