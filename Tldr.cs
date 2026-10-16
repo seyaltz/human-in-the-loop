@@ -15,9 +15,14 @@ public sealed record TldrSection(string Title, string Text);
 /// <summary>A web page the TL;DR was written from.</summary>
 public sealed record TldrSource(string Title, string Url);
 
-/// <summary>A tab's TL;DR, the pages it came from, and when it was written.</summary>
-public sealed record TldrContent(DateTime Written, IReadOnlyList<TldrSection> Sections, IReadOnlyList<TldrSource>? Sources)
+/// <summary>
+/// A tab's TL;DR, the pages it came from, and when it was written. Format 2: every item explained
+/// (Context / Why / Good for / For you); older saved ones are written again.
+/// </summary>
+public sealed record TldrContent(DateTime Written, IReadOnlyList<TldrSection> Sections, IReadOnlyList<TldrSource>? Sources, int Format = 0)
 {
+    public const int CurrentFormat = 2;
+
     /// <summary>The TL;DR as plain text, for the follow-up chat.</summary>
     public string ToText()
     {
@@ -97,8 +102,9 @@ public static class Tldr
         return task;
     }
 
-    // a TL;DR saved before sources were added has none, so it is written again
-    private static bool IsOld(TldrContent content) => DateTime.Now - content.Written >= MaxAge || content.Sources == null;
+    // a TL;DR saved in an older format (no sources, no explained items) is written again
+    private static bool IsOld(TldrContent content) =>
+        DateTime.Now - content.Written >= MaxAge || content.Sources == null || content.Format < TldrContent.CurrentFormat;
 
     private static string PathOf(Category category) =>
         Path.Combine(TldrDir, string.Concat(category.Name.Select(c => char.IsLetterOrDigit(c) ? c : '-')) + ".json");
@@ -120,19 +126,30 @@ public static class Tldr
             changelogs, official blogs and docs) to get the latest, current data. Do not rely on memory for anything
             recent, and give version numbers and dates.
 
-            Write these sections, each 3 to 6 short "- " bullets, under 700 words in total:
-            LATEST RELEASES: the newest releases and what they changed, with version and date.
+            Write these sections, 3 or 4 items each:
+            LATEST RELEASES: the newest releases and what they changed (headline with version and date).
             HOT TOPICS: what is new and getting attention right now.
             INTERESTING QUIRKS: surprising behaviour and gotchas.
             WHAT A SENIOR MUST KNOW: the things a senior engineer is expected to know.
             OPTIMIZATION TIPS: practical tips for performance and cost.
+
+            Explain every item so a developer understands it without looking it up, each line 1 to 3 sentences:
+            * <short headline>
+            Context: the background - the problem or the situation before.
+            Why: why they did it, or why it works this way.
+            Good for: what it gives you in practice, with a concrete example (a snippet when it helps).
+            For you: what it means for the learner's own work and products described above. When it does not
+            apply, write "Not directly relevant to your stack." - never invent a link. Leave this line out when
+            nothing is known about the learner.
+            Keep the whole briefing under 2000 words.
+
             Then list under SOURCES every web page you used, one per line as: - <page title> | <full https URL>
             Plain text; no markdown headings and no bold.
             Put every code snippet in a fenced block with its language, e.g. ```java, ```sql, ```javascript, ```bash.
             Short names inside a sentence go in single backticks.
 
-            Reply in exactly this format and nothing else, each title alone on its line followed by its bullets:
-            {string.Join("\n", Titles.Select(t => t + ":\n<bullets>"))}
+            Reply in exactly this format and nothing else, each title alone on its line followed by its items:
+            {string.Join("\n", Titles.Select(t => t + ":\n<items>"))}
             {SourcesTitle}:
             - <page title> | <full https URL>
             """;
@@ -169,7 +186,7 @@ public static class Tldr
             }
         }
 
-        var content = new TldrContent(DateTime.Now, sections, sources);
+        var content = new TldrContent(DateTime.Now, sections, sources, TldrContent.CurrentFormat);
         Directory.CreateDirectory(TldrDir);
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(content));
         return content;
