@@ -15,15 +15,19 @@ public partial class TldrView : UserControl
     // each section's accent, in the order Tldr writes them
     private static readonly string[] Accents = ["VioletBrush", "CoralBrush", "MarkerBrush", "VioletDarkBrush", "InkBrush"];
 
+    // a topic's discussion is kept while its panel is swapped for another, so the conversation comes back
     private readonly Dictionary<string, ChatPanel> _chats = [];
+
+    // what each topic shows beside the TL;DR: its discussion or a save-to-Claude panel
+    private readonly Dictionary<string, UserControl> _panels = [];
     private TldrContent? _content;
 
-    /// <summary>The discussion to show beside the TL;DR changed: opened, closed, or another topic picked (null = none).</summary>
-    public event Action<ChatPanel?>? ChatChanged;
+    /// <summary>The panel to show beside the TL;DR changed: opened, closed, or another topic picked (null = none).</summary>
+    public event Action<UserControl?>? ChatChanged;
 
-    /// <summary>The open discussion of the topic on screen, if any.</summary>
-    public ChatPanel? CurrentChat =>
-        Tabs.SelectedItem != null && _chats.TryGetValue(Current.Name, out ChatPanel? chat) ? chat : null;
+    /// <summary>The open side panel of the topic on screen, if any.</summary>
+    public UserControl? CurrentChat =>
+        Tabs.SelectedItem != null && _panels.TryGetValue(Current.Name, out UserControl? panel) ? panel : null;
 
     // bumped on every tab change or refresh, so a slow reply for an old selection is dropped
     private int _version;
@@ -87,12 +91,31 @@ public partial class TldrView : UserControl
             created.CloseRequested += () =>
             {
                 _chats.Remove(topic);
-                if (Tabs.SelectedItem != null && Current.Name == topic) ChatChanged?.Invoke(null);
+                ClosePanel(topic, created);
             };
             _chats[topic] = chat = created;
         }
+        _panels[topic] = chat;
         ChatChanged?.Invoke(chat);
         chat.FocusInput();
+    }
+
+    /// <summary>Opens the save-to-Claude panel for one item: Claude suggests which of the user's projects it belongs to.</summary>
+    private void Share(string headline, string item)
+    {
+        if (_content == null || Tabs.SelectedItem == null) return;
+        string topic = Current.Name;
+        var share = new SharePanel(topic, headline, item, _content.Sources ?? []);
+        share.CloseRequested += () => ClosePanel(topic, share);
+        _panels[topic] = share;
+        ChatChanged?.Invoke(share);
+    }
+
+    private void ClosePanel(string topic, UserControl panel)
+    {
+        if (!_panels.TryGetValue(topic, out UserControl? open) || open != panel) return;
+        _panels.Remove(topic);
+        if (Tabs.SelectedItem != null && Current.Name == topic) ChatChanged?.Invoke(null);
     }
 
     private async void Load(bool refresh)
@@ -194,11 +217,14 @@ public partial class TldrView : UserControl
                 BorderBrush = accent, BorderThickness = new Thickness(4, 0, 0, 0),
                 Padding = new Thickness(16, 2, 6, 6), Margin = new Thickness(0, 0, 0, 20),
             };
-            block.Blocks.Add(new Paragraph(new Run(headline))
+            var title = new Paragraph(new Run(headline))
             {
                 FontFamily = Res<FontFamily>("DisplayFont"), FontSize = 18, FontWeight = FontWeights.ExtraBold,
                 Margin = new Thickness(0, 0, 0, 4),
-            });
+            };
+            title.Inlines.Add(new Run("   "));
+            title.Inlines.Add(new InlineUIContainer(ShareButton(headline, fields)) { BaselineAlignment = BaselineAlignment.Center });
+            block.Blocks.Add(title);
             foreach ((string label, string text) in fields)
             {
                 // "For you" is about the learner's own stack, so it stands out
@@ -265,6 +291,21 @@ public partial class TldrView : UserControl
         return items;
     }
 
+    /// <summary>The small "+ my Claude" button on an item: suggests saving it to the user's own Claude Code projects.</summary>
+    private Button ShareButton(string headline, List<(string Label, string Text)> fields)
+    {
+        string item = "* " + headline + "\n" + string.Join("\n", fields.Select(f => f.Label.Length > 0 ? $"{f.Label}: {f.Text.Trim()}" : f.Text.Trim()));
+        var button = new Button
+        {
+            Content = "+ my Claude", Style = Res<Style>("SecondaryButton"), Height = 28, Padding = new Thickness(10, 0, 10, 0),
+            FontFamily = Res<FontFamily>("BodyFont"), FontSize = 12, FontWeight = FontWeights.SemiBold,
+            ToolTip = "Save this to the Claude Code memory or skills of the projects it fits - Claude suggests, you approve",
+        };
+        System.Windows.Automation.AutomationProperties.SetName(button, "Save to my Claude: " + headline);
+        button.Click += (_, _) => Share(headline, item);
+        return button;
+    }
+
     private Paragraph Eyebrow(string text) => new(new Run(text))
     {
         FontFamily = Res<FontFamily>("MonoFont"), FontSize = 12.5, Foreground = Res<Brush>("InkSoftBrush"),
@@ -282,3 +323,4 @@ public partial class TldrView : UserControl
         }
     }
 }
+

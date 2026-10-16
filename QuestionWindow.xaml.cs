@@ -160,8 +160,8 @@ public partial class QuestionWindow : Window
         if (QuizMode.IsChecked == true) ShowChat(state.Chat);
     }
 
-    /// <summary>Shows a discussion on the right of the window (growing it to fit), or hides it for null.</summary>
-    private void ShowChat(ChatPanel? panel)
+    /// <summary>Shows a side panel (a discussion, or saving to Claude) on the right of the window, growing it to fit; null hides it.</summary>
+    private void ShowChat(UserControl? panel)
     {
         ChatHost.Content = panel;
         ChatHost.Visibility = panel != null ? Visibility.Visible : Visibility.Collapsed;
