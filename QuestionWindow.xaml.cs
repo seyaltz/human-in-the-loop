@@ -12,6 +12,9 @@ public partial class QuestionWindow : Window
 {
     private const double CollapsedHeight = 680;
     private const double WideWidth = 1180;
+
+    // the window's starting width (QuestionWindow.xaml), which the quiz is laid out for
+    private const double QuizWidth = 900;
     private const double WideHeight = 820;
 
     /// <summary>What one topic holds: its question (null while generating), error, typed answer and whether the answer is shown.</summary>
@@ -28,7 +31,7 @@ public partial class QuestionWindow : Window
         public bool IsScoring { get; set; }
         public Score? Score { get; set; }
         public string? ScoreError { get; set; }
-        public ChatWindow? Chat { get; set; }
+        public ChatPanel? Chat { get; set; }
     }
 
     private readonly Dictionary<Category, TabState> _tabs = [];
@@ -51,6 +54,10 @@ public partial class QuestionWindow : Window
             DevBreak.Topics.Changed -= OnTopicsChanged;
         };
         UpdateHud();
+        TldrView.ChatChanged += panel =>
+        {
+            if (TldrMode.IsChecked == true) ShowChat(panel);
+        };
 
         Loaded += (_, _) =>
         {
@@ -150,6 +157,19 @@ public partial class QuestionWindow : Window
         UpdatePlaceholder();
         ShowScore(state);
         SetAnswerVisible(state.IsAnswerShown);
+        if (QuizMode.IsChecked == true) ShowChat(state.Chat);
+    }
+
+    /// <summary>Shows a discussion on the right of the window (growing it to fit), or hides it for null.</summary>
+    private void ShowChat(ChatPanel? panel)
+    {
+        ChatHost.Content = panel;
+        ChatHost.Visibility = panel != null ? Visibility.Visible : Visibility.Collapsed;
+        if (panel == null) return;
+        Rect area = SystemParameters.WorkArea;
+        double content = QuizMode.IsChecked == true ? QuizWidth : WideWidth;
+        Width = Math.Max(Width, Math.Min(content + ChatHost.Width + ChatHost.Margin.Left, area.Width - 32));
+        PlaceBottomRight(Height);
     }
 
     private void ShowScore(TabState state)
@@ -241,13 +261,16 @@ public partial class QuestionWindow : Window
         TabState state = _tabs[Current];
         if (state.Chat == null)
         {
-            state.Chat = new ChatWindow(state.Topic, state.Question!, state.Mine);
-            state.Chat.Closed += (_, _) => state.Chat = null;
-            state.Chat.Left = Math.Max(SystemParameters.WorkArea.Left + 16, Left - state.Chat.Width - 12);
-            state.Chat.Top = Top;
-            state.Chat.Show();
+            ChatPanel chat = new(state.Topic, state.Question!, state.Mine);
+            chat.CloseRequested += () =>
+            {
+                state.Chat = null;
+                if (ChatHost.Content == chat) ShowChat(null);
+            };
+            state.Chat = chat;
         }
-        state.Chat.Activate();
+        ShowChat(state.Chat);
+        state.Chat.FocusInput();
     }
 
     /// <summary>Switches to the learn path.</summary>
@@ -273,10 +296,16 @@ public partial class QuestionWindow : Window
             if (learn) LearnView.Start();
             else if (stats) StatsView.Refresh();
             else TldrView.Start();
+            // each mode keeps its own discussion: the TL;DR's comes back, learn and stats have none
+            ShowChat(tldr ? TldrView.CurrentChat : null);
         }
         else if (Topics.SelectedItem != null && _tabs.ContainsKey(Current))
         {
             ShowTab();
+        }
+        else
+        {
+            ShowChat(null);
         }
     }
 
