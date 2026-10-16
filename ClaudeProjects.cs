@@ -22,7 +22,9 @@ public sealed record ShareSuggestion(ClaudeProject Project, string Kind, string 
 public static class ClaudeProjects
 {
     private static readonly string Home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-    private static readonly string ProjectsDir = Path.Combine(Home, ".claude", "projects");
+    // DEVBREAK_CLAUDE_PROJECTS points at another projects folder (a sandbox for tests and demos)
+    private static readonly string ProjectsDir =
+        Environment.GetEnvironmentVariable("DEVBREAK_CLAUDE_PROJECTS") is { Length: > 0 } dir ? dir : Path.Combine(Home, ".claude", "projects");
 
     /// <summary>
     /// The projects whose folder still exists. Each Claude Code session log records its working folder (cwd), which is
