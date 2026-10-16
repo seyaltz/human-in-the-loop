@@ -15,8 +15,15 @@ public partial class TldrView : UserControl
     // each section's accent, in the order Tldr writes them
     private static readonly string[] Accents = ["VioletBrush", "CoralBrush", "MarkerBrush", "VioletDarkBrush", "InkBrush"];
 
-    private readonly Dictionary<string, ChatWindow> _chats = [];
+    private readonly Dictionary<string, ChatPanel> _chats = [];
     private TldrContent? _content;
+
+    /// <summary>The discussion to show beside the TL;DR changed: opened, closed, or another topic picked (null = none).</summary>
+    public event Action<ChatPanel?>? ChatChanged;
+
+    /// <summary>The open discussion of the topic on screen, if any.</summary>
+    public ChatPanel? CurrentChat =>
+        Tabs.SelectedItem != null && _chats.TryGetValue(Current.Name, out ChatPanel? chat) ? chat : null;
 
     // bumped on every tab change or refresh, so a slow reply for an old selection is dropped
     private int _version;
@@ -61,6 +68,7 @@ public partial class TldrView : UserControl
     {
         if (e.Source != Tabs || Tabs.SelectedItem == null) return;
         Load(refresh: false);
+        ChatChanged?.Invoke(CurrentChat);
     }
 
     private void Refresh_Click(object sender, RoutedEventArgs e)
@@ -72,17 +80,18 @@ public partial class TldrView : UserControl
     {
         if (_content == null || Tabs.SelectedItem == null) return;
         string topic = Current.Name;
-        if (!_chats.TryGetValue(topic, out ChatWindow? chat))
+        if (!_chats.TryGetValue(topic, out ChatPanel? chat))
         {
-            chat = new ChatWindow(topic + " - TL;DR", _content);
-            chat.Closed += (_, _) => _chats.Remove(topic);
-            Window owner = Window.GetWindow(this);
-            chat.Left = Math.Max(SystemParameters.WorkArea.Left + 16, owner.Left - chat.Width - 12);
-            chat.Top = owner.Top;
-            _chats[topic] = chat;
-            chat.Show();
+            ChatPanel created = new(topic + " - TL;DR", _content);
+            created.CloseRequested += () =>
+            {
+                _chats.Remove(topic);
+                if (Tabs.SelectedItem != null && Current.Name == topic) ChatChanged?.Invoke(null);
+            };
+            _chats[topic] = chat = created;
         }
-        chat.Activate();
+        ChatChanged?.Invoke(chat);
+        chat.FocusInput();
     }
 
     private async void Load(bool refresh)

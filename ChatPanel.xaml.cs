@@ -2,39 +2,48 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 
 namespace DevBreak;
 
-/// <summary>A follow-up conversation with Claude: about one question and its answer, or about a TL;DR.</summary>
-public partial class ChatWindow : Window
+/// <summary>
+/// A follow-up conversation with Claude, shown beside the quiz or the TL;DR in the main window: about one question
+/// and its answer, or about a TL;DR.
+/// </summary>
+public partial class ChatPanel : UserControl
 {
     private readonly Func<IReadOnlyList<(bool IsMine, string Text)>, Task<string>> _reply;
     private readonly List<(bool IsMine, string Text)> _history = [];
 
-    public ChatWindow(string topic, Question question, string mine)
+    /// <summary>The close button was pressed; the owner removes the panel.</summary>
+    public event Action? CloseRequested;
+
+    public ChatPanel(string topic, Question question, string mine)
         : this(topic, "Ask anything about this question or its answer: why, what if, a deeper example, or check an idea.",
                history => QuestionGenerator.ChatAsync(question, mine, history))
     {
     }
 
-    public ChatWindow(string topic, TldrContent tldr)
+    public ChatPanel(string topic, TldrContent tldr)
         : this(topic, "Ask anything about this TL;DR: what changed and why, how to use it, or what it means for your stack.",
                history => QuestionGenerator.ChatAboutTldrAsync(topic, tldr, history))
     {
     }
 
-    private ChatWindow(string topic, string intro, Func<IReadOnlyList<(bool IsMine, string Text)>, Task<string>> reply)
+    private ChatPanel(string topic, string intro, Func<IReadOnlyList<(bool IsMine, string Text)>, Task<string>> reply)
     {
         _reply = reply;
         InitializeComponent();
-        Title = $"Dev break - discuss - {topic}";
         TopicText.Text = topic;
         Transcript.Document = CodeRenderer.Render("");
         AddMessage(false, intro);
-        Loaded += (_, _) => InputBox.Focus();
     }
+
+    public void FocusInput() => Dispatcher.BeginInvoke(() => InputBox.Focus());
+
+    private void Close_Click(object sender, RoutedEventArgs e) => CloseRequested?.Invoke();
 
     private void InputBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
