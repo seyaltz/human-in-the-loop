@@ -147,16 +147,18 @@ public static class QuestionGenerator
     }
 
     /// <summary>A follow-up about a TL;DR. It may use the web, like the TL;DR itself, so answers stay current.</summary>
-    public static Task<string> ChatAboutTldrAsync(string topic, TldrContent tldr, IReadOnlyList<(bool IsMine, string Text)> history)
+    public static async Task<string> ChatAboutTldrAsync(string topic, TldrContent tldr, IReadOnlyList<(bool IsMine, string Text)> history)
     {
         string prompt = $"""
             You are a friendly senior engineer discussing the latest news on {topic} with a developer during a break.
             Answer their latest message directly and concisely (usually under 150 words). Go deeper, give examples,
             or correct them when they are wrong. When it is about something recent, search the web and fetch the
             official source first, and name the page you used with its full https URL.
+            When they ask what it means for their own work, products or platform, answer in terms of what is known
+            about them below.
             Plain text, no markdown headings or bold.
             Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
-
+            {await LearnPath.AboutThemAsync()}
             THE TL;DR YOU ARE DISCUSSING (written {tldr.Written:yyyy-MM-dd}):
             {tldr.ToText()}
 
@@ -165,18 +167,21 @@ public static class QuestionGenerator
 
             Reply with your answer only, without a "TUTOR:" prefix.
             """;
-        return RunClaudeAsync(prompt, web: true);
+        return await RunClaudeAsync(prompt, web: true);
     }
 
-    public static Task<string> ChatAsync(Question question, string mine, IReadOnlyList<(bool IsMine, string Text)> history)
+    public static async Task<string> ChatAsync(Question question, string mine, IReadOnlyList<(bool IsMine, string Text)> history)
     {
         string conversation = Conversation(history);
 
         string prompt = $"""
             You are a friendly senior engineer tutoring a developer about a quiz question they just did during a break.
             Answer their latest message directly and concisely (usually under 150 words). Go deeper, give examples,
-            or correct them when they are wrong. Plain text, no markdown headings or bold.
+            or correct them when they are wrong. When they ask how it applies to their own work, products or
+            platform, answer in terms of what is known about them below.
+            Plain text, no markdown headings or bold.
             Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
+            {await LearnPath.AboutThemAsync()}
 
             QUESTION:
             {question.Text}
@@ -192,7 +197,7 @@ public static class QuestionGenerator
 
             Reply with your answer only, without a "TUTOR:" prefix.
             """;
-        return RunClaudeAsync(prompt);
+        return await RunClaudeAsync(prompt);
     }
 
     public static async Task<string> RunClaudeAsync(string prompt, bool web = false)
