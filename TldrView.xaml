@@ -6,6 +6,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -36,8 +37,14 @@
             </DockPanel>
         </Border>
 
-        <!-- the briefing: one block per section, then the sources as links -->
-        <ContentControl Grid.Row="2" Style="{StaticResource ShadowCard}" Padding="18,14,10,14">
+        <!-- the sections as sub-tabs, in the same style as the mode tabs -->
+        <Border Grid.Row="2" HorizontalAlignment="Left" Margin="0,0,0,12" Background="{StaticResource CardBrush}"
+                BorderBrush="{StaticResource InkBrush}" BorderThickness="1.5" CornerRadius="22" Padding="4">
+            <StackPanel x:Name="SectionTabs" Orientation="Horizontal" />
+        </Border>
+
+        <!-- the open section -->
+        <ContentControl Grid.Row="3" Style="{StaticResource ShadowCard}" Padding="22,16,12,14">
             <Grid>
                 <RichTextBox x:Name="TldrBox" Style="{StaticResource ReadingBox}" FontSize="14.5" />
                 <StackPanel x:Name="Loading" VerticalAlignment="Center" HorizontalAlignment="Center">
