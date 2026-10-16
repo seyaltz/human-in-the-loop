@@ -136,13 +136,41 @@ public static class QuestionGenerator
     }
 
     /// <summary>One chat turn about a question. The CLI keeps no session, so every turn sends the whole conversation.</summary>
-    public static Task<string> ChatAsync(Question question, string mine, IReadOnlyList<(bool IsMine, string Text)> history)
+    private static string Conversation(IReadOnlyList<(bool IsMine, string Text)> history)
     {
         var conversation = new StringBuilder();
         foreach ((bool isMine, string text) in history)
         {
             conversation.Append(isMine ? "DEVELOPER: " : "TUTOR: ").AppendLine(text).AppendLine();
         }
+        return conversation.ToString();
+    }
+
+    /// <summary>A follow-up about a TL;DR. It may use the web, like the TL;DR itself, so answers stay current.</summary>
+    public static Task<string> ChatAboutTldrAsync(string topic, TldrContent tldr, IReadOnlyList<(bool IsMine, string Text)> history)
+    {
+        string prompt = $"""
+            You are a friendly senior engineer discussing the latest news on {topic} with a developer during a break.
+            Answer their latest message directly and concisely (usually under 150 words). Go deeper, give examples,
+            or correct them when they are wrong. When it is about something recent, search the web and fetch the
+            official source first, and name the page you used with its full https URL.
+            Plain text, no markdown headings or bold.
+            Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
+
+            THE TL;DR YOU ARE DISCUSSING (written {tldr.Written:yyyy-MM-dd}):
+            {tldr.ToText()}
+
+            CONVERSATION SO FAR (the last DEVELOPER message is the one to answer):
+            {Conversation(history)}
+
+            Reply with your answer only, without a "TUTOR:" prefix.
+            """;
+        return RunClaudeAsync(prompt, web: true);
+    }
+
+    public static Task<string> ChatAsync(Question question, string mine, IReadOnlyList<(bool IsMine, string Text)> history)
+    {
+        string conversation = Conversation(history);
 
         string prompt = $"""
             You are a friendly senior engineer tutoring a developer about a quiz question they just did during a break.
