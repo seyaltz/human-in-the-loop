@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -47,6 +48,9 @@ public sealed record Category(string Name, IReadOnlyList<string> Topics)
 public sealed record Question(string Text, string Theory, string Answer);
 
 public sealed record Score(int Points, string Feedback);
+
+/// <summary>Which Claude a discussion runs: Clean (only the profile) or Mine (the user's own settings, memory, skills, hooks).</summary>
+public enum ClaudeSetup { Clean, Mine }
 
 public static class QuestionGenerator
 {
@@ -159,6 +163,7 @@ public static class QuestionGenerator
             Plain text, no markdown headings or bold.
             Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
             {await LearnPath.AboutThemAsync()}
+            {OnTheirMachine()}
             THE TL;DR YOU ARE DISCUSSING (written {tldr.Written:yyyy-MM-dd}):
             {tldr.ToText()}
 
@@ -167,7 +172,7 @@ public static class QuestionGenerator
 
             Reply with your answer only, without a "TUTOR:" prefix.
             """;
-        return await RunClaudeAsync(prompt, web: true);
+        return await RunDiscussionAsync(prompt);
     }
 
     /// <summary>A follow-up about a lesson of the learn path: it knows the lesson, its check question and answer.</summary>
@@ -181,6 +186,7 @@ public static class QuestionGenerator
             Plain text, no markdown headings or bold.
             Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
             {await LearnPath.AboutThemAsync()}
+            {OnTheirMachine()}
             THE LESSON: {lesson.Title} - {lesson.Summary}
             {content.Text}
 
@@ -195,7 +201,7 @@ public static class QuestionGenerator
 
             Reply with your answer only, without a "TUTOR:" prefix.
             """;
-        return await RunClaudeAsync(prompt);
+        return await RunDiscussionAsync(prompt);
     }
 
     public static async Task<string> ChatAsync(Question question, string mine, IReadOnlyList<(bool IsMine, string Text)> history)
@@ -210,6 +216,7 @@ public static class QuestionGenerator
             Plain text, no markdown headings or bold.
             Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
             {await LearnPath.AboutThemAsync()}
+            {OnTheirMachine()}
 
             QUESTION:
             {question.Text}
@@ -225,14 +232,56 @@ public static class QuestionGenerator
 
             Reply with your answer only, without a "TUTOR:" prefix.
             """;
-        return await RunClaudeAsync(prompt);
+        return await RunDiscussionAsync(prompt);
     }
 
-    public static async Task<string> RunClaudeAsync(string prompt, bool web = false)
+    public static Task<string> RunClaudeAsync(string prompt, bool web = false) =>
+        RunAsync(web ? ClaudeWebArgs : ClaudeArgs, prompt, Path.GetTempPath(), TimeSpan.FromMinutes(3));
+
+    /// <summary>Which Claude runs the discussions: clean (only the profile) or the user's own setup, as in their CLI.</summary>
+    public static ClaudeSetup DiscussSetup { get; private set; } =
+        Enum.TryParse(AppSettings.Get("discussSetup"), out ClaudeSetup setup) ? setup : ClaudeSetup.Clean;
+
+    public static void SetDiscussSetup(ClaudeSetup setup)
+    {
+        DiscussSetup = setup;
+        AppSettings.Set("discussSetup", setup.ToString());
+    }
+
+    /// <summary>
+    /// A discussion turn with full access to the user's machine, like their Claude Code CLI: every built-in tool, no
+    /// permission prompts (-p cannot ask), and their Claude Code project folders added. Clean leaves out their settings,
+    /// hooks and MCP servers; Mine loads them. Commands such as a build can be slow, so it gets more time.
+    /// </summary>
+    private static Task<string> RunDiscussionAsync(string prompt)
+    {
+        var args = new List<string> { "-p", "--permission-mode", "bypassPermissions", "--no-session-persistence" };
+        if (DiscussSetup == ClaudeSetup.Clean) args.AddRange(["--setting-sources", "", "--strict-mcp-config"]);
+        foreach (ClaudeProject project in ClaudeProjects.Find()) args.AddRange(["--add-dir", project.Folder]);
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return RunAsync(args, prompt, home, TimeSpan.FromMinutes(10));
+    }
+
+    /// <summary>Tells a discussion it runs on the developer's machine, and where their projects are.</summary>
+    private static string OnTheirMachine()
+    {
+        IReadOnlyList<ClaudeProject> projects = ClaudeProjects.Find();
+        return $"""
+            You run on the developer's own machine with the same access as their Claude Code CLI: you can read files,
+            search code and run commands. When an answer depends on their actual code, versions or setup, check it
+            yourself instead of guessing or asking them to run something, and say in one line what you looked at.
+            Do not change files or run anything that modifies their machine unless they ask you to.
+            Their Claude Code project folders:
+            {string.Join("\n", projects.Select(p => "- " + p.Folder))}
+
+            """;
+    }
+
+    private static async Task<string> RunAsync(IEnumerable<string> args, string prompt, string workingDirectory, TimeSpan timeout)
     {
         var start = new ProcessStartInfo("claude")
         {
-            WorkingDirectory = Path.GetTempPath(),
+            WorkingDirectory = workingDirectory,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -242,7 +291,7 @@ public static class QuestionGenerator
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        foreach (string arg in web ? ClaudeWebArgs : ClaudeArgs)
+        foreach (string arg in args)
         {
             start.ArgumentList.Add(arg);
         }
@@ -255,7 +304,7 @@ public static class QuestionGenerator
         Task<string> stderr = process.StandardError.ReadToEndAsync();
         try
         {
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+            await process.WaitForExitAsync().WaitAsync(timeout);
         }
         catch (TimeoutException)
         {
