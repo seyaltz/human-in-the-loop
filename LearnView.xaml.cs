@@ -12,9 +12,20 @@ namespace DevBreak;
 public partial class LearnView : UserControl
 {
     private IReadOnlyList<Lesson>? _syllabus;
+    private LessonContent? _content;
+
+    // each lesson keeps its own discussion while you move around the course
+    private readonly Dictionary<(string Course, int Lesson), ChatPanel> _chats = [];
 
     // bumped on every tab or lesson change, so a slow reply for an old selection is dropped
     private int _version;
+
+    /// <summary>The discussion to show beside the lesson changed: opened, closed, or another lesson picked (null = none).</summary>
+    public event Action<UserControl?>? ChatChanged;
+
+    /// <summary>The open discussion of the lesson on screen, if any.</summary>
+    public UserControl? CurrentChat =>
+        Tabs.SelectedItem != null && _syllabus != null && Index >= 0 && _chats.TryGetValue((Current.Name, Index), out ChatPanel? chat) ? chat : null;
 
     public LearnView()
     {
@@ -44,6 +55,7 @@ public partial class LearnView : UserControl
         CourseTitle.Text = ProgressText.Text = "";
         ProgressBar.Value = 0;
         ShowLesson(null, null);
+        ChatChanged?.Invoke(null);
         if (wasStarted && IsVisible) Start();
     }
 
@@ -68,6 +80,7 @@ public partial class LearnView : UserControl
         ProgressText.Text = "";
         ProgressBar.Value = 0;
         ShowLesson(null, null);
+        ChatChanged?.Invoke(null);
         ShowLoading($"Writing the {category.Name} course...");
         try
         {
@@ -103,6 +116,7 @@ public partial class LearnView : UserControl
         LessonSummary.Text = lesson.Summary;
         UpdateButtons();
         ShowLesson(null, null);
+        ChatChanged?.Invoke(CurrentChat);
         ShowLoading($"Writing lesson {index + 1}: {lesson.Title}...");
         try
         {
@@ -127,6 +141,8 @@ public partial class LearnView : UserControl
 
     private void ShowLesson(LessonContent? content, string? error)
     {
+        _content = content;
+        DiscussButton.IsEnabled = content != null;
         Loading.Visibility = Visibility.Collapsed;
         LessonBox.Document = CodeRenderer.Render(error ?? content?.Text ?? "");
         CheckQuestionBox.Document = CodeRenderer.Render(content?.Check ?? "");
@@ -251,6 +267,24 @@ public partial class LearnView : UserControl
         if (done) _ = LearnPath.PrepareAsync(Current);
         UpdateProgress();
         UpdateButtons();
+    }
+
+    private void Discuss_Click(object sender, RoutedEventArgs e)
+    {
+        if (_content == null || _syllabus == null || Index < 0) return;
+        (string Course, int Lesson) key = (Current.Name, Index);
+        if (!_chats.TryGetValue(key, out ChatPanel? chat))
+        {
+            ChatPanel created = new(Current.Name, _syllabus[Index], _content);
+            created.CloseRequested += () =>
+            {
+                _chats.Remove(key);
+                if (CurrentChat == null) ChatChanged?.Invoke(null);
+            };
+            _chats[key] = chat = created;
+        }
+        ChatChanged?.Invoke(chat);
+        chat.FocusInput();
     }
 
     private void Previous_Click(object sender, RoutedEventArgs e) => LessonList.SelectedIndex = Index - 1;

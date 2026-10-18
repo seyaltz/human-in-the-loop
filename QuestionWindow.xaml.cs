@@ -58,6 +58,10 @@ public partial class QuestionWindow : Window
         {
             if (TldrMode.IsChecked == true) ShowChat(panel);
         };
+        LearnView.ChatChanged += panel =>
+        {
+            if (LearnMode.IsChecked == true) ShowChat(panel);
+        };
 
         Loaded += (_, _) =>
         {
@@ -296,8 +300,8 @@ public partial class QuestionWindow : Window
             if (learn) LearnView.Start();
             else if (stats) StatsView.Refresh();
             else TldrView.Start();
-            // each mode keeps its own discussion: the TL;DR's comes back, learn and stats have none
-            ShowChat(tldr ? TldrView.CurrentChat : null);
+            // each mode keeps its own discussion: the lesson's and the TL;DR's come back, stats has none
+            ShowChat(tldr ? TldrView.CurrentChat : learn ? LearnView.CurrentChat : null);
         }
         else if (Topics.SelectedItem != null && _tabs.ContainsKey(Current))
         {
