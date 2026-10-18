@@ -21,7 +21,6 @@ public static class Knowledge
     private const int MaxPrompts = 200;
     private const int MaxPromptChars = 300;
 
-    private static readonly string SettingsPath = Path.Combine(AppContext.BaseDirectory, "settings.json");
     private static readonly string ProfilePath = Path.Combine(AppContext.BaseDirectory, "profile.txt");
     private static readonly string ClaudeSummaryPath = Path.Combine(AppContext.BaseDirectory, "knowledge-from-claude.txt");
     private static readonly string ProjectsDir =
@@ -35,7 +34,7 @@ public static class Knowledge
     public static void SetSource(KnowledgeSource source)
     {
         Source = source;
-        File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new Dictionary<string, string> { ["knowledge"] = source.ToString() }));
+        AppSettings.Set("knowledge", source.ToString());
     }
 
     public static async Task<string> GetAsync() => Source switch
@@ -45,13 +44,8 @@ public static class Knowledge
         _ => "",
     };
 
-    private static KnowledgeSource LoadSource()
-    {
-        if (!File.Exists(SettingsPath)) return KnowledgeSource.File;
-        var settings = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(SettingsPath));
-        return settings != null && settings.TryGetValue("knowledge", out string? value)
-            && Enum.TryParse(value, out KnowledgeSource source) ? source : KnowledgeSource.File;
-    }
+    private static KnowledgeSource LoadSource() =>
+        Enum.TryParse(AppSettings.Get("knowledge"), out KnowledgeSource source) ? source : KnowledgeSource.File;
 
     /// <summary>Built once a day and shared by every question generated that day.</summary>
     private static Task<string> ClaudeSummaryAsync()

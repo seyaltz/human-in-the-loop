@@ -351,6 +351,20 @@ public partial class QuestionWindow : Window
         }
         menu.Items.Add(knowledge);
 
+        // discussions run with full access to this machine; this picks whose Claude setup they load
+        var setup = new MenuItem { Header = "Claude in discussions" };
+        foreach ((ClaudeSetup choice, string label) in new[]
+                 {
+                     (ClaudeSetup.Clean, "Clean - my profile only"),
+                     (ClaudeSetup.Mine, "My Claude setup - CLAUDE.md, memory, skills, hooks (slower)"),
+                 })
+        {
+            var item = new MenuItem { Header = label, IsCheckable = true, IsChecked = QuestionGenerator.DiscussSetup == choice };
+            item.Click += (_, _) => QuestionGenerator.SetDiscussSetup(choice);
+            setup.Items.Add(item);
+        }
+        menu.Items.Add(setup);
+
         var topics = new MenuItem { Header = "Topics..." };
         topics.Click += (_, _) => new TopicsWindow(isFirstRun: false) { Owner = this }.ShowDialog();
         menu.Items.Add(topics);
