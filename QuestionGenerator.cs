@@ -248,31 +248,66 @@ public static class QuestionGenerator
         AppSettings.Set("discussSetup", setup.ToString());
     }
 
+    // the read-only git subcommands a discussion may run, each only as: git -C <one of the user's repos> <subcommand>
+    private static readonly string[] ReadOnlyGit = ["log", "status", "diff", "show"];
+
+    // the read-only Gradle reports a discussion may run, each only as: <repo>\gradlew(.bat) -p <repo> <task>
+    // (Claude Code asks before any "cd ...; command", and -p cannot ask, so the project folder goes in -p)
+    private static readonly string[] ReadOnlyGradle = ["dependencies", "dependencyInsight"];
+
     /// <summary>
-    /// A discussion turn with full access to the user's machine, like their Claude Code CLI: every built-in tool, no
-    /// permission prompts (-p cannot ask), and their Claude Code project folders added. Clean leaves out their settings,
-    /// hooks and MCP servers; Mine loads them. Commands such as a build can be slow, so it gets more time.
+    /// A discussion turn that may look at the user's machine but not change it: it can read and search their Claude
+    /// Code project folders, use the web, and run only allow-listed read-only commands. Nothing else is allowed, and
+    /// -p cannot ask, so anything else is denied. Clean leaves out the user's settings, hooks and MCP servers; Mine
+    /// loads them. A dependency report can be slow, so it gets more time.
     /// </summary>
     private static Task<string> RunDiscussionAsync(string prompt)
     {
-        var args = new List<string> { "-p", "--permission-mode", "bypassPermissions", "--no-session-persistence" };
+        // git -C <path> and gradlew -p <path> take any subcommand or task, so each is allowed per repo and per read-only
+        // subcommand only. Dozens of repos make the rules too long for a command line, so they go in a settings file.
+        IReadOnlyList<string> repos = ClaudeProjects.GitRepos();
+        var allow = new List<string> { "Read", "Grep", "Glob", "WebSearch", "WebFetch", "PowerShell(dir:*)" };
+        allow.AddRange(repos.SelectMany(repo => ReadOnlyGit.Select(g => $"PowerShell(git -C {repo} {g}:*)")));
+        foreach (string repo in repos.Where(r => File.Exists(Path.Combine(r, "gradlew.bat"))))
+        {
+            foreach (string task in ReadOnlyGradle)
+            {
+                allow.Add($@"PowerShell({repo}\gradlew.bat -p {repo} {task}:*)");
+                allow.Add($@"PowerShell({repo}\gradlew -p {repo} {task}:*)");
+            }
+        }
+        string settings = Path.Combine(Path.GetTempPath(), "devbreak-discussion-permissions.json");
+        File.WriteAllText(settings, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            permissions = new { allow, deny = new[] { "Write", "Edit", "NotebookEdit" } },
+        }));
+        var args = new List<string>
+        {
+            "-p", "--tools", "Read,Grep,Glob,WebSearch,WebFetch,PowerShell", "--settings", settings,
+            "--disallowedTools", "Write,Edit,NotebookEdit", "--no-session-persistence",
+        };
         if (DiscussSetup == ClaudeSetup.Clean) args.AddRange(["--setting-sources", "", "--strict-mcp-config"]);
         foreach (ClaudeProject project in ClaudeProjects.Find()) args.AddRange(["--add-dir", project.Folder]);
-        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return RunAsync(args, prompt, home, TimeSpan.FromMinutes(10));
+        return RunAsync(args, prompt, Path.GetTempPath(), TimeSpan.FromMinutes(10));
     }
 
-    /// <summary>Tells a discussion it runs on the developer's machine, and where their projects are.</summary>
+    /// <summary>Tells a discussion what it may look at on the developer's machine, and how to run the allowed commands.</summary>
     private static string OnTheirMachine()
     {
         IReadOnlyList<ClaudeProject> projects = ClaudeProjects.Find();
+        IReadOnlyList<string> repos = ClaudeProjects.GitRepos();
         return $"""
-            You run on the developer's own machine with the same access as their Claude Code CLI: you can read files,
-            search code and run commands. When an answer depends on their actual code, versions or setup, check it
-            yourself instead of guessing or asking them to run something, and say in one line what you looked at.
-            Do not change files or run anything that modifies their machine unless they ask you to.
+            You run on the developer's own machine and may look at it, read-only: read and search files in their
+            Claude Code project folders, search the web, and run only these commands -
+            - git, exactly as: git -C <repo path as listed below> {string.Join("|", ReadOnlyGit)} ... (never cd + git, never another subcommand)
+            - dir
+            - a Gradle dependency report, exactly as: <repo>\gradlew.bat -p <repo> {string.Join("|", ReadOnlyGradle)} ... (never cd first)
+            When an answer depends on their actual code, versions or setup, check it yourself instead of guessing or
+            asking them to run something, and say in one line what you looked at. You cannot change anything.
             Their Claude Code project folders:
             {string.Join("\n", projects.Select(p => "- " + p.Folder))}
+            Their git repos:
+            {string.Join("\n", repos.Select(r => "- " + r))}
 
             """;
     }

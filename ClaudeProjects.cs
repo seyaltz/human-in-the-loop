@@ -47,6 +47,40 @@ public static class ClaudeProjects
         return projects;
     }
 
+    /// <summary>
+    /// The git repositories in the user's project folders: a project folder itself, or a folder up to two levels below
+    /// it (such as repos\&lt;name&gt;). Discussions may run read-only git commands in exactly these.
+    /// </summary>
+    public static IReadOnlyList<string> GitRepos()
+    {
+        var repos = new List<string>();
+        void Look(string dir, int depth)
+        {
+            if (repos.Count >= 100) return;
+            try
+            {
+                if (Directory.Exists(Path.Combine(dir, ".git")))
+                {
+                    if (!repos.Contains(dir, StringComparer.OrdinalIgnoreCase)) repos.Add(dir);
+                    return;
+                }
+                if (depth == 0) return;
+                foreach (string sub in Directory.GetDirectories(dir))
+                {
+                    string name = Path.GetFileName(sub);
+                    if (name.StartsWith('.') || name is "node_modules" or "build" or "bin" or "obj") continue;
+                    Look(sub, depth - 1);
+                }
+            }
+            catch (Exception)
+            {
+                // no access to a folder: skip it
+            }
+        }
+        foreach (ClaudeProject project in Find()) Look(project.Folder, 2);
+        return repos;
+    }
+
     private static string? FolderOf(string projectDir)
     {
         foreach (string log in Directory.GetFiles(projectDir, "*.jsonl").OrderByDescending(File.GetLastWriteTime).Take(3))
