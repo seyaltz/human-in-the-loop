@@ -170,6 +170,34 @@ public static class QuestionGenerator
         return await RunClaudeAsync(prompt, web: true);
     }
 
+    /// <summary>A follow-up about a lesson of the learn path: it knows the lesson, its check question and answer.</summary>
+    public static async Task<string> ChatAboutLessonAsync(string course, Lesson lesson, LessonContent content, IReadOnlyList<(bool IsMine, string Text)> history)
+    {
+        string prompt = $"""
+            You are a friendly senior engineer tutoring a developer through a lesson of their {course} course during a break.
+            Answer their latest message directly and concisely (usually under 150 words). Go deeper, give examples,
+            or correct them when they are wrong. When they ask how it applies to their own work, products or
+            platform, answer in terms of what is known about them below.
+            Plain text, no markdown headings or bold.
+            Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
+            {await LearnPath.AboutThemAsync()}
+            THE LESSON: {lesson.Title} - {lesson.Summary}
+            {content.Text}
+
+            ITS CHECK QUESTION:
+            {content.Check}
+
+            ITS ANSWER:
+            {content.Answer}
+
+            CONVERSATION SO FAR (the last DEVELOPER message is the one to answer):
+            {Conversation(history)}
+
+            Reply with your answer only, without a "TUTOR:" prefix.
+            """;
+        return await RunClaudeAsync(prompt);
+    }
+
     public static async Task<string> ChatAsync(Question question, string mine, IReadOnlyList<(bool IsMine, string Text)> history)
     {
         string conversation = Conversation(history);

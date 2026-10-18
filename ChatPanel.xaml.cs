@@ -26,6 +26,12 @@ public partial class ChatPanel : UserControl
     {
     }
 
+    public ChatPanel(string course, Lesson lesson, LessonContent content)
+        : this(lesson.Title, "Ask anything about this lesson: why it works this way, a deeper example, how it applies to your work, or check an idea.",
+               history => QuestionGenerator.ChatAboutLessonAsync(course, lesson, content, history))
+    {
+    }
+
     public ChatPanel(string topic, TldrContent tldr)
         : this(topic, "Ask anything about this TL;DR: what changed and why, how to use it, or what it means for your stack.",
                history => QuestionGenerator.ChatAboutTldrAsync(topic, tldr, history))
