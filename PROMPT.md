@@ -369,6 +369,48 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   rendered with soft wraps), **Open file**, and for a skill **Use in this session** (puts `/<skill> ` in the
   message box and goes back to the chat - a skill runs from `-p` that way). MCP items explain their status.
 
+## Factory (`Factory.cs`, `FactoryView`)
+
+A software factory: a task goes from its source to a **draft pull request**, and what the run learned goes into the
+repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-ignored with the rest of the user data).
+- **A task**: **Typed** (what to build or fix), **Jira** (an issue key) or **Spec doc** (a file path or a link;
+  Browse... picks a file); a **repository** (an editable list of `ClaudeProjects.GitRepos()`, or Browse...; the last
+  one is remembered), the **base branch** (filled with the repo's current branch) and an optional **verify command**
+  (remembered per repo; empty: Claude proposes one). **Start run**.
+- **The run**, each step logged:
+  1. **Worktree**: `git worktree add <%LOCALAPPDATA%\DevBreak\worktrees\<repo>-<id>> -b devbreak/<slug>-<id> <base commit>`
+     - the developer's checkout is never touched. A worktree shares its repo's Claude memory (verified: both report
+     the same `memory_paths.auto`).
+  2. **Plan**: a new Claude Code session in the worktree (as in Sessions: full setup, bypass) reads the task - Jira
+     and spec with the tools on the machine - and replies `TITLE:`, numbered steps and, when no verify command was
+     given, `VERIFY: <command>`; `CANNOT_READ: <why>` stops the run.
+  3. **Build**: the same session implements the plan and its tests, without committing or pushing.
+  4. **Verify**: Dev break runs the verify command itself (PowerShell in the worktree, both streams, 30 min max);
+     on failure the session fixes it (the code, not the test) and it runs again, up to 3 fixes. No changed files stops
+     the run.
+  5. **Review**: a fresh `claude -p` that can only read (`--tools Read,Grep,Glob`) gets the task, the plan and the
+     diff against the base commit and replies `VERDICT: PASS` or `FIX` with findings; FIX goes back to the session,
+     then verify and review again, up to 2 review rounds.
+  6. **Draft PR**: only now may the session publish - until here every turn runs with `--disallowedTools` for
+     `git push` and `gh pr create` (Bash and PowerShell; verified: the deny holds under bypass). It commits, pushes
+     and opens a draft PR into the base with the machine's own tools (any host), the description saying how it was
+     verified, linked to the Jira issue; the last URL in its reply is the PR.
+  7. **Learn** (after every run that got a worktree, unless stopped): a `claude -p` without tools reads the task, the
+     log and the repo's `MEMORY.md` and replies `LESSON: <memory|claude-md|hook|skill> | <name> | <description>` blocks
+     (at most 4). **Memory** notes are saved at once into the repo's memory folder (from the init line), listed in
+     `MEMORY.md`, ending "Learned by a Dev break factory run on <date> (<title>)" - **Undo** removes the file and its
+     line. **Rules wait for the developer**: **Apply** appends a CLAUDE.md line to `<repo>\CLAUDE.md`, saves a skill to
+     `<repo>\.claude\skills\<name>\SKILL.md`, or merges a hook object into `<repo>\.claude\settings.local.json`;
+     **Dismiss** drops it.
+  Anything that stops a run (a failed turn, checks still failing, no PR URL) ends it at **Needs you** with the reason;
+  **Stop** ends it at **Stopped**. A run open when Dev break closes is marked Stopped on the next start.
+- **View** (6th mode tab **Factory**): left the form and the runs (light: green pulsing while working, red when it
+  needs you or was stopped; repo · stage · cost). Right the run: title, repo · branch from base · steps · cost, the
+  note; **Stop**, **Draft PR anyway** (after failed checks - the description says what failed), **Open PR**, **Open in
+  Sessions** (continue the run's session yourself), **Open worktree**; the pipeline as chips (✓ done, violet now,
+  coral where it stopped, faded to come); the log rendered like the chats; the lessons as cards with their state and
+  buttons.
+
 ## Tray app (`App.xaml.cs`)
 
 - **First run** (no `topics.json`): first check that Claude Code works by running the prompt "Reply with just: OK"
@@ -412,7 +454,7 @@ Score?, Xp, Lesson?)`), earned `Badges` (`record EarnedBadge(Id, At)`) and `Goal
 - Calls: `QuestionAnswered(tab, topic, score)` after scoring; `QuestionSeen(tab, topic)` on Show answer;
   `LessonDone(course, index, title, courseFinished)` / `LessonUndone(course, index)` from Mark as done.
 
-## Main window (`QuestionWindow`): Quiz, Learn, Stats, TL;DR and Sessions in one window
+## Main window (`QuestionWindow`): Quiz, Learn, Stats, TL;DR, Sessions and Factory in one window
 
 Light and simple: Fluent theme surfaces, rounded cards, few controls. Shared styles in `App.xaml` resources:
 `ChipList` (a `ListBox` with a `WrapPanel`, items templated as rounded chips: `ControlFillColorDefaultBrush` with a
@@ -421,8 +463,8 @@ with `TextOnAccentFillColorPrimaryBrush` text) and `Card` (a `Border`, corner ra
 `CardBackgroundFillColorDefaultBrush` / `CardStrokeColorDefaultBrush`).
 
 900x680, min 640x460, Topmost, placed bottom-right of the work area (16 px margin).
-- **Top bar**: on the left five toggle buttons in one group (`RadioButton`s with the `ToggleButton` style): **Quiz**
-  (default), **Learn**, **Stats**, **TL;DR**, **Sessions**. On the right the game HUD: a rank pill (rank colour, white caps), an XP bar (130 px,
+- **Top bar**: on the left six toggle buttons in one group (`RadioButton`s with the `ToggleButton` style): **Quiz**
+  (default), **Learn**, **Stats**, **TL;DR**, **Sessions**, **Factory**. On the right the game HUD: a rank pill (rank colour, white caps), an XP bar (130 px,
   "N / next XP"), the streak "🔥 N" (tooltip with the best), today's goal "🎯 q/3 questions · l/1 lesson" or "🎯 Goal
   done", and a gear button.
 - **Gear menu** (a `ContextMenu` built on click): "Knowledge about me" (From my Claude history / From profile.txt /

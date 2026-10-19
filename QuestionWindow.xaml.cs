@@ -45,6 +45,12 @@ public partial class QuestionWindow : Window
         _pool = pool;
         InitializeComponent();
         AddTopicChips();
+        // a factory run's session continues in Sessions
+        FactoryView.OpenSessionRequested += info =>
+        {
+            SessionsMode.IsChecked = true;
+            SessionsView.Open(info);
+        };
 
         Game.Awarded += OnAwarded;
         DevBreak.Topics.Changed += OnTopicsChanged;
@@ -282,19 +288,22 @@ public partial class QuestionWindow : Window
 
     private void Mode_Checked(object sender, RoutedEventArgs e)
     {
-        if (LearnView == null || StatsView == null || TldrView == null || SessionsView == null || QuizView == null) return;
+        if (LearnView == null || StatsView == null || TldrView == null || SessionsView == null || FactoryView == null || QuizView == null) return;
         bool learn = LearnMode.IsChecked == true;
         bool stats = StatsMode.IsChecked == true;
         bool tldr = TldrMode.IsChecked == true;
         bool sessions = SessionsMode.IsChecked == true;
-        QuizView.Visibility = learn || stats || tldr || sessions ? Visibility.Collapsed : Visibility.Visible;
+        bool factory = FactoryMode.IsChecked == true;
+        QuizView.Visibility = learn || stats || tldr || sessions || factory ? Visibility.Collapsed : Visibility.Visible;
         LearnView.Visibility = learn ? Visibility.Visible : Visibility.Collapsed;
         StatsView.Visibility = stats ? Visibility.Visible : Visibility.Collapsed;
         TldrView.Visibility = tldr ? Visibility.Visible : Visibility.Collapsed;
         SessionsView.Visibility = sessions ? Visibility.Visible : Visibility.Collapsed;
-        if (learn || stats || tldr || sessions)
+        FactoryView.Visibility = factory ? Visibility.Visible : Visibility.Collapsed;
+        if (learn || stats || tldr || sessions || factory)
         {
-            Title = learn ? "Dev break - learn path" : stats ? "Dev break - stats" : tldr ? "Dev break - TL;DR" : "Dev break - sessions";
+            Title = learn ? "Dev break - learn path" : stats ? "Dev break - stats" : tldr ? "Dev break - TL;DR"
+                : factory ? "Dev break - factory" : "Dev break - sessions";
             // courses, stats, the TL;DR and sessions need room; grow once, never shrink
             Rect area = SystemParameters.WorkArea;
             Width = Math.Max(Width, Math.Min(WideWidth, area.Width - 32));
@@ -302,6 +311,7 @@ public partial class QuestionWindow : Window
             if (learn) LearnView.Start();
             else if (stats) StatsView.Refresh();
             else if (tldr) TldrView.Start();
+            else if (factory) FactoryView.Start();
             else SessionsView.Start();
             // each mode keeps its own discussion: the lesson's and the TL;DR's come back; stats and sessions have none
             ShowChat(tldr ? TldrView.CurrentChat : learn ? LearnView.CurrentChat : null);

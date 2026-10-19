@@ -126,8 +126,10 @@ public static class ClaudeSessions
     /// <summary>
     /// Runs one turn of a session in its folder: <paramref name="isNew"/> starts it with that id, otherwise it resumes.
     /// Each step is reported as it streams in. Cancelling stops claude and everything it started.
+    /// <paramref name="extraArgs"/> go to claude as they are (the factory denies pushing with them).
     /// </summary>
-    public static async Task RunTurnAsync(string folder, string id, bool isNew, string prompt, Action<SessionEntry> onEntry, CancellationToken cancel)
+    public static async Task RunTurnAsync(string folder, string id, bool isNew, string prompt, Action<SessionEntry> onEntry,
+        CancellationToken cancel, IEnumerable<string>? extraArgs = null)
     {
         var start = new ProcessStartInfo("claude")
         {
@@ -147,6 +149,7 @@ public static class ClaudeSessions
         }
         start.ArgumentList.Add(isNew ? "--session-id" : "--resume");
         start.ArgumentList.Add(id);
+        foreach (string arg in extraArgs ?? []) start.ArgumentList.Add(arg);
 
         using Process process = await Task.Run(() => Process.Start(start)) ?? throw new InvalidOperationException("could not start claude");
         using CancellationTokenRegistration stop = cancel.Register(() =>

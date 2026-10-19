@@ -61,6 +61,16 @@ public static class CliSetup
             mcp, agents);
     }
 
+    /// <summary>
+    /// The memory folder Claude Code uses for a folder (memory_paths.auto of its init line). A git worktree gets its
+    /// main repository's folder, so what is saved there reaches sessions in the repo and in its worktrees.
+    /// </summary>
+    public static async Task<string?> MemoryDirAsync(string folder)
+    {
+        JsonElement init = await InitAsync(folder);
+        return init.TryGetProperty("memory_paths", out JsonElement mp) && mp.TryGetProperty("auto", out JsonElement auto) ? auto.GetString() : null;
+    }
+
     // starts claude in the folder and returns its init line; claude is stopped as soon as that line arrives
     private static async Task<JsonElement> InitAsync(string folder)
     {

@@ -37,6 +37,8 @@
                                      Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
                         <RadioButton x:Name="SessionsMode" Content="Sessions" GroupName="Mode" Margin="4,0,0,0"
                                      Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
+                        <RadioButton x:Name="FactoryMode" Content="Factory" GroupName="Mode" Margin="4,0,0,0"
+                                     Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
                     </StackPanel>
                 </Border>
             </StackPanel>
@@ -76,6 +78,7 @@
         <local:StatsView x:Name="StatsView" Grid.Row="1" Visibility="Collapsed" />
         <local:TldrView x:Name="TldrView" Grid.Row="1" Visibility="Collapsed" />
         <local:SessionsView x:Name="SessionsView" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed" />
+        <local:FactoryView x:Name="FactoryView" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed" />
         <ContentControl x:Name="ChatHost" Grid.Row="1" Grid.Column="1" Width="420" Margin="20,0,0,0" Focusable="False"
                         Visibility="Collapsed" />
 
