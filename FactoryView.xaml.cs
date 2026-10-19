@@ -21,7 +21,7 @@ namespace DevBreak;
 public partial class FactoryView : UserControl
 {
     private static readonly FactoryStage[] Stages =
-        [FactoryStage.Worktree, FactoryStage.Plan, FactoryStage.Build, FactoryStage.Verify, FactoryStage.Review, FactoryStage.PullRequest, FactoryStage.Learn];
+        [FactoryStage.Locate, FactoryStage.Worktree, FactoryStage.Plan, FactoryStage.Build, FactoryStage.Verify, FactoryStage.Review, FactoryStage.PullRequest, FactoryStage.Learn];
 
     private readonly Dictionary<string, (Ellipse Light, TextBlock Status)> _rows = [];
     private FactoryRun? _shown;
@@ -85,13 +85,18 @@ public partial class FactoryView : UserControl
 
     private string _formRepo = "";
 
-    // a repository picked: its current branch as the base, and the verify command used there last time
+    // a repository picked: its current branch as the base, and the verify command used there last time; a folder
+    // with repos in it: both empty - the run finds the repo and fills them
     private async Task RepoChangedAsync()
     {
         string repo = RepoBox.Text.Trim().TrimEnd('\\');
         if (repo == _formRepo) return;
         _formRepo = repo;
-        if (!IsRepo(repo)) return;
+        if (!IsRepo(repo))
+        {
+            BaseBox.Text = VerifyBox.Text = "";
+            return;
+        }
         BaseBox.Text = await Factory.CurrentBranchAsync(repo);
         VerifyBox.Text = AppSettings.Get("factoryVerify:" + repo.ToLowerInvariant()) ?? "";
     }
@@ -103,13 +108,13 @@ public partial class FactoryView : UserControl
     {
         await RepoChangedAsync();
         string task = TaskBox.Text.Trim(), repo = RepoBox.Text.Trim().TrimEnd('\\'), baseBranch = BaseBox.Text.Trim();
-        string? error = task.Length == 0 ? "Write the task first." : !IsRepo(repo) ? "Pick a git repository." : baseBranch.Length == 0 ? "Name the base branch." : null;
+        string? error = task.Length == 0 ? "Write the task first." : !Directory.Exists(repo) ? "Pick a folder that exists." : null;
         FormError.Text = error ?? "";
         FormError.Visibility = error == null ? Visibility.Collapsed : Visibility.Visible;
         if (error != null) return;
         FactorySource source = JiraSource.IsChecked == true ? FactorySource.Jira : SpecSource.IsChecked == true ? FactorySource.Spec : FactorySource.Typed;
         AppSettings.Set("factoryRepo", repo);
-        if (VerifyBox.Text.Trim().Length > 0) AppSettings.Set("factoryVerify:" + repo.ToLowerInvariant(), VerifyBox.Text.Trim());
+        if (IsRepo(repo) && VerifyBox.Text.Trim().Length > 0) AppSettings.Set("factoryVerify:" + repo.ToLowerInvariant(), VerifyBox.Text.Trim());
         FactoryRun run = Factory.Create(source, task, repo, baseBranch, VerifyBox.Text);
         RunList.Items.Insert(0, Row(run));
         RunList.SelectedIndex = 0;
@@ -140,7 +145,7 @@ public partial class FactoryView : UserControl
     {
         if (!_rows.TryGetValue(run.Id, out var row)) return;
         SetLight(row.Light, run);
-        row.Status.Text = $"{System.IO.Path.GetFileName(run.Repo)} · {StageName(run)}{(run.Cost > 0 ? $" · ${run.Cost:0.00}" : "")}";
+        row.Status.Text = $"{System.IO.Path.GetFileName(run.Repo.Length > 0 ? run.Repo : run.Folder)} · {StageName(run)}{(run.Cost > 0 ? $" · ${run.Cost:0.00}" : "")}";
         if (((row.Status.Parent as StackPanel)?.Children[0]) is TextBlock title) title.Text = run.Title;
     }
 
@@ -169,7 +174,8 @@ public partial class FactoryView : UserControl
         RunArea.Visibility = Visibility.Visible;
         SetLight(Light, run);
         RunTitle.Text = run.Title;
-        RunMeta.Text = $"{run.Repo}   ·   {run.Branch} from {run.BaseBranch}   ·   {run.Steps} steps   ·   ${run.Cost:0.00}";
+        RunMeta.Text = run.Repo.Length == 0 ? $"{run.Folder}   ·   finding the repo"
+            : $"{run.Repo}   ·   {run.Branch} from {run.BaseBranch}   ·   {run.Steps} steps   ·   ${run.Cost:0.00}";
         RunNote.Text = run.Working ? $"{StageName(run)}..." : run.Note.Replace("\r", "").Split('\n')[0].Trim();
         RunNote.Foreground = (Brush)FindResource(!run.Working && run.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped ? "CoralInkBrush" : "VioletBrush");
         StopButton.Visibility = run.Working ? Visibility.Visible : Visibility.Collapsed;

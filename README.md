@@ -87,9 +87,10 @@ model and Claude Code version. Filter by name, open any file.
 
 ## Factory - from task to draft PR
 
-Give the **Factory** a task - typed, a **Jira** issue or a **spec** document - and a repository. Each run works in its
-own git worktree and branch, so your checkout is never touched:
-**plan → build → verify → review → draft PR**. Claude plans and builds; Dev break runs your verify command (or one
+Give the **Factory** a task - typed, a **Jira** issue or a **spec** document - and a folder: the repo, or just the
+folder where your repos are; Claude finds the one the task is for and learns how to build and test it. Each run
+works in its own git worktree and branch, so your checkout is never touched:
+**locate → plan → build → verify → review → draft PR**. Claude plans and builds; Dev break runs your verify command (or one
 Claude proposes) and Claude fixes until it passes; a second Claude that can only read reviews the diff; only then
 may Claude push and open a **draft** PR - you review and merge. If a check keeps failing, the run stops and says why.
 

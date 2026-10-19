@@ -16,7 +16,7 @@ namespace DevBreak;
 public enum FactorySource { Typed, Jira, Spec }
 
 /// <summary>Where a factory run is.</summary>
-public enum FactoryStage { Queued, Worktree, Plan, Build, Verify, Review, PullRequest, Learn, Done, NeedsYou, Stopped }
+public enum FactoryStage { Queued, Worktree, Plan, Build, Verify, Review, PullRequest, Learn, Done, NeedsYou, Stopped, Locate }
 
 /// <summary>One line of a run's log.</summary>
 public sealed class FactoryStep
@@ -48,6 +48,9 @@ public sealed class FactoryRun
     public string Title { get; set; } = "";
     public FactorySource Source { get; set; }
     public string Task { get; set; } = "";
+    /// <summary>The folder the developer pointed at: a repo, or a folder with repos somewhere in it.</summary>
+    public string Folder { get; set; } = "";
+    /// <summary>The repo the run works on, once it is located.</summary>
     public string Repo { get; set; } = "";
     public string BaseBranch { get; set; } = "";
     public string BaseCommit { get; set; } = "";
@@ -120,7 +123,7 @@ public static class Factory
         }
     }
 
-    public static FactoryRun Create(FactorySource source, string task, string repo, string baseBranch, string verify)
+    public static FactoryRun Create(FactorySource source, string task, string folder, string baseBranch, string verify)
     {
         string id = Guid.NewGuid().ToString("N")[..8];
         string first = task.Trim().Split('\n')[0].Trim();
@@ -132,9 +135,8 @@ public static class Factory
         };
         var run = new FactoryRun
         {
-            Id = id, Title = title, Source = source, Task = task.Trim(), Repo = repo.TrimEnd('\\'), BaseBranch = baseBranch.Trim(),
-            Verify = verify.Trim(), Branch = $"devbreak/{Slug(title)}-{id}", SessionId = Guid.NewGuid().ToString(),
-            Worktree = Path.Combine(WorktreesDir, $"{Path.GetFileName(repo.TrimEnd('\\'))}-{id}"), Created = DateTime.Now,
+            Id = id, Title = title, Source = source, Task = task.Trim(), Folder = folder.TrimEnd('\\'), BaseBranch = baseBranch.Trim(),
+            Verify = verify.Trim(), SessionId = Guid.NewGuid().ToString(), Created = DateTime.Now,
         };
         Runs.Insert(0, run);
         Save();
@@ -157,6 +159,7 @@ public static class Factory
         bool learn = false;
         try
         {
+            if (!await LocateAsync(run, cancel)) return;
             if (!await WorktreeAsync(run)) return;
             learn = true;
             if (!await PlanAsync(run, cancel)) return;
@@ -207,6 +210,68 @@ public static class Factory
 
     // --- the stages ---
 
+    // the repo the task is for: the folder's own repo, the one repo in it, or the one Claude picks for the task
+    private static async Task<bool> LocateAsync(FactoryRun run, CancellationToken cancel)
+    {
+        Enter(run, FactoryStage.Locate, $"Finding the repo for the task in {run.Folder}.");
+        if (!Directory.Exists(run.Folder)) return Wait(run, $"The folder {run.Folder} does not exist.");
+        (int exit, string top) = await GitAsync(run.Folder, "rev-parse", "--show-toplevel");
+        string? repo = exit == 0 ? Path.GetFullPath(top.Trim()).TrimEnd('\\') : null;
+        if (repo == null)
+        {
+            IReadOnlyList<string> repos = await System.Threading.Tasks.Task.Run(() => ClaudeProjects.ReposUnder(run.Folder, 3));
+            if (repos.Count == 0) return Wait(run, $"There is no git repository in {run.Folder} (3 levels down).");
+            repo = repos.Count == 1 ? repos[0] : await PickRepoAsync(run, repos, cancel);
+            if (repo == null) return false;
+        }
+        run.Repo = repo;
+        if (run.BaseBranch.Length == 0) run.BaseBranch = await CurrentBranchAsync(repo);
+        if (run.Verify.Length == 0) run.Verify = AppSettings.Get("factoryVerify:" + repo.ToLowerInvariant()) ?? "";
+        run.Branch = $"devbreak/{Slug(run.Title)}-{run.Id}";
+        run.Worktree = Path.Combine(WorktreesDir, $"{Path.GetFileName(repo)}-{run.Id}");
+        Log(run, $"The repo: {repo} (base {run.BaseBranch}).");
+        return true;
+    }
+
+    // several repos in the folder: Claude reads the task (Jira and specs with the tools on the machine, changing
+    // nothing) and the repos' fingerprints, and names the one the task is for
+    private static async Task<string?> PickRepoAsync(FactoryRun run, IReadOnlyList<string> repos, CancellationToken cancel)
+    {
+        string list = string.Join("\n", repos.Select((r, i) => $"{i + 1}. {r} - {ClaudeProjects.Fingerprint(r)}"));
+        string task = run.Source switch
+        {
+            FactorySource.Jira => $"The task is the Jira issue {run.Task}; read it with the tools you have on this machine.",
+            FactorySource.Spec => $"The task is the spec at {run.Task} (a file or a link); read it with the tools you have on this machine.",
+            _ => "The task:\n" + run.Task,
+        };
+        string prompt = $"""
+            A developer gave a coding task and a folder with several git repositories in it. Find the one repository the
+            task has to be implemented in. Do not change anything - read only.
+            {task}
+
+            THE REPOSITORIES:
+            {list}
+
+            You may look inside them. End your reply with one line: REPO: <number>. If none fits, or the task needs
+            several of them, end with: REPO: NONE <why>.
+            """;
+        // a typed task needs only the files: read-only tools, enforced. A Jira issue or a spec needs the machine's own
+        // tools (MCP servers, CLIs) to be read - the same full access the run's plan turn gets - minus editing and publishing.
+        string[] tools = run.Source == FactorySource.Typed
+            ? ["--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob"]
+            : ["--permission-mode", "bypassPermissions", "--disallowedTools", "Edit", "Write", "NotebookEdit", .. NoPublish[1..]];
+        (string answer, double cost) = await ClaudeJsonAsync(run.Folder, prompt, tools, cancel);
+        run.Cost += cost;
+        string pick = answer.Replace("\r", "").Split('\n').Select(l => l.Trim().Trim('*', '`').Trim()).LastOrDefault(l => l.StartsWith("REPO:", StringComparison.OrdinalIgnoreCase)) ?? "";
+        string value = pick.Length > 5 ? pick[5..].Trim() : "";
+        Log(run, $"{repos.Count} repos in the folder; Claude picked: {value}");
+        if (int.TryParse(value.Split(' ')[0], out int n) && n >= 1 && n <= repos.Count) return repos[n - 1];
+        Wait(run, value.StartsWith("NONE", StringComparison.OrdinalIgnoreCase)
+            ? "Claude found no single repo for the task: " + value[4..].Trim()
+            : "Claude did not name a repo:\n" + answer);
+        return null;
+    }
+
     private static async Task<bool> WorktreeAsync(FactoryRun run)
     {
         Enter(run, FactoryStage.Worktree, $"New worktree {run.Worktree} on branch {run.Branch}, from {run.BaseBranch}.");
@@ -243,7 +308,8 @@ public static class Factory
             You are working in a fresh git worktree of {run.Repo}, on branch {run.Branch} (from {run.BaseBranch}).
             {task}
 
-            First, plan only - do not change any file yet. If you cannot read the task, reply with one line:
+            First, plan only - do not change any file yet. Learn how this repo is built, run and tested (its README,
+            build files and scripts), so the plan and the verify command fit it. If you cannot read the task, reply with one line:
             CANNOT_READ: <why>. Otherwise reply with a short title for the work on the first line (TITLE: <title>), then
             the plan as short numbered steps, naming the files you will change and the tests you will add or run.
             {verify}

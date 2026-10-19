@@ -374,15 +374,22 @@ started in a folder or continued, worked in like the CLI, and continuable with `
 A software factory: a task goes from its source to a **draft pull request**, and what the run learned goes into the
 repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-ignored with the rest of the user data).
 - **A task**: **Typed** (what to build or fix), **Jira** (an issue key) or **Spec doc** (a file path or a link;
-  Browse... picks a file); a **repository** (an editable list of `ClaudeProjects.GitRepos()`, or Browse...; the last
-  one is remembered), the **base branch** (filled with the repo's current branch) and an optional **verify command**
-  (remembered per repo; empty: Claude proposes one). **Start run**.
+  Browse... picks a file); a **folder** - the repo, or any folder with repos somewhere in it (an editable list of
+  `ClaudeProjects.GitRepos()`, or Browse...; the last one is remembered) - the **base branch** (for a repo: its
+  current branch; empty: the located repo's current branch) and an optional **verify command** (remembered per repo;
+  empty: Claude proposes one). **Start run**.
 - **The run**, each step logged:
+  0. **Locate**: the repo the folder is in (`git rev-parse --show-toplevel`); else the git repos up to 3 levels below
+     it (`.git` folder, or file for a worktree): none stops the run, one is it, several - a `claude -p` reads the
+     task and the repos' fingerprints and ends with `REPO: <number>` or `REPO: NONE <why>`. For a typed task it has
+     only `Read,Grep,Glob` (read-only, enforced); a Jira issue or a spec needs the machine's own tools to be read, so
+     it gets the developer's setup with bypass minus `Edit`, `Write`, `NotebookEdit` and the publish denies (the
+     shell can still change files - the same access the plan turn has). Then the base branch and the remembered verify command for it.
   1. **Worktree**: `git worktree add <%LOCALAPPDATA%\DevBreak\worktrees\<repo>-<id>> -b devbreak/<slug>-<id> <base commit>`
      - the developer's checkout is never touched. A worktree shares its repo's Claude memory (verified: both report
      the same `memory_paths.auto`).
   2. **Plan**: a new Claude Code session in the worktree (as in Sessions: full setup, bypass) reads the task - Jira
-     and spec with the tools on the machine - and replies `TITLE:`, numbered steps and, when no verify command was
+     and spec with the tools on the machine - learns how the repo is built, run and tested, and replies `TITLE:`, numbered steps and, when no verify command was
      given, `VERIFY: <command>`; `CANNOT_READ: <why>` stops the run.
   3. **Build**: the same session implements the plan and its tests, without committing or pushing.
   4. **Verify**: Dev break runs the verify command itself (PowerShell in the worktree, both streams, 30 min max);
