@@ -85,6 +85,17 @@ files that apply and your memory notes), **skills** (with what each does - **Use
 in the message box), **plugins**, **MCP servers** and whether each is connected or needs sign-in, **agents**, and the
 model and Claude Code version. Filter by name, open any file.
 
+## Factory - from task to draft PR
+
+Give the **Factory** a task - typed, a **Jira** issue or a **spec** document - and a repository. Each run works in its
+own git worktree and branch, so your checkout is never touched:
+**plan → build → verify → review → draft PR**. Claude plans and builds; Dev break runs your verify command (or one
+Claude proposes) and Claude fixes until it passes; a second Claude that can only read reviews the diff; only then
+may Claude push and open a **draft** PR - you review and merge. If a check keeps failing, the run stops and says why.
+
+Then it **learns**: facts the run had to discover go straight into the repo's Claude memory (with Undo), and rules -
+a CLAUDE.md line, a hook, a skill - wait for your **Apply**. The next run starts smarter.
+
 ## Save it to your Claude
 
 What you learn should not vanish: every TL;DR item has a **+ my Claude** button. Claude suggests which of your Claude

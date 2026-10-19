@@ -278,6 +278,16 @@ public partial class SessionsView : UserControl
         SessionList.SelectedItem = row;
     }
 
+    /// <summary>Shows a session in the active pane (the factory opens its runs' sessions here).</summary>
+    public void Open(SessionInfo info)
+    {
+        Start();
+        SessionState state = StateOf(info);
+        if (state.ShownIn != null) Activate(state.ShownIn);
+        else _active.Show(state);
+        RefreshList();
+    }
+
     private void SessionList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (SessionList.SelectedItem is not ListBoxItem { Tag: SessionInfo info }) return;
