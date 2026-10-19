@@ -74,6 +74,19 @@ public sealed class FactorySpan
     public List<FactoryToolCall> Tools { get; set; } = [];
 }
 
+/// <summary>
+/// One piece of proof that the change works, from the run's evidence manifest: what kind it is, its file, what it
+/// proves and how it came out.
+/// </summary>
+public sealed class FactoryEvidence
+{
+    public string Kind { get; set; } = ""; // screenshots | video | red-green | coverage | mutation | crap | api | logs | trace | perf | other
+    public string File { get; set; } = "";
+    public string Proves { get; set; } = "";
+    public string Result { get; set; } = ""; // pass | fail | skipped
+    public string Detail { get; set; } = "";
+}
+
 /// <summary>Something the developer told a run to change.</summary>
 public sealed class FactoryFeedback
 {
@@ -106,6 +119,10 @@ public sealed class FactoryRun
     public string VerifyResult { get; set; } = "";
     /// <summary>What Claude saw when it ran the app with the change, ending PROOF: PASS / FAIL / SKIPPED.</summary>
     public string Proof { get; set; } = "";
+    /// <summary>The kinds of proof the plan chose for this feature.</summary>
+    public List<string> EvidencePlan { get; set; } = [];
+    /// <summary>The proof produced, read from the evidence manifest.</summary>
+    public List<FactoryEvidence> Evidence { get; set; } = [];
     public string Review { get; set; } = "";
     public string PrUrl { get; set; } = "";
     public double Cost { get; set; }
@@ -134,7 +151,24 @@ public static class Factory
 {
     private const int MaxFixes = 3;
     private const int MaxReviews = 2;
-    private const string HookExample = """{"PostToolUse":[{"matcher":"Edit|Write","hooks":[{"type":"command","command":"..."}]}]}""";
+    // the kinds of proof a run can produce, and how to produce each (the prove step's guide)
+    private static readonly string[] EvidenceKinds = ["screenshots", "video", "red-green", "coverage", "mutation", "crap", "api", "logs", "trace", "perf", "other"];
+    private const string EvidenceGuide = """
+        - screenshots: the changed UI in the running app, at the sizes that matter (desktop and phone for a web page);
+          a "before" too when it helps, from the base commit in a separate worktree - never the developer's checkout.
+        - video: a short recording (webm/mp4/gif) of the interaction the task changed, e.g. a browser tool's video recording.
+        - red-green: the new or changed tests fail without the change (on the base commit, or with the change stashed
+          and restored) and pass with it - save both outputs.
+        - coverage: coverage of the changed lines (not the whole project), with the lines left uncovered.
+        - mutation: mutation testing scoped to the changed files (e.g. Stryker, PIT, mutmut) - the score and the
+          surviving mutants.
+        - crap: the CRAP score (complexity and coverage) of the changed methods, with the worst ones.
+        - api: requests and responses that exercise the changed behaviour. logs: the log lines it produces.
+          trace: the traced path of a request through it. perf: before/after timings when speed is the point.
+        Use the repo's own tools first; a tool it lacks can be run without adding it to the repo's dependencies. When a
+        kind cannot be produced here, it is "skipped" with the reason - never invented.
+        """;
+    private const string HookExample ="""{"PostToolUse":[{"matcher":"Edit|Write","hooks":[{"type":"command","command":"..."}]}]}""";
     private static readonly string StorePath = Path.Combine(AppContext.BaseDirectory, "factory.json");
     private static readonly string WorktreesDir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DevBreak", "worktrees");
@@ -298,6 +332,11 @@ public static class Factory
         }
         run.Repo = repo;
         if (run.BaseBranch.Length == 0) run.BaseBranch = await CurrentBranchAsync(repo);
+        if (run.BaseBranch.Length == 0)
+        {
+            run.Repo = repo;
+            return Wait(run, $"{repo} has no branch with a commit to start from (a new repo with nothing committed yet?). Commit first, or name the base branch.");
+        }
         if (run.Verify.Length == 0) run.Verify = AppSettings.Get("factoryVerify:" + repo.ToLowerInvariant()) ?? "";
         run.Branch = $"devbreak/{Slug(run.Title)}-{run.Id}";
         run.Worktree = Path.Combine(WorktreesDir, $"{Path.GetFileName(repo)}-{run.Id}");
@@ -387,6 +426,10 @@ public static class Factory
             say how the change can be seen in the running app. If you cannot read the task, reply with one line:
             CANNOT_READ: <why>. Otherwise reply with a short title for the work on the first line (TITLE: <title>), then
             the plan as short numbered steps, naming the files you will change and the tests you will add or run.
+            Then choose the proof this feature needs - what a careful reviewer would want to see before believing it
+            works - and end with one line: EVIDENCE: <comma-separated kinds from: {string.Join(", ", EvidenceKinds)}>.
+            (A UI change: screenshots, often a video of the interaction. A logic change: red-green, coverage, mutation,
+            crap. A service: api, logs, trace. Pick only what proves this change.)
             {verify}
             """;
         (string answer, string? error) = await TurnAsync(run, isNew: true, prompt, "Plan", cancel);
@@ -399,6 +442,8 @@ public static class Factory
             if (run.Verify.Length == 0) return Wait(run, "The plan named no verify command. Add one and start again.");
         }
         run.Plan = answer;
+        run.EvidencePlan = (Line(answer, "EVIDENCE:") ?? "").Split(',', ';').Select(k => k.Trim().Trim('`', '*', '.').ToLowerInvariant())
+            .Where(k => EvidenceKinds.Contains(k)).Distinct().ToList();
         Log(run, "Plan:\n" + answer);
         return true;
     }
@@ -482,13 +527,20 @@ public static class Factory
             string dir = ProofDir(run);
             Directory.CreateDirectory(dir);
             Enter(run, FactoryStage.Prove, "Claude runs the app with the change and checks it works.");
+            string planned = run.EvidencePlan.Count > 0 ? string.Join(", ", run.EvidencePlan) : "(the plan chose none - pick what proves this change)";
             (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
-                Now prove the change works in the running application, the way a developer would before opening a PR.
-                Start what it needs - the app and the services it depends on - with the skills, MCP servers and tools on
-                this machine, from this worktree. Exercise exactly what the task changed: in a browser for a UI change
-                (the sizes it matters at), by calling the API for a service, by reading its logs or attaching a debugger
-                for back-end behaviour. Stop what you started when you are done.
-                Save the evidence - screenshots, responses, log excerpts - into {dir}, not into the repo.
+                Now prove the change works, the way a careful developer would before opening a PR. Start what it needs -
+                the app and the services it depends on - with the skills, MCP servers and tools on this machine, from
+                this worktree, exercise exactly what the task changed, and stop what you started when you are done.
+
+                The proof this feature needs, from your plan: {planned}
+                How to produce each kind:
+                {EvidenceGuide}
+                Save every file into {dir} (not into the repo), and write {Path.Combine(dir, ManifestName)}: a JSON array,
+                one entry per piece of proof:
+                [{"{"}"kind": "<kind>", "file": "<file name in that folder, or empty>", "proves": "<what it shows, one line>",
+                  "result": "pass|fail|skipped", "detail": "<the numbers or the reason>"{"}"}]
+
                 Do not commit or push. Reply with what you ran and what you saw, and end with exactly one line:
                 PROOF: PASS - it works as the task asks
                 PROOF: FAIL <what is wrong>
@@ -496,11 +548,16 @@ public static class Factory
                 """, $"Prove (attempt {attempt})", cancel);
             if (error != null) return Wait(run, "The prove turn failed: " + error);
             run.Proof = answer;
+            run.Evidence = ReadManifest(dir);
             string verdict = Line(answer, "PROOF:") ?? "";
             bool pass = verdict.StartsWith("PASS", StringComparison.OrdinalIgnoreCase);
             bool skipped = verdict.StartsWith("SKIPPED", StringComparison.OrdinalIgnoreCase);
             int files = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Count();
-            Log(run, $"Proof: {(verdict.Length > 0 ? verdict : "no verdict")} ({files} evidence file{(files == 1 ? "" : "s")})\n{answer}", ok: pass || skipped);
+            List<string> missing = MissingEvidence(run);
+            Log(run, $"Proof: {(verdict.Length > 0 ? verdict : "no verdict")} ({files} evidence file{(files == 1 ? "" : "s")}, " +
+                $"{run.Evidence.Count} in the manifest{(missing.Count > 0 ? "; planned but missing: " + string.Join(", ", missing) : "")})\n" +
+                string.Join("\n", run.Evidence.Select(e => $"- {e.Kind} - {e.Result}: {e.Proves}{(e.Detail.Length > 0 ? " (" + e.Detail + ")" : "")}")) +
+                "\n\n" + answer, ok: pass || skipped);
             if (pass || skipped) return true;
             if (verdict.Length == 0) return Wait(run, "Claude ended the app check without a PROOF: line.");
             if (attempt > MaxFixes) return Wait(run, $"The app check still fails after {MaxFixes} fixes.");
@@ -513,6 +570,43 @@ public static class Factory
             Log(run, "Fix:\n" + fix);
             if (!await VerifyAsync(run, cancel)) return false;
         }
+    }
+
+    private const string ManifestName = "evidence.json";
+
+    // the evidence manifest Claude wrote; empty when there is none or it is not the expected JSON
+    private static List<FactoryEvidence> ReadManifest(string dir)
+    {
+        string file = Path.Combine(dir, ManifestName);
+        if (!File.Exists(file)) return [];
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(file));
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return [];
+            string Str(JsonElement e, string key) => e.TryGetProperty(key, out JsonElement v) ? (v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : v.ToString()) : "";
+            return doc.RootElement.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Object).Select(e => new FactoryEvidence
+            {
+                Kind = Str(e, "kind").ToLowerInvariant(), File = Str(e, "file"), Proves = Str(e, "proves"),
+                Result = Str(e, "result").ToLowerInvariant(), Detail = Str(e, "detail"),
+            }).ToList();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    // the kinds the plan chose that the manifest does not have
+    private static List<string> MissingEvidence(FactoryRun run) =>
+        run.EvidencePlan.Where(k => !run.Evidence.Any(e => e.Kind == k)).ToList();
+
+    // the evidence, as the reviewer and the PR description read it
+    private static string EvidenceSummary(FactoryRun run)
+    {
+        if (run.Evidence.Count == 0) return "No evidence manifest.";
+        string list = string.Join("\n", run.Evidence.Select(e => $"- {e.Kind}: {e.Result} - {e.Proves}{(e.Detail.Length > 0 ? " (" + e.Detail + ")" : "")}{(e.File.Length > 0 ? " [" + e.File + "]" : "")}"));
+        List<string> missing = MissingEvidence(run);
+        return list + (missing.Count > 0 ? "\nPlanned but not produced: " + string.Join(", ", missing) : "");
     }
 
     private static async Task<(bool Pass, string Findings)> ReviewAsync(FactoryRun run, CancellationToken cancel)
@@ -532,8 +626,13 @@ public static class Factory
 
             THE EVIDENCE - you can only read, so this is what was run for you:
             The verify command, run by the tool itself on this exact worktree: {run.VerifyResult}
+            The proof the plan asked for: {(run.EvidencePlan.Count > 0 ? string.Join(", ", run.EvidencePlan) : "(none chosen)")}
+            The evidence produced (its manifest):
+            {EvidenceSummary(run)}
             The check in the running app, by the coding agent:
             {(run.Proof.Length > 0 ? Tail(run.Proof, 4000) : "(none)")}
+            Weak or missing proof for what the task changes (a planned kind not produced, a mutation score that leaves
+            the changed logic untested, uncovered changed lines) is a real problem.
 
             Judge the evidence; do not ask for a command to be run that was run above, and do not report something only
             because your read-only tools cannot see it (say "not verified" in a finding only when it really matters).
@@ -562,7 +661,7 @@ public static class Factory
               reviewer passed the change. Review notes:
               {run.Review}
               """;
-        checks += $"\nThe app check's evidence is in {ProofDir(run)} - describe it in the PR, do not commit it. The app was already run after the last change; do not run it again unless a check on this machine requires it.";
+        checks += $"\nThe evidence:\n{EvidenceSummary(run)}\nIts files are in {ProofDir(run)} - list it in the PR description (attach the images or video to the PR if the host's tools can), do not commit it. The app was already run after the last change; do not run it again unless a check on this machine requires it.";
         string link = run.Source == FactorySource.Jira ? $" Link it to the Jira issue {run.Task} the way this repo does." : "";
         // the git host's own MCP server first (Atlassian's for Bitbucket, GitHub's for GitHub), then its CLI or tools
         link += " For the pull request, prefer the git host's official MCP server when one is connected and signed in" +
@@ -996,7 +1095,10 @@ public static class Factory
         string proof = ProofDir(run);
         if (Directory.Exists(proof) && Directory.EnumerateFiles(proof, "*", SearchOption.AllDirectories).Any())
         {
-            md.AppendLine("## Evidence from the app").AppendLine();
+            md.AppendLine("## Evidence").AppendLine();
+            md.AppendLine($"Planned: {(run.EvidencePlan.Count > 0 ? string.Join(", ", run.EvidencePlan) : "none")}").AppendLine();
+            foreach (FactoryEvidence e in run.Evidence) md.AppendLine($"- **{e.Kind}** {e.Result}: {e.Proves}{(e.Detail.Length > 0 ? " (" + e.Detail + ")" : "")}{(e.File.Length > 0 ? " - " + Path.Combine(proof, e.File) : "")}");
+            md.AppendLine().AppendLine("Files:");
             foreach (string f in Directory.EnumerateFiles(proof, "*", SearchOption.AllDirectories)) md.AppendLine($"- {f}");
             md.AppendLine();
         }

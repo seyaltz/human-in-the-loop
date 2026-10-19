@@ -28,6 +28,7 @@ public partial class FactoryView : UserControl
     private int _shownLog = -1;
     private string? _shownLessons;
     private string? _shownTrace;
+    private string? _shownEvidence;
     // the trace steps the developer opened stay open while the trace updates
     private readonly HashSet<int> _openSpans = [];
     private bool _started;
@@ -173,6 +174,7 @@ public partial class FactoryView : UserControl
             _shownLog = -1;
             _shownLessons = null;
             _shownTrace = null;
+            _shownEvidence = null;
             _openSpans.Clear();
             GoodRating.IsChecked = run.Rating == "good";
             BadRating.IsChecked = run.Rating == "bad";
@@ -185,6 +187,12 @@ public partial class FactoryView : UserControl
         FeedbackButton.IsEnabled = canFeedback;
         FeedbackBox.IsEnabled = canFeedback;
         RateButton.IsEnabled = !run.Working && run.Repo.Length > 0;
+        string evidence = $"{run.EvidencePlan.Count}:" + string.Join(",", run.Evidence.Select(e => e.Kind + e.Result + e.File));
+        if (evidence != _shownEvidence)
+        {
+            _shownEvidence = evidence;
+            ShowEvidence(run);
+        }
         string trace = $"{run.Trace.Count}:{run.Trace.LastOrDefault()?.Tools.Count}:{run.Trace.LastOrDefault()?.Ended}:{string.Concat(run.Trace.LastOrDefault()?.Tools.Select(t => t.Result[0]) ?? [])}";
         if (trace != _shownTrace)
         {
@@ -264,9 +272,10 @@ public partial class FactoryView : UserControl
 
     private void RunTab_Checked(object sender, RoutedEventArgs e)
     {
-        if (LogBox == null || TraceArea == null || LessonsArea == null) return;
+        if (LogBox == null || TraceArea == null || LessonsArea == null || EvidenceArea == null) return;
         LogBox.Visibility = LogTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         TraceArea.Visibility = TraceTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        EvidenceArea.Visibility = EvidenceTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         LessonsArea.Visibility = LessonsTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -339,6 +348,77 @@ public partial class FactoryView : UserControl
             Background = Brushes.Transparent,
         };
         return fold;
+    }
+
+    // the proof the plan chose and what was produced: a card per piece - kind, result, what it proves, its numbers -
+    // with images shown, and Open for a video, a report or any other file
+    private void ShowEvidence(FactoryRun run)
+    {
+        EvidenceList.Children.Clear();
+        EvidenceTab.Content = run.Evidence.Count > 0 ? $"Evidence ({run.Evidence.Count})" : "Evidence";
+        string dir = Factory.ProofDir(run);
+        var planned = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12.5, Margin = new Thickness(2, 0, 0, 8) };
+        planned.Inlines.Add(new Run("Proof the plan chose: ") { FontWeight = FontWeights.SemiBold });
+        planned.Inlines.Add(new Run(run.EvidencePlan.Count > 0 ? string.Join(", ", run.EvidencePlan) : "none yet"));
+        List<string> missing = run.EvidencePlan.Where(k => !run.Evidence.Any(e => e.Kind == k)).ToList();
+        if (run.Evidence.Count > 0 && missing.Count > 0)
+        {
+            planned.Inlines.Add(new Run("   ·   not produced: " + string.Join(", ", missing)) { Foreground = (Brush)FindResource("CoralInkBrush") });
+        }
+        EvidenceList.Children.Add(planned);
+        if (run.Evidence.Count == 0)
+        {
+            EvidenceList.Children.Add(new TextBlock { Text = "No evidence yet - the Prove step writes it.", Style = (Style)FindResource("Caption"), Margin = new Thickness(4) });
+            return;
+        }
+        foreach (FactoryEvidence e in run.Evidence)
+        {
+            string file = e.File.Length > 0 ? System.IO.Path.Combine(dir, e.File) : "";
+            bool exists = file.Length > 0 && File.Exists(file);
+            Brush result = (Brush)FindResource(e.Result == "pass" ? "InkBrush" : e.Result == "fail" ? "CoralInkBrush" : "InkSoftBrush");
+            var head = new TextBlock { TextWrapping = TextWrapping.Wrap };
+            head.Inlines.Add(new Run(e.Kind.ToUpperInvariant() + "  ") { FontSize = 11, FontWeight = FontWeights.Bold, Foreground = (Brush)FindResource("VioletBrush") });
+            head.Inlines.Add(new Run(e.Result switch { "pass" => "✓ pass", "fail" => "✗ fail", "skipped" => "– skipped", _ => e.Result }) { FontWeight = FontWeights.Bold, Foreground = result });
+            head.Inlines.Add(new Run("   " + e.Proves) { FontSize = 13 });
+            var body = new StackPanel();
+            body.Children.Add(head);
+            if (e.Detail.Length > 0) body.Children.Add(new TextBlock { Text = e.Detail, TextWrapping = TextWrapping.Wrap, FontSize = 12, Foreground = (Brush)FindResource("InkSoftBrush"), Margin = new Thickness(0, 2, 0, 0) });
+            string ext = System.IO.Path.GetExtension(file).ToLowerInvariant();
+            if (exists && ext is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp")
+            {
+                try
+                {
+                    var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                    bitmap.BeginInit();
+                    bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad; // the file stays free
+                    bitmap.UriSource = new Uri(file);
+                    bitmap.DecodePixelWidth = 640;
+                    bitmap.EndInit();
+                    var image = new Image { Source = bitmap, MaxHeight = 260, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 6, 0, 0), Cursor = System.Windows.Input.Cursors.Hand, ToolTip = "Open " + e.File };
+                    image.MouseLeftButtonUp += (_, _) => OpenFile(file);
+                    body.Children.Add(image);
+                }
+                catch (Exception)
+                {
+                    // not an image after all: the Open button below still works
+                }
+            }
+            if (exists)
+            {
+                var open = new Button { Content = "Open " + e.File, Style = (Style)FindResource("SecondaryButton"), Height = 30, Padding = new Thickness(12, 0, 12, 0), Margin = new Thickness(0, 6, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
+                open.Click += (_, _) => OpenFile(file);
+                body.Children.Add(open);
+            }
+            else if (e.File.Length > 0)
+            {
+                body.Children.Add(new TextBlock { Text = $"{e.File} is not in the evidence folder", FontSize = 12, Foreground = (Brush)FindResource("CoralInkBrush"), Margin = new Thickness(0, 4, 0, 0) });
+            }
+            EvidenceList.Children.Add(new Border
+            {
+                BorderBrush = (Brush)FindResource("LineBrush"), BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(12, 8, 12, 10), Margin = new Thickness(0, 0, 0, 8), Child = body,
+            });
+        }
     }
 
     private static string Tokens(long n) => n >= 1000 ? $"{n / 1000.0:0.#}k" : n.ToString();

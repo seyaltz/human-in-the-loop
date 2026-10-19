@@ -92,8 +92,9 @@ folder where your repos are; Claude finds the one the task is for and learns how
 works in its own git worktree and branch, so your checkout is never touched:
 **locate → plan → build → verify → prove → review → draft PR**. Claude understands the mission with your skills,
 MCP servers and tools, plans and builds; Dev break runs your verify command (or one Claude proposes) and Claude
-fixes until it passes; then Claude **runs the app** with the change and proves it works (screenshots, responses,
-logs saved as evidence); a second Claude that can only read reviews the diff with that evidence; only then may Claude
+fixes until it passes; then Claude **runs the app** with the change and proves it with the evidence the feature
+needs - screenshots, a video, tests that fail before and pass after, coverage of the changed lines, mutation testing,
+CRAP scores, API responses, logs, traces - shown in the run's **Evidence** tab; a second Claude that can only read reviews the diff with that evidence; only then may Claude
 push and open a **draft** PR - you review and merge. If a check keeps failing, the run stops and says why.
 
 Then it **learns**: facts the run had to discover go straight into the repo's Claude memory (with Undo), and rules -
