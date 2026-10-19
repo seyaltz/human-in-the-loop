@@ -64,6 +64,15 @@ folders. It cannot edit files or run anything else.
 Gear menu -> **Claude in discussions**: **Clean** (default; only "Knowledge about me") or **My Claude setup** (your
 own `CLAUDE.md`, memory, skills, hooks and MCP servers, as in your CLI - slower).
 
+## Sessions - your Claude Code, here
+
+The **Sessions** tab works like Claude Code itself: **New session...** picks a folder and starts a session there, or
+pick one of your recent sessions (the same ones your CLI keeps, with their titles) to see what was said and carry
+on. Claude runs with your full setup - `CLAUDE.md`, memory, skills, plugins, hooks, MCP servers - and **full
+access** in that folder (it may edit files and run commands without asking, like the CLI in bypass mode), and you
+see its steps as it works. **Stop** ends a turn. **Copy resume command** gives `claude --resume <id>` to continue
+the same session in a terminal.
+
 ## Save it to your Claude
 
 What you learn should not vanish: every TL;DR item has a **+ my Claude** button. Claude suggests which of your Claude

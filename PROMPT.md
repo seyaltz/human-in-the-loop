@@ -293,6 +293,32 @@ one in-flight Task per tab, a faulted one is retried.
   - skill → `<project>\.claude\skills\<name>\SKILL.md` with front matter (`name`, `description`).
   Never overwrite: a taken name gets `-2`, `-3`... The status shows the saved paths.
 
+## Sessions (`ClaudeSessions.cs`, `SessionsView`)
+
+The user's own Claude Code, inside Dev break: real sessions - the same ones the CLI keeps under `.claude\projects` -
+started in a folder or continued, worked in like the CLI, and continuable with `claude --resume <id>` in a terminal.
+- **List**: every `<projects>\*\*.jsonl`, newest first, the first 60 whose folder (the first `cwd` in the file) still
+  exists and is not under the temp folder. Title: the last `ai-title` / `custom-title` line (read from the last 256 KB),
+  else the first prompt the user typed (`type == "user"`, string content, `origin.kind == "human"` or no origin, not
+  starting with `<`), else the folder name. Read with `FileShare.ReadWrite | Delete` (sessions may be in use).
+- **Transcript** of a session: its lines in order, skipping `isSidechain` and `isMeta`: the user's typed prompts, and
+  each assistant message's `text` blocks and `tool_use` blocks (shown as a step: the tool name and its `command`,
+  `file_path`, `pattern`, `url`, `query`, `description`, `prompt` or `skill`, 140 characters). The last 300 entries.
+- **A turn** (`RunTurnAsync`): `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions`
+  and `--session-id <new id>` for a new session or `--resume <id>`, working directory = the session's folder, the
+  message on stdin. No `--setting-sources`: the user's full setup loads (CLAUDE.md, memory, skills, plugins, hooks,
+  MCP servers). Full access is the user's choice: `-p` cannot stop to ask. Each streamed `assistant` line adds its
+  text and tool steps as they come; the `result` line adds "✓ done · <seconds> s · $<cost>" or its error. No timeout;
+  **Stop** kills the process tree ("Stopped.").
+- **View** (5th mode tab **Sessions**, wide): left a card "your Claude Code, here" / Sessions with **New session...**
+  (a folder picker, `OpenFolderDialog`; the new session gets a fresh id and stays at the top of the list), **Refresh**,
+  and the list (title, folder name · "N min/h/d ago", the folder as tooltip). Right: the title, "<folder> · session
+  <id>", **Copy resume command** (`cd "<folder>"; claude --resume <id>`) and **Open folder**; the transcript (You /
+  Claude rendered by `CodeRenderer` - formatting and diagrams -, tool steps in mono with a violet "⚙ <tool>", the done
+  line, errors in coral); the input (Enter sends), Send, Stop, "Claude is working... (N steps)" and the note "Claude
+  may edit files and run commands in this folder.". Every opened session keeps its transcript, and a running turn
+  keeps going while another session is on screen. After a new session's first turn the list refreshes.
+
 ## Tray app (`App.xaml.cs`)
 
 - **First run** (no `topics.json`): first check that Claude Code works by running the prompt "Reply with just: OK"
@@ -336,7 +362,7 @@ Score?, Xp, Lesson?)`), earned `Badges` (`record EarnedBadge(Id, At)`) and `Goal
 - Calls: `QuestionAnswered(tab, topic, score)` after scoring; `QuestionSeen(tab, topic)` on Show answer;
   `LessonDone(course, index, title, courseFinished)` / `LessonUndone(course, index)` from Mark as done.
 
-## Main window (`QuestionWindow`): Quiz, Learn, Stats and TL;DR in one window
+## Main window (`QuestionWindow`): Quiz, Learn, Stats, TL;DR and Sessions in one window
 
 Light and simple: Fluent theme surfaces, rounded cards, few controls. Shared styles in `App.xaml` resources:
 `ChipList` (a `ListBox` with a `WrapPanel`, items templated as rounded chips: `ControlFillColorDefaultBrush` with a
@@ -345,8 +371,8 @@ with `TextOnAccentFillColorPrimaryBrush` text) and `Card` (a `Border`, corner ra
 `CardBackgroundFillColorDefaultBrush` / `CardStrokeColorDefaultBrush`).
 
 900x680, min 640x460, Topmost, placed bottom-right of the work area (16 px margin).
-- **Top bar**: on the left four toggle buttons in one group (`RadioButton`s with the `ToggleButton` style): **Quiz**
-  (default), **Learn**, **Stats**, **TL;DR**. On the right the game HUD: a rank pill (rank colour, white caps), an XP bar (130 px,
+- **Top bar**: on the left five toggle buttons in one group (`RadioButton`s with the `ToggleButton` style): **Quiz**
+  (default), **Learn**, **Stats**, **TL;DR**, **Sessions**. On the right the game HUD: a rank pill (rank colour, white caps), an XP bar (130 px,
   "N / next XP"), the streak "🔥 N" (tooltip with the best), today's goal "🎯 q/3 questions · l/1 lesson" or "🎯 Goal
   done", and a gear button.
 - **Gear menu** (a `ContextMenu` built on click): "Knowledge about me" (From my Claude history / From profile.txt /
