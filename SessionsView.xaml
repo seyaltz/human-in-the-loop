@@ -3,6 +3,38 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:DevBreak"
         >
+    <UserControl.Resources>
+        <!-- a pill like the mode tabs, dark when on -->
+        <Style x:Key="PillToggle" TargetType="ToggleButton">
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Padding" Value="14,0" />
+            <Setter Property="FontSize" Value="13.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{StaticResource InkBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border CornerRadius="16" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"
+                                BorderBrush="{StaticResource InkBrush}" BorderThickness="1.5">
+                            <ContentPresenter VerticalAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource VioletTintBrush}" />
+                </Trigger>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter Property="Background" Value="{StaticResource InkBrush}" />
+                    <Setter Property="Foreground" Value="White" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="300" />
@@ -15,36 +47,11 @@
                 <StackPanel DockPanel.Dock="Top" Margin="2,0,6,10">
                     <TextBlock Text="your Claude Code, here" Style="{StaticResource HandNote}" FontSize="19" />
                     <DockPanel Margin="0,2,0,10">
-                        <!-- a pill like the mode tabs, dark when on -->
-                        <ToggleButton x:Name="SplitButton" DockPanel.Dock="Right" Content="Split" Height="32" Padding="14,0"
-                                      FontSize="13.5" FontWeight="SemiBold" Cursor="Hand" VerticalAlignment="Center"
-                                      ToolTip="Two sessions side by side" Checked="Split_Changed" Unchecked="Split_Changed">
-                            <ToggleButton.Style>
-                                <Style TargetType="ToggleButton">
-                                    <Setter Property="Foreground" Value="{StaticResource InkBrush}" />
-                                    <Setter Property="Background" Value="Transparent" />
-                                    <Setter Property="Template">
-                                        <Setter.Value>
-                                            <ControlTemplate TargetType="ToggleButton">
-                                                <Border CornerRadius="16" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"
-                                                        BorderBrush="{StaticResource InkBrush}" BorderThickness="1.5">
-                                                    <ContentPresenter VerticalAlignment="Center" />
-                                                </Border>
-                                            </ControlTemplate>
-                                        </Setter.Value>
-                                    </Setter>
-                                    <Style.Triggers>
-                                        <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter Property="Background" Value="{StaticResource VioletTintBrush}" />
-                                        </Trigger>
-                                        <Trigger Property="IsChecked" Value="True">
-                                            <Setter Property="Background" Value="{StaticResource InkBrush}" />
-                                            <Setter Property="Foreground" Value="White" />
-                                        </Trigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </ToggleButton.Style>
-                        </ToggleButton>
+                        <ToggleButton x:Name="SplitButton" DockPanel.Dock="Right" Content="Split" Style="{StaticResource PillToggle}"
+                                      ToolTip="Two sessions side by side" Checked="Split_Changed" Unchecked="Split_Changed" />
+                        <ToggleButton x:Name="GroupButton" DockPanel.Dock="Right" Content="By folder" Style="{StaticResource PillToggle}"
+                                      Margin="0,0,6,0" Padding="11,0" ToolTip="Group the sessions by their folder"
+                                      Checked="Group_Changed" Unchecked="Group_Changed" />
                         <TextBlock Text="Sessions" Style="{StaticResource Heading}" FontSize="22" />
                     </DockPanel>
                     <DockPanel>
