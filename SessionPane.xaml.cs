@@ -118,6 +118,8 @@ public partial class SessionPane : UserControl
         StopButton.IsEnabled = running;
         WorkingText.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
         if (running) WorkingText.Text = $"Claude is working... ({_state!.Steps} step{(_state.Steps == 1 ? "" : "s")})";
+        // the title may come later (Claude writes one for an untitled session)
+        if (_state != null) SessionTitle.Text = _state.Info.Title;
         Lights.Set(Light, _state, this);
     }
 
