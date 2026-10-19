@@ -564,6 +564,10 @@ public static class Factory
               """;
         checks += $"\nThe app check's evidence is in {ProofDir(run)} - describe it in the PR, do not commit it. The app was already run after the last change; do not run it again unless a check on this machine requires it.";
         string link = run.Source == FactorySource.Jira ? $" Link it to the Jira issue {run.Task} the way this repo does." : "";
+        // the git host's own MCP server first (Atlassian's for Bitbucket, GitHub's for GitHub), then its CLI or tools
+        link += " For the pull request, prefer the git host's official MCP server when one is connected and signed in" +
+            " (for example the Atlassian MCP for Bitbucket, the GitHub MCP for GitHub); otherwise use the host's CLI or" +
+            " the tools on this machine. Say in your reply which one you used.";
         string todo = update
             ? $"""
               The draft pull request {run.PrUrl} already exists for branch {run.Branch}. Commit the new changes with a
