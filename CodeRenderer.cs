@@ -83,7 +83,17 @@ public static class CodeRenderer
         foreach (Match fence in Fence.Matches(text))
         {
             AddProse(document, text[at..fence.Index]);
-            document.Blocks.Add(CodeBlock(fence.Groups[2].Value.TrimEnd(), fence.Groups[1].Value.ToLowerInvariant()));
+            string language = fence.Groups[1].Value.ToLowerInvariant();
+            string code = fence.Groups[2].Value.TrimEnd();
+            // a ```mermaid block is drawn as a diagram; one it cannot read stays code
+            if (language == "mermaid" && DiagramRenderer.TryRender(code) is UIElement diagram)
+            {
+                document.Blocks.Add(new BlockUIContainer(diagram) { Margin = new Thickness(0, 4, 0, 14) });
+            }
+            else
+            {
+                document.Blocks.Add(CodeBlock(code, language));
+            }
             at = fence.Index + fence.Length;
         }
         AddProse(document, text[at..]);

@@ -188,6 +188,7 @@ public static class LearnPath
             Plain text with short paragraphs; you may use simple "- " bullets. No markdown headings and no bold.
             Put every code snippet in a fenced block with its language, e.g. ```java, ```sql, ```javascript, ```bash.
             Short names inside a sentence go in single backticks.
+            {QuestionGenerator.Diagrams}
             Then write one short question that checks the key idea of the lesson, and its answer (under 80 words).
 
             Reply in exactly this format and nothing else:

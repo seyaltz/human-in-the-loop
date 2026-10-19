@@ -453,6 +453,21 @@ unanswered message from history.
   (word before `(`) `#DCDCAA`, plain `#D4D4D4`. Token regexes for C-like languages (java, js/ts, c#, kotlin...),
   SQL (case-insensitive keywords, `--` comments) and hash-comment languages (bash, python, yaml...).
 - Inline `` `code` `` → code font in `#C7254E`. Everything else plain text.
+- ```` ```mermaid ```` blocks are drawn as diagrams (`DiagramRenderer`, native WPF, no packages), in the notebook
+  colours, inside a card, scaled down to fit (never up); a block it cannot read stays a code block.
+  - `flowchart LR|TD` (also `graph`): nodes `id`, `id[box]`, `id(round)` / `id([stadium])`, `id{decision}` (lime
+    diamond), `id[(database)]` (violet cylinder), `id((circle))`; links `-->`, `---`, `-.->` (dashed), `==>` (thick),
+    with `|label|` or `-- label -->`; chains `A --> B --> C`; `;`-separated statements; `subgraph`/`style`/`class` lines
+    ignored; `<br>` breaks a label. Layout: ranks by the longest path (edges that close a cycle ignored), nodes in a rank
+    ordered by their parents, centred; arrows from box edge to box edge, labels on a paper-coloured tag. At most 40 nodes.
+  - `sequenceDiagram`: `participant` / `actor` (`as` label), messages `->>`, `-->>` (dashed reply), `->`, `-->`, `-x`,
+    self-messages as a loop, `Note over A,B:` / `left of` / `right of` (lime); participant boxes at top and bottom,
+    dashed lifelines; columns widen to fit their labels. `autonumber`, `activate`, `loop`/`alt`/`end` lines are left
+    out of the picture. At most 10 participants.
+- Discussions and lessons are told (`QuestionGenerator.Diagrams`): "When a picture explains it better than words - a
+  flow, an architecture, a sequence of calls between services - draw one small diagram as a ```mermaid block, as in a
+  good tutorial" (flowchart LR/TD with the node and arrow forms above, or sequenceDiagram), at most 10 nodes, short
+  labels, no styling, and none when it adds nothing.
 
 ## Extra files
 
