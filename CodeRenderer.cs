@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Documents;
@@ -8,8 +9,9 @@ using System.Windows.Media;
 namespace DevBreak;
 
 /// <summary>
-/// Turns Claude's reply into a FlowDocument: prose as plain text, ```lang fenced blocks as an ink
-/// code box coloured like VS Code's Dark+ theme, `inline code` in the code font on a violet tint.
+/// Turns Claude's reply into a FlowDocument: prose with light Markdown (headings, lists, bold, italic, links),
+/// ```lang fenced blocks as an ink code box coloured like VS Code's Dark+ theme, `inline code` in the code font on a
+/// violet tint.
 /// </summary>
 public static class CodeRenderer
 {
@@ -28,7 +30,6 @@ public static class CodeRenderer
     private static readonly Brush InlineCodeColor = Frozen(0x3A, 0x22, 0xC4);
 
     private static readonly Regex Fence = new(@"```[ \t]*(\w*)[^\n]*\n([\s\S]*?)```", RegexOptions.Compiled);
-    private static readonly Regex InlineCode = new(@"`([^`\n]+)`", RegexOptions.Compiled);
 
     private static readonly HashSet<string> CLikeKeywords = new(StringComparer.Ordinal)
     {
@@ -88,35 +89,130 @@ public static class CodeRenderer
         AddProse(document, text[at..]);
     }
 
+    private static readonly Regex Heading = new(@"^\s{0,3}(#{1,4})\s+(.+)$", RegexOptions.Compiled);
+    private static readonly Regex Bullet = new(@"^\s*[-*•]\s+(.*)$", RegexOptions.Compiled);
+    private static readonly Regex Numbered = new(@"^\s*\d+[.)]\s+(.*)$", RegexOptions.Compiled);
+
+    // inline Markdown, in this order: `code`, **bold**, *italic* / _italic_, [text](url), a bare https URL
+    private static readonly Regex Inline = new(
+        @"`(?<code>[^`\n]+)`|\*\*(?<bold>[^*\n]+?)\*\*|(?<![\w*])\*(?<italic>[^*\s][^*\n]*?)\*(?![\w*])|(?<![\w_])_(?<italic>[^_\s][^_\n]*?)_(?![\w_])" +
+        @"|\[(?<text>[^\]\n]+)\]\((?<link>https?://[^)\s]+)\)|(?<url>https?://[^\s<>()]+)",
+        RegexOptions.Compiled | RegexOptions.ExplicitCapture);
+
+    /// <summary>
+    /// Prose with the Markdown Claude writes: "#" headings, "- " / "1. " lists (lines that follow an item without a
+    /// marker continue it), and inline code, bold, italic and links (which open in the browser).
+    /// </summary>
     private static void AddProse(FlowDocument document, string prose)
     {
         foreach (string block in Regex.Split(prose.Trim(), @"\n\s*\n"))
         {
             if (block.Trim().Length == 0) continue;
-            var paragraph = new Paragraph { Margin = new Thickness(0, 0, 0, 10) };
-            string[] lines = block.Trim().Split('\n');
-            for (int i = 0; i < lines.Length; i++)
+            Paragraph? paragraph = null;
+            List? list = null;
+            foreach (string raw in block.Trim().Split('\n'))
             {
-                if (i > 0) paragraph.Inlines.Add(new LineBreak());
-                AddInlineCode(paragraph, lines[i].TrimEnd('\r'));
+                string line = raw.TrimEnd('\r');
+                Match heading = Heading.Match(line);
+                Match bullet = Bullet.Match(line);
+                Match numbered = Numbered.Match(line);
+                if (heading.Success)
+                {
+                    list = null;
+                    paragraph = null;
+                    var title = new Paragraph
+                    {
+                        FontWeight = FontWeights.Bold, FontSize = heading.Groups[1].Length <= 2 ? 17 : 15.5,
+                        Margin = new Thickness(0, 4, 0, 6),
+                    };
+                    AddInline(title, heading.Groups[2].Value.Trim().TrimEnd('#').Trim());
+                    document.Blocks.Add(title);
+                }
+                else if (bullet.Success || numbered.Success)
+                {
+                    TextMarkerStyle marker = bullet.Success ? TextMarkerStyle.Disc : TextMarkerStyle.Decimal;
+                    if (list == null || list.MarkerStyle != marker)
+                    {
+                        list = new List { MarkerStyle = marker, Margin = new Thickness(0, 0, 0, 10), Padding = new Thickness(22, 0, 0, 0) };
+                        document.Blocks.Add(list);
+                    }
+                    paragraph = new Paragraph { Margin = new Thickness(0, 0, 0, 4) };
+                    AddInline(paragraph, (bullet.Success ? bullet : numbered).Groups[1].Value);
+                    list.ListItems.Add(new ListItem(paragraph));
+                }
+                else if (paragraph != null)
+                {
+                    // a line that continues the paragraph or list item above
+                    paragraph.Inlines.Add(new LineBreak());
+                    AddInline(paragraph, line.Trim());
+                }
+                else
+                {
+                    paragraph = new Paragraph { Margin = new Thickness(0, 0, 0, 10) };
+                    AddInline(paragraph, line);
+                    document.Blocks.Add(paragraph);
+                }
             }
-            document.Blocks.Add(paragraph);
         }
     }
 
-    private static void AddInlineCode(Paragraph paragraph, string line)
+    private static void AddInline(Paragraph paragraph, string line)
     {
         int at = 0;
-        foreach (Match code in InlineCode.Matches(line))
+        foreach (Match m in Inline.Matches(line))
         {
-            paragraph.Inlines.Add(new Run(line[at..code.Index]));
-            paragraph.Inlines.Add(new Run(code.Groups[1].Value)
+            paragraph.Inlines.Add(new Run(line[at..m.Index]));
+            if (m.Groups["code"].Success)
             {
-                FontFamily = CodeFont, Foreground = InlineCodeColor, Background = InlineCodeBackground, FontSize = 13.5,
-            });
-            at = code.Index + code.Length;
+                paragraph.Inlines.Add(new Run(m.Groups["code"].Value)
+                {
+                    FontFamily = CodeFont, Foreground = InlineCodeColor, Background = InlineCodeBackground, FontSize = 13.5,
+                });
+            }
+            else if (m.Groups["bold"].Success)
+            {
+                var bold = new Bold();
+                AddInline(bold, m.Groups["bold"].Value);
+                paragraph.Inlines.Add(bold);
+            }
+            else if (m.Groups["italic"].Success)
+            {
+                paragraph.Inlines.Add(new Italic(new Run(m.Groups["italic"].Value)));
+            }
+            else
+            {
+                string url = m.Groups["link"].Success ? m.Groups["link"].Value : m.Groups["url"].Value.TrimEnd('.', ',', ';', ':', '!', '?');
+                string text = m.Groups["text"].Success ? m.Groups["text"].Value : url;
+                paragraph.Inlines.Add(Link(text, url));
+                // a bare URL may have lost trailing punctuation: keep it as text
+                if (m.Groups["url"].Success) paragraph.Inlines.Add(new Run(m.Groups["url"].Value[url.Length..]));
+            }
+            at = m.Index + m.Length;
         }
         paragraph.Inlines.Add(new Run(line[at..]));
+    }
+
+    // bold may hold inline code; a span takes the same inline rules as a paragraph
+    private static void AddInline(Span span, string text)
+    {
+        var holder = new Paragraph();
+        AddInline(holder, text);
+        foreach (Inline inline in holder.Inlines.ToList())
+        {
+            holder.Inlines.Remove(inline);
+            span.Inlines.Add(inline);
+        }
+    }
+
+    private static Hyperlink Link(string text, string url)
+    {
+        var link = new Hyperlink(new Run(text)) { ToolTip = url };
+        if (Uri.TryCreate(url, UriKind.Absolute, out Uri? uri))
+        {
+            link.NavigateUri = uri;
+            link.Click += (_, _) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+        }
+        return link;
     }
 
     private static Paragraph CodeBlock(string code, string language)
