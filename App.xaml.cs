@@ -84,6 +84,27 @@ public partial class App : Application
 
     public void Snooze() => _snoozedUntil = DateTime.Now.AddMinutes(SnoozeMinutes);
 
+    /// <summary>
+    /// A Windows notification (the tray balloon). Without the tray icon (started with --now) a short-lived one shows it.
+    /// </summary>
+    public static void Alert(string title, string text)
+    {
+        if (Current is App { _tray: { } tray })
+        {
+            tray.ShowBalloonTip(8000, title, text, Forms.ToolTipIcon.Warning);
+            return;
+        }
+        var once = new Forms.NotifyIcon { Icon = TrayIcon(), Text = "Dev break", Visible = true };
+        once.ShowBalloonTip(8000, title, text, Forms.ToolTipIcon.Warning);
+        var hide = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        hide.Tick += (_, _) =>
+        {
+            hide.Stop();
+            once.Dispose();
+        };
+        hide.Start();
+    }
+
     private void Tick()
     {
         DateTime now = DateTime.Now;

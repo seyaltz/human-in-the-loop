@@ -385,9 +385,19 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      only `Read,Grep,Glob` (read-only, enforced); a Jira issue or a spec needs the machine's own tools to be read, so
      it gets the developer's setup with bypass minus `Edit`, `Write`, `NotebookEdit` and the publish denies (the
      shell can still change files - the same access the plan turn has). Then the base branch and the remembered verify command for it.
-  1. **Worktree**: `git worktree add <%LOCALAPPDATA%\DevBreak\worktrees\<repo>-<id>> -b devbreak/<slug>-<id> <base commit>`
-     - the developer's checkout is never touched. A worktree shares its repo's Claude memory (verified: both report
-     the same `memory_paths.auto`).
+  1. **Workspace - the developer's own checkout by default** (no copy: its dependencies and build output are already
+     there; a worktree is a second copy of the files - 603 MB with a fresh `npm ci` in a measured run - and a deep
+     repo can pass Windows' 260-character path limit under a longer folder). The run checks the checkout can be used
+     and **asks when it cannot** (stops at Needs you with the question): another run working in it, or uncommitted
+     changes - untracked files too, as the PR step commits everything ("... commit or stash them and press Continue -
+     or press Use a separate worktree ..."). Then it notes the branch the checkout is on (or its commit when
+     detached), `git switch -c devbreak/<slug>-<id> <base commit>` (or `git switch` to it when the branch exists) and
+     works there. When a run (or its continue, feedback, PR anyway) is done, the checkout goes back to that branch if
+     the run's work is committed; otherwise it stays on the run's branch and the run says so. Continue, feedback and
+     PR anyway first switch the checkout to the run's branch, asking when it has changes.
+     **Use a separate worktree** (when the run asked): `git -c core.longpaths=true worktree add <beside the repo:
+     <repo>-<4 of the id>> -b <branch> <base commit>` (or the existing branch), and the run goes on there, the
+     checkout untouched. A worktree shares its repo's Claude memory (verified: both report the same `memory_paths.auto`).
   2. **Plan**: a new Claude Code session in the worktree (as in Sessions: full setup, bypass) reads the task - Jira
      and spec with the tools on the machine - first understands the mission with the machine's skills, MCP servers
      and tools (running the app or its services, reading logs or data, inspecting or debugging a running service),
@@ -445,6 +455,13 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   The Learn prompt carries "what the developer said" (every feedback, the rating and note) - weighed most - the
   lessons already learned in this run, and the lessons turned down for the same repo across runs with their why
   ("do not suggest anything like them").
+- **Speed**: a watchdog (every 5 s while runs work) marks a step - or one tool call in it - that passes **a minute**
+  as slow, once: a "Slow - <step> has run over 1 minute - longest so far: <tool> (<s>)" log line, the step's pipeline
+  chip and trace row turn **amber** ("⏱ slow"), and a **Windows notification** (the tray balloon; a short-lived one
+  without the tray). Tool calls record when their result came, shown as their duration in the trace. The Learn prompt
+  gets "what was slow" - steps of 30 s or more and tool calls of 15 s or more, slowest first - and adds lessons that
+  make the next run faster. The build turn runs only the tests for what it changed (Dev break runs the full verify
+  right after) and does not reinstall dependencies that are installed.
 - **Trace**: every step is a span - a Claude turn (`turn`), a one-off Claude (`claude`: pick the repo, review, learn -
   streamed now, so their tools show), the verify command (`verify`) or a git command (`git`) - with its stage, title,
   start and end, cost (`total_cost_usd`), tokens (input = input + cache creation + cache read; output), permission
@@ -454,9 +471,23 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   **Export trace** writes `<traces>\<date>-<slug>-<id>.json` (the whole run) and `.md` (summary, your feedback and
   rating, each span with its tools, prompt and answer, the lessons with their why), next to the exe; a link shows it
   in its folder.
-- **View** (6th mode tab **Factory**): left the form and the runs (light: green pulsing while working, red when it
-  needs you or was stopped; repo · stage · cost). Right the run: title, repo · branch from base · steps · cost, the
-  note; **Stop**, **Draft PR anyway** (after failed checks - the description says what failed), **Open PR**, **Open in
+- **Continue** (a run that needs you or was stopped, not cleaned up): picks up where it stopped - locate, the
+  worktree and the plan are not redone when they exist (a plan that never finished is planned again in a fresh
+  session); otherwise a "Continue" turn in the run's session ("The run stopped at its <step> step: <why>. Continue the
+  task from where this worktree is now ..."), then verify, prove, review and the draft PR.
+- **Clean up** (a run that is not working) deletes its drafted data: its own worktree (`git worktree remove --force`,
+  else deleted, then `git worktree prune`) and that worktree's Claude session folder (`projects\<the worktree path with
+  every non-alphanumeric as '-'>`); for a run in the checkout, the checkout goes back to the developer's branch first
+  (refused while the run's changes are uncommitted); its local branch **only when it is on the remote** (`git
+  ls-remote --heads origin <branch>`; an unpushed branch keeps its commits); its evidence folder and exported trace
+  files. Never the developer's checkout or its files, its own session folder, its memory, or the remote branch and PR; the run's record and trace stay, marked cleaned up (no Continue, no
+  feedback). Before deleting, a bar shows what goes and its size, and in coral what would be lost - uncommitted
+  changes in the worktree, a branch never pushed - with **Delete it** / **Delete it anyway** and **Cancel**.
+  **Clean up all** does it for every run that is not working, naming the runs whose work would be lost.
+- **View** (6th mode tab **Factory**): left two tabs - **New task** (the form, on the left, open by default) and
+  **History (N)** (on the right; opened after starting a run): "N working · N to continue · N with a PR", **Clean up all**, and the runs
+  (light: green pulsing while working, red when it needs you or was stopped; repo · stage · cost). Right the run: title, repo · branch from base · steps · cost, the
+  note; **Stop**, **Continue**, **Clean up**, **Draft PR anyway** (after failed checks - the description says what failed), **Open PR**, **Open in
   Sessions** (continue the run's session yourself), **Open worktree**; the pipeline as chips (✓ done, violet now,
   coral where it stopped, faded to come); tabs **Log** (rendered like the chats) · **Evidence (N)** (the proof
   chosen and what was not produced; a card per piece: kind, ✓ pass / ✗ fail / – skipped, what it proves, its numbers,

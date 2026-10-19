@@ -88,8 +88,10 @@ model and Claude Code version. Filter by name, open any file.
 ## Factory - from task to draft PR
 
 Give the **Factory** a task - typed, a **Jira** issue or a **spec** document - and a folder: the repo, or just the
-folder where your repos are; Claude finds the one the task is for and learns how to build and test it. Each run
-works in its own git worktree and branch, so your checkout is never touched:
+folder where your repos are; Claude finds the one the task is for and learns how to build and test it. A run works
+in **your own checkout**, on a new branch from the base - no copy, your dependencies already installed - and switches
+back to your branch when it is done. When the checkout can't be used (uncommitted changes, another run in it), the run
+stops and asks: commit or stash and **Continue**, or **Use a separate worktree** beside the repo. The steps:
 **locate → plan → build → verify → prove → review → draft PR**. Claude understands the mission with your skills,
 MCP servers and tools, plans and builds; Dev break runs your verify command (or one Claude proposes) and Claude
 fixes until it passes; then Claude **runs the app** with the change and proves it with the evidence the feature
@@ -104,6 +106,15 @@ Tell it what you think: **send feedback to the run** ("also handle underscores")
 updates the draft PR; **rate the run** good or bad with a note; say **why** when you undo or dismiss a lesson. All of
 it goes into what the factory learns. Every run has a **Trace** - each step with its time, cost, tokens, every tool
 call and the exact prompt and answer - and **Export trace** saves it as JSON and Markdown.
+
+Every step is timed: a step or tool call that runs **over a minute** turns amber and you get a Windows notification;
+what was slow goes into what the factory learns, so the next run in that repo is faster.
+
+The **History** tab lists every run so far: **Continue** one that stopped or needs you, from where it stopped. **Clean
+up** deletes what a run left on disk - its worktree (if it had one) and that worktree's session files, its evidence,
+and its local branch once that is pushed - after showing what goes and warning about any work that would be lost (an
+unpushed branch keeps its commits); **Clean up all** does every finished run. Your checkout and its files, its
+sessions and memory, and the remote branches and PRs are never touched, and each run's record and trace stay.
 
 ## Save it to your Claude
 

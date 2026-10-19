@@ -36,10 +36,30 @@ public partial class FactoryView : UserControl
     /// <summary>"Open in Sessions": the run's Claude Code session, to continue it there.</summary>
     public event Action<SessionInfo>? OpenSessionRequested;
 
+    // the slow watchdog: every few seconds, a step or tool call that just passed a minute turns amber and is told
+    private readonly System.Windows.Threading.DispatcherTimer _watchdog = new() { Interval = TimeSpan.FromSeconds(5) };
+    private static readonly Brush Amber = Frozen(Color.FromRgb(0xE8, 0xA3, 0x3D));
+
     public FactoryView()
     {
         InitializeComponent();
         Factory.Changed += run => Dispatcher.BeginInvoke(() => Update(run));
+        _watchdog.Tick += (_, _) =>
+        {
+            foreach ((FactoryRun run, string text) in Factory.CheckSlow())
+            {
+                App.Alert("Dev break factory - slow step", $"{Short(run.Title, 60)}\n{text}");
+                Update(run);
+            }
+        };
+        _watchdog.Start();
+    }
+
+    private static Brush Frozen(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
     }
 
     /// <summary>Lists the runs and the repositories the first time the view is shown.</summary>
@@ -48,6 +68,7 @@ public partial class FactoryView : UserControl
         if (_started) return;
         _started = true;
         foreach (FactoryRun run in Factory.Runs) RunList.Items.Add(Row(run));
+        UpdateRunsSummary();
         IReadOnlyList<string> repos = await Task.Run(ClaudeProjects.GitRepos);
         foreach (string repo in repos.OrderBy(r => r, StringComparer.OrdinalIgnoreCase)) RepoBox.Items.Add(repo);
         if (AppSettings.Get("factoryRepo") is { Length: > 0 } last) RepoBox.Text = last;
@@ -122,6 +143,8 @@ public partial class FactoryView : UserControl
         FactoryRun run = Factory.Create(source, task, repo, baseBranch, VerifyBox.Text);
         RunList.Items.Insert(0, Row(run));
         RunList.SelectedIndex = 0;
+        RunsTab.IsChecked = true;
+        UpdateRunsSummary();
         TaskBox.Clear();
         await Factory.RunAsync(run);
     }
@@ -161,7 +184,107 @@ public partial class FactoryView : UserControl
     private void Update(FactoryRun run)
     {
         UpdateRow(run);
+        UpdateRunsSummary();
         if (run == _shown) Show(run);
+    }
+
+    private void LeftTab_Checked(object sender, RoutedEventArgs e)
+    {
+        if (FormArea == null || RunsArea == null) return;
+        FormArea.Visibility = NewTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        RunsArea.Visibility = RunsTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void UpdateRunsSummary()
+    {
+        List<FactoryRun> runs = Factory.Runs;
+        RunsTab.Content = runs.Count > 0 ? $"History ({runs.Count})" : "History";
+        int working = runs.Count(r => r.Working), waiting = runs.Count(r => !r.Working && r.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped);
+        int prs = runs.Count(r => r.PrUrl.Length > 0);
+        RunsSummary.Text = runs.Count == 0 ? "No runs yet." : $"{working} working · {waiting} to continue · {prs} with a PR";
+        CleanAllButton.IsEnabled = runs.Any(r => !r.Working && !r.CleanedUp);
+    }
+
+    // --- continue and clean up ---
+
+    private Func<Task>? _confirmed;
+
+    private async void Continue_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown != null) await Factory.ContinueAsync(_shown);
+    }
+
+    private async void Worktree_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown != null) await Factory.UseWorktreeAsync(_shown);
+    }
+
+    // a clean up shows what it deletes - and any work that would be lost - before it does
+    private async void Clean_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown is not { } run) return;
+        Factory.CleanupInfo info = await Factory.InspectAsync(run);
+        var lose = new List<string>();
+        if (info.Uncommitted > 0) lose.Add($"{info.Uncommitted} uncommitted change{(info.Uncommitted == 1 ? "" : "s")} in the worktree");
+        if (info.HasWorktree && !info.Pushed) lose.Add("the branch was never pushed (its commits stay in the local branch)");
+        string what = run.InCheckout
+            ? $"Delete this run's evidence and exported trace{(info.Pushed ? ", and its local branch (it is on the remote)" : "")} - {Factory.Size(info.Bytes)}. "
+            : $"Delete this run's worktree, evidence, exported trace and session files - {Factory.Size(info.Bytes)}. ";
+        AskConfirm(what + "The record and its trace stay; your checkout, its memory and the remote branch and PR are not touched." +
+            (lose.Count > 0 ? "\n⚠ This loses: " + string.Join("; ", lose) + "." : ""), lose.Count > 0, async () =>
+            {
+                string freed = await Factory.CleanUpAsync(run);
+                Show(run);
+                RunNote.Text = freed;
+            });
+    }
+
+    private async void CleanAll_Click(object sender, RoutedEventArgs e)
+    {
+        List<FactoryRun> runs = Factory.Runs.Where(r => !r.Working && !r.CleanedUp).ToList();
+        if (runs.Count == 0) return;
+        long bytes = 0;
+        var lose = new List<string>();
+        foreach (FactoryRun run in runs)
+        {
+            Factory.CleanupInfo info = await Factory.InspectAsync(run);
+            bytes += info.Bytes;
+            if (info.Uncommitted > 0 || (info.HasWorktree && !info.Pushed)) lose.Add(run.Title);
+        }
+        if (_shown == null && RunList.Items.Count > 0) RunList.SelectedIndex = 0;
+        AskConfirm($"Clean up {runs.Count} run{(runs.Count == 1 ? "" : "s")}: worktrees, evidence, exported traces and session files - {Factory.Size(bytes)}. " +
+            "The records stay; your checkouts, memory and remote branches and PRs are not touched." +
+            (lose.Count > 0 ? $"\n⚠ Uncommitted or unpushed work is lost in: {string.Join("; ", lose)}." : ""), lose.Count > 0, async () =>
+            {
+                foreach (FactoryRun run in runs) await Factory.CleanUpAsync(run);
+                if (_shown != null) Show(_shown);
+                RunNote.Text = $"Cleaned up {runs.Count} run{(runs.Count == 1 ? "" : "s")} - {Factory.Size(bytes)} freed.";
+            });
+    }
+
+    private void AskConfirm(string text, bool loses, Func<Task> act)
+    {
+        if (RunArea.Visibility != Visibility.Visible && RunList.Items.Count > 0) RunList.SelectedIndex = 0;
+        ConfirmText.Text = text;
+        ConfirmText.Foreground = (Brush)FindResource(loses ? "CoralInkBrush" : "InkBrush");
+        ConfirmButton.Content = loses ? "Delete it anyway" : "Delete it";
+        _confirmed = act;
+        ConfirmBar.Visibility = Visibility.Visible;
+    }
+
+    private async void Confirm_Click(object sender, RoutedEventArgs e)
+    {
+        ConfirmBar.Visibility = Visibility.Collapsed;
+        Func<Task>? act = _confirmed;
+        _confirmed = null;
+        if (act != null) await act();
+        UpdateRunsSummary();
+    }
+
+    private void CancelConfirm_Click(object sender, RoutedEventArgs e)
+    {
+        ConfirmBar.Visibility = Visibility.Collapsed;
+        _confirmed = null;
     }
 
     // --- the selected run ---
@@ -193,7 +316,7 @@ public partial class FactoryView : UserControl
             _shownEvidence = evidence;
             ShowEvidence(run);
         }
-        string trace = $"{run.Trace.Count}:{run.Trace.LastOrDefault()?.Tools.Count}:{run.Trace.LastOrDefault()?.Ended}:{string.Concat(run.Trace.LastOrDefault()?.Tools.Select(t => t.Result[0]) ?? [])}";
+        string trace = $"{run.Trace.Count(s => s.Slow) + run.Trace.Sum(s => s.Tools.Count(t => t.Slow))}:{run.Trace.Count}:{run.Trace.LastOrDefault()?.Tools.Count}:{run.Trace.LastOrDefault()?.Ended}:{string.Concat(run.Trace.LastOrDefault()?.Tools.Select(t => t.Result[0]) ?? [])}";
         if (trace != _shownTrace)
         {
             _shownTrace = trace;
@@ -204,10 +327,16 @@ public partial class FactoryView : UserControl
         SetLight(Light, run);
         RunTitle.Text = run.Title;
         RunMeta.Text = run.Repo.Length == 0 ? $"{run.Folder}   ·   finding the repo"
-            : $"{run.Repo}   ·   {run.Branch} from {run.BaseBranch}   ·   {run.Steps} steps   ·   ${run.Cost:0.00}";
+            : $"{run.Repo}{(run.InCheckout ? " (your checkout)" : run.UseWorktree ? " (separate worktree)" : "")}   ·   {run.Branch} from {run.BaseBranch}   ·   {run.Steps} steps   ·   ${run.Cost:0.00}";
         RunNote.Text = run.Working ? $"{StageName(run)}..." : run.Note.Replace("\r", "").Split('\n')[0].Trim();
         RunNote.Foreground = (Brush)FindResource(!run.Working && run.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped ? "CoralInkBrush" : "VioletBrush");
         StopButton.Visibility = run.Working ? Visibility.Visible : Visibility.Collapsed;
+        ContinueButton.Visibility = !run.Working && !run.CleanedUp && run.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped
+            ? Visibility.Visible : Visibility.Collapsed;
+        CleanButton.Visibility = !run.Working && !run.CleanedUp ? Visibility.Visible : Visibility.Collapsed;
+        // the run asked because the developer's checkout could not be used
+        WorktreeButton.Visibility = !run.Working && !run.CleanedUp && !run.InCheckout && !run.UseWorktree && run.Stage == FactoryStage.NeedsYou
+            && run.Note.Contains("Use a separate worktree", StringComparison.Ordinal) ? Visibility.Visible : Visibility.Collapsed;
         AnywayButton.Visibility = !run.Working && run.Stage == FactoryStage.NeedsYou && run.Plan.Length > 0 && run.PrUrl.Length == 0
             ? Visibility.Visible : Visibility.Collapsed;
         OpenPrButton.Visibility = run.PrUrl.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -242,11 +371,14 @@ public partial class FactoryView : UserControl
             bool now = run.Working && run.Stage == stage;
             bool failed = !run.Working && failedAt == stage;
             bool done = seen.Contains(stage) && !now && !failed;
+            // the step working now turns amber once it is slow
+            bool slow = now && run.Trace.LastOrDefault(s => s.Ended == null) is { Slow: true };
             var chip = new Border
             {
                 CornerRadius = new CornerRadius(12), Padding = new Thickness(10, 3, 10, 3), Margin = new Thickness(0, 0, 6, 4),
                 BorderThickness = new Thickness(1.5), BorderBrush = (Brush)FindResource("InkBrush"),
-                Background = now ? (Brush)FindResource("VioletBrush") : failed ? (Brush)FindResource("CoralBrush") : Brushes.Transparent,
+                ToolTip = slow ? "Slow: over a minute" : null,
+                Background = slow ? Amber : now ? (Brush)FindResource("VioletBrush") : failed ? (Brush)FindResource("CoralBrush") : Brushes.Transparent,
                 Opacity = done || now || failed ? 1 : 0.4,
                 Child = new TextBlock
                 {
@@ -292,7 +424,8 @@ public partial class FactoryView : UserControl
             int index = i;
             var header = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 13 };
             header.Inlines.Add(new Run($"{span.Started:HH:mm:ss}  ") { FontFamily = mono, FontSize = 12, Foreground = soft });
-            header.Inlines.Add(new Run(span.Title) { FontWeight = FontWeights.Bold, Foreground = span.Error.Length > 0 ? coral : (Brush)FindResource("InkBrush") });
+            header.Inlines.Add(new Run(span.Title) { FontWeight = FontWeights.Bold, Foreground = span.Error.Length > 0 ? coral : span.Slow ? Amber : (Brush)FindResource("InkBrush") });
+            if (span.Slow || span.Tools.Any(t => t.Slow)) header.Inlines.Add(new Run("  ⏱ slow") { FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Amber });
             var stats = new List<string> { span.Kind, Factory.Duration(span) };
             if (span.Cost > 0) stats.Add($"${span.Cost:0.00}");
             if (span.InputTokens + span.OutputTokens > 0) stats.Add($"{Tokens(span.InputTokens)} in / {Tokens(span.OutputTokens)} out");
@@ -326,6 +459,9 @@ public partial class FactoryView : UserControl
             line.Inlines.Add(new Run(tool.Name) { FontWeight = FontWeights.Bold, Foreground = accent });
             if (tool.Detail.Length > 0) line.Inlines.Add(new Run("  " + tool.Detail) { Foreground = soft });
             line.Inlines.Add(new Run("  " + tool.Result) { FontWeight = FontWeights.SemiBold, Foreground = tool.Result is "ok" or "running" ? soft : coral });
+            // how long it took, amber when it was slow
+            if (tool.Ended is { } ended) line.Inlines.Add(new Run($"  {(ended - tool.At).TotalSeconds:0.#} s") { Foreground = tool.Slow ? Amber : soft, FontWeight = tool.Slow ? FontWeights.Bold : FontWeights.Normal });
+            else if (tool.Slow) line.Inlines.Add(new Run("  running over a minute") { Foreground = Amber, FontWeight = FontWeights.Bold });
             panel.Children.Add(line);
         }
         panel.Children.Add(TextFold("Prompt", span.Prompt, mono));
