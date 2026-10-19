@@ -39,6 +39,26 @@ public partial class SessionsView : UserControl
     public SessionsView()
     {
         InitializeComponent();
+        SetupArea.BackRequested += () => ShowSetup(false);
+        SetupArea.UseRequested += text =>
+        {
+            ShowSetup(false);
+            InputBox.Text = text;
+            InputBox.CaretIndex = text.Length;
+            InputBox.Focus();
+        };
+    }
+
+    private void Setup_Click(object sender, RoutedEventArgs e) => ShowSetup(SetupArea.Visibility != Visibility.Visible);
+
+    // the setup of the open session's folder in place of the chat, or the chat again
+    private void ShowSetup(bool show)
+    {
+        if (show && _current == null) return;
+        SetupArea.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        ChatArea.Visibility = show ? Visibility.Collapsed : Visibility.Visible;
+        SetupButton.Content = show ? "Chat" : "Setup";
+        if (show) SetupArea.Show(_current!.Info.Folder);
     }
 
     /// <summary>Lists the sessions the first time the view is shown.</summary>
@@ -127,7 +147,8 @@ public partial class SessionsView : UserControl
         SessionFolder.Text = open.Info.Folder + "   ·   session " + open.Info.Id;
         Transcript.Document = open.Document;
         ShowLatest(open);
-        CopyResumeButton.IsEnabled = OpenFolderButton.IsEnabled = true;
+        CopyResumeButton.IsEnabled = OpenFolderButton.IsEnabled = SetupButton.IsEnabled = true;
+        ShowSetup(false);
         UpdateRunning();
         InputBox.Focus();
     }

@@ -66,7 +66,7 @@ public static class CodeRenderer
     private static readonly Regex SqlTokens = new(@"(?<comment>--[^\n]*|/\*[\s\S]*?\*/)|(?<string>" + Strings + ")" + Rest, RegexOptions.Compiled);
     private static readonly Regex HashCommentTokens = new(@"(?<comment>#[^\n]*)|(?<string>" + Strings + ")" + Rest, RegexOptions.Compiled);
 
-    public static FlowDocument Render(string text)
+    public static FlowDocument Render(string text, bool softWrap = false)
     {
         var document = new FlowDocument
         {
@@ -74,17 +74,18 @@ public static class CodeRenderer
             FontFamily = ProseFont,
             TextAlignment = TextAlignment.Left,
         };
-        Append(document, text);
+        Append(document, text, softWrap);
         return document;
     }
 
     /// <summary>Adds rendered text to the end of an existing document (the chat adds one message at a time).</summary>
-    public static void Append(FlowDocument document, string text)
+    /// <param name="softWrap">Markdown files: a single line break inside a paragraph is a space.</param>
+    public static void Append(FlowDocument document, string text, bool softWrap = false)
     {
         int at = 0;
         foreach (Match fence in Fence.Matches(text))
         {
-            AddProse(document, text[at..fence.Index]);
+            AddProse(document, text[at..fence.Index], softWrap);
             string language = fence.Groups[1].Value.ToLowerInvariant();
             string code = fence.Groups[2].Value.TrimEnd();
             // a ```mermaid block is drawn as a diagram; one it cannot read stays code
@@ -98,7 +99,7 @@ public static class CodeRenderer
             }
             at = fence.Index + fence.Length;
         }
-        AddProse(document, text[at..]);
+        AddProse(document, text[at..], softWrap);
     }
 
     private static readonly Regex Heading = new(@"^\s{0,3}(#{1,4})\s+(.+)$", RegexOptions.Compiled);
@@ -115,7 +116,7 @@ public static class CodeRenderer
     /// Prose with the Markdown Claude writes: "#" headings, "- " / "1. " lists (lines that follow an item without a
     /// marker continue it), and inline code, bold, italic and links (which open in the browser).
     /// </summary>
-    private static void AddProse(FlowDocument document, string prose)
+    private static void AddProse(FlowDocument document, string prose, bool softWrap)
     {
         foreach (string block in Regex.Split(prose.Trim(), @"\n\s*\n"))
         {
@@ -154,8 +155,9 @@ public static class CodeRenderer
                 }
                 else if (paragraph != null)
                 {
-                    // a line that continues the paragraph or list item above
-                    paragraph.Inlines.Add(new LineBreak());
+                    // a line that continues the paragraph or list item above: a line break in a chat answer, a space
+                    // in a markdown file (its lines are wrapped by hand)
+                    paragraph.Inlines.Add(softWrap ? new Run(" ") : new LineBreak());
                     AddInline(paragraph, line.Trim());
                 }
                 else
