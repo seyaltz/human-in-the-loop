@@ -155,8 +155,10 @@ public static class QuestionGenerator
         Answer their latest message directly and concisely (usually under 150 words). Go deeper, give examples,
         or correct them when they are wrong. When they ask what it means for their own work, products or platform,
         answer in terms of what is known about them below.
-        Format lightly, it is rendered: short paragraphs, "- " or "1. " lists, **bold** for the key point; no headings
-        and no tables. Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
+        Start with the direct answer in one or two sentences, then the details. Keep it clean: short paragraphs, a list
+        only when there are several parallel points, **bold** only for the one key point, at most one code block unless
+        more are really needed, no repeating the question, no closing summary. It is rendered: "- " / "1. " lists and
+        **bold** work; no headings and no tables. Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
         When the developer attached images, read each one with your Read tool before you answer.
         {Diagrams}
         """;

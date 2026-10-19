@@ -313,9 +313,11 @@ started in a folder or continued, worked in like the CLI, and continuable with `
 - **View** (5th mode tab **Sessions**, wide): left a card "your Claude Code, here" / Sessions with **New session...**
   (a folder picker, `OpenFolderDialog`; the new session gets a fresh id and stays at the top of the list), **Refresh**,
   and the list (title, folder name · "N min/h/d ago", the folder as tooltip). Right: the title, "<folder> · session
-  <id>", **Copy resume command** (`cd "<folder>"; claude --resume <id>`) and **Open folder**; the transcript (You /
-  Claude rendered by `CodeRenderer` - formatting and diagrams -, tool steps in mono with a violet "⚙ <tool>", the done
-  line, errors in coral); the input (Enter sends), Send, Stop, "Claude is working... (N steps)" and the note "Claude
+  <id>", **Copy resume command** (`cd "<folder>"; claude --resume <id>`) and **Open folder**; the transcript as in
+  every chat (`Turns`): one CLAUDE label per turn with its text under it, tool steps in a row folded into one
+  `Expander` line "⚙ N steps · last: <tool> <detail>" that opens to list them (mono, tool name in violet), the done
+  line, errors in coral. While a turn runs on screen the view goes to the start of the reply once and stays; a
+  session opens at the start of its latest reply; the input (Enter sends), Send, Stop, "Claude is working... (N steps)" and the note "Claude
   may edit files and run commands in this folder.". Every opened session keeps its transcript, and a running turn
   keeps going while another session is on screen. After a new session's first turn the list refreshes.
 
@@ -447,6 +449,15 @@ A `UserControl` with a `ScrollViewer`, built in code by `Refresh()`:
 - "Weakest topics - asked more often until they improve": the 5 topics with the lowest average checked score, with
   "asked xN.N" (their weight), or "Check a few answers to find your weak spots."
 
+## How a conversation reads (`Turns.cs`)
+
+The same in every chat (discussions and sessions): the developer's message in a tinted section (violet tint, a 3 px
+violet left edge, a small "YOU" label); Claude's answer under a small coral "CLAUDE" label, plain; 18 px between
+turns. A new answer is scrolled to **its start** (after layout, the label's position is brought to the top), not to
+the bottom - it is read from the top. The discussion prompts ask Claude to start with the direct answer in one or two
+sentences, then details: short paragraphs, a list only for several parallel points, bold only for the one key point,
+at most one code block unless needed, no repeating the question, no closing summary.
+
 ## Discussion panel (`ChatPanel`)
 
 A `UserControl` shown in the window's side panel - no separate window. Built for a quiz question, a lesson or a TL;DR
@@ -479,6 +490,10 @@ unanswered message from history.
   (word before `(`) `#DCDCAA`, plain `#D4D4D4`. Token regexes for C-like languages (java, js/ts, c#, kotlin...),
   SQL (case-insensitive keywords, `--` comments) and hash-comment languages (bash, python, yaml...).
 - Inline `` `code` `` → code font in `#C7254E`. Everything else plain text.
+- Fenced code is a **code card** (a `BlockUIContainer`): a header with "<language> · N lines", **Copy** (copies the
+  code; "Copied ✓") and, for code over 12 lines, **Show all N lines** / **Hide**; such code starts folded to its
+  first 6 lines with a fade at the bottom. The buttons are plain text on the dark card (their label is their
+  accessible name).
 - ```` ```mermaid ```` blocks are drawn as diagrams (`DiagramRenderer`, native WPF, no packages), in the notebook
   colours, inside a card, scaled down to fit (never up); a block it cannot read stays a code block.
   - `flowchart LR|TD` (also `graph`): nodes `id`, `id[box]`, `id(round)` / `id([stadium])`, `id{decision}` (lime
