@@ -151,13 +151,23 @@ public static class QuestionGenerator
     }
 
     // what every discussion's system prompt says about how to answer
-    private const string HowToAnswer = """
+    private const string HowToAnswer = $"""
         Answer their latest message directly and concisely (usually under 150 words). Go deeper, give examples,
         or correct them when they are wrong. When they ask what it means for their own work, products or platform,
         answer in terms of what is known about them below.
         Format lightly, it is rendered: short paragraphs, "- " or "1. " lists, **bold** for the key point; no headings
         and no tables. Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
         When the developer attached images, read each one with your Read tool before you answer.
+        {Diagrams}
+        """;
+
+    /// <summary>When and how Claude may draw: Dev break renders these two Mermaid kinds as real diagrams.</summary>
+    public const string Diagrams = """
+        When a picture explains it better than words - a flow, an architecture, a sequence of calls between services -
+        draw one small diagram as a ```mermaid block, as in a good tutorial: either "flowchart LR" (or TD) with short
+        node labels (id[box], id([start/end]), id{decision}, id[(database)]) and arrows (-->, -.->, ==>, -->|label|),
+        or "sequenceDiagram" with participants and messages (->> request, -->> reply, Note over A,B: text). At most 10
+        nodes, labels of a few words, no styling. No diagram when the answer is short or a picture adds nothing.
         """;
 
     // the user turn of every discussion: the talk so far; the item itself is in the system prompt
