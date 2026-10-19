@@ -322,6 +322,18 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   session opens at the start of its latest reply; the input (Enter sends), Send, Stop, "Claude is working... (N steps)" and the note "Claude
   may edit files and run commands in this folder.". Every opened session keeps its transcript, and a running turn
   keeps going while another session is on screen. After a new session's first turn the list refreshes.
+- **Lights**: a dot before the session in the list (9 px) and before the title in its pane (11 px): green `#2EB85C`,
+  pulsing (opacity 1 - 0.35, 0.8 s, forever), while a turn runs; red `#E5482E` when its last turn ended with an error
+  or was stopped; none when idle. Tooltip "Claude is working (N steps)" / "The last turn failed or was stopped".
+- **Split** (a pill toggle next to "Sessions"): two panes side by side (`SessionPane`, equal width), each with its own
+  header, Setup, transcript, input, Send and Stop; turns run in both at once. The active pane has a violet outline;
+  clicking or typing in a pane makes it active, and the list selection follows it. Picking a session opens it in the
+  active pane; if it is already in a pane, that pane becomes active (a session is in at most one pane - its
+  `FlowDocument` can belong to one `RichTextBox`). Turning Split on widens the window to the work area. Each pane has a
+  close button (split only): one pane again, keeping the other pane's session. Turning Split off keeps the active
+  pane's session.
+- State (`SessionState`): per session - transcript document, running turn, steps, failed, reply start, step group, the
+  pane showing it - with a `Changed` event the panes and the list lights follow.
 
 ### Setup (`CliSetup.cs`, `SetupPanel`)
 

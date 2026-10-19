@@ -5,16 +5,48 @@
         >
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="320" />
+            <ColumnDefinition Width="300" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
         <!-- the sessions: a new one in a folder, or one to continue -->
-        <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,18,4" Padding="14,14,8,10">
+        <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,16,4" Padding="14,14,8,10">
             <DockPanel>
                 <StackPanel DockPanel.Dock="Top" Margin="2,0,6,10">
                     <TextBlock Text="your Claude Code, here" Style="{StaticResource HandNote}" FontSize="19" />
-                    <TextBlock Text="Sessions" Style="{StaticResource Heading}" FontSize="22" Margin="0,2,0,10" />
+                    <DockPanel Margin="0,2,0,10">
+                        <!-- a pill like the mode tabs, dark when on -->
+                        <ToggleButton x:Name="SplitButton" DockPanel.Dock="Right" Content="Split" Height="32" Padding="14,0"
+                                      FontSize="13.5" FontWeight="SemiBold" Cursor="Hand" VerticalAlignment="Center"
+                                      ToolTip="Two sessions side by side" Checked="Split_Changed" Unchecked="Split_Changed">
+                            <ToggleButton.Style>
+                                <Style TargetType="ToggleButton">
+                                    <Setter Property="Foreground" Value="{StaticResource InkBrush}" />
+                                    <Setter Property="Background" Value="Transparent" />
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ToggleButton">
+                                                <Border CornerRadius="16" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"
+                                                        BorderBrush="{StaticResource InkBrush}" BorderThickness="1.5">
+                                                    <ContentPresenter VerticalAlignment="Center" />
+                                                </Border>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource VioletTintBrush}" />
+                                        </Trigger>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource InkBrush}" />
+                                            <Setter Property="Foreground" Value="White" />
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ToggleButton.Style>
+                        </ToggleButton>
+                        <TextBlock Text="Sessions" Style="{StaticResource Heading}" FontSize="22" />
+                    </DockPanel>
                     <DockPanel>
                         <Button x:Name="RefreshListButton" DockPanel.Dock="Right" Content="Refresh" Style="{StaticResource SecondaryButton}"
                                 Margin="8,0,0,0" Click="RefreshList_Click" />
@@ -28,63 +60,14 @@
             </DockPanel>
         </Border>
 
-        <!-- the open session -->
-        <ContentControl Grid.Column="1" Style="{StaticResource ShadowCard}" Padding="20,16,16,14">
-          <Grid>
-            <local:SetupPanel x:Name="SetupArea" Visibility="Collapsed" />
-            <DockPanel x:Name="ChatArea">
-                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top">
-                        <Button x:Name="SetupButton" Content="Setup" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
-                                IsEnabled="False" Click="Setup_Click"
-                                ToolTip="Memory, skills, plugins, MCP servers and agents Claude Code has in this folder" />
-                        <Button x:Name="CopyResumeButton" Content="Copy resume command" Style="{StaticResource SecondaryButton}"
-                                Margin="0,0,8,0" IsEnabled="False" Click="CopyResume_Click"
-                                ToolTip="Continue this session in a terminal with the claude CLI" />
-                        <Button x:Name="OpenFolderButton" Content="Open folder" Style="{StaticResource SecondaryButton}"
-                                IsEnabled="False" Click="OpenFolder_Click" />
-                    </StackPanel>
-                    <StackPanel>
-                        <TextBlock x:Name="SessionTitle" Style="{StaticResource Heading}" FontSize="20" Text="Pick a session" />
-                        <TextBlock x:Name="SessionFolder" Style="{StaticResource Eyebrow}" Margin="0,4,0,0" TextWrapping="Wrap"
-                                   Text="Continue one on the left, or start a new one in a folder. Claude works there with your full setup - memory, skills, plugins, hooks - and full access, like your CLI." />
-                    </StackPanel>
-                </DockPanel>
-
-                <DockPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top" Margin="10,0,0,0">
-                        <Button x:Name="StopButton" Content="Stop" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
-                                IsEnabled="False" Click="Stop_Click" />
-                        <Button x:Name="SendButton" Style="{StaticResource PrimaryButton}" IsEnabled="False"
-                                AutomationProperties.Name="Send" Click="Send_Click">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="Send" VerticalAlignment="Center" />
-                                <Path Data="{StaticResource ArrowIcon}" Style="{StaticResource IconPath}" Stroke="White"
-                                      StrokeThickness="2.2" Width="16" Height="16" Margin="8,0,0,0" />
-                            </StackPanel>
-                        </Button>
-                    </StackPanel>
-                    <StackPanel>
-                        <TextBlock x:Name="WorkingText" Style="{StaticResource HandNote}" FontSize="19" Margin="2,0,0,4"
-                                   Visibility="Collapsed" />
-                        <TextBox x:Name="InputBox" Style="{StaticResource NotebookBox}" MinHeight="64" MaxHeight="160"
-                                 TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
-                                 VerticalContentAlignment="Top" IsEnabled="False" AutomationProperties.Name="Your message"
-                                 PreviewKeyDown="InputBox_PreviewKeyDown" />
-                        <TextBlock Text="Enter to send, Shift+Enter for a new line. Claude may edit files and run commands in this folder."
-                                   Style="{StaticResource Caption}" FontSize="11.5" Margin="2,6,0,0" />
-                    </StackPanel>
-                </DockPanel>
-
-                <Grid>
-                    <RichTextBox x:Name="Transcript" Style="{StaticResource ReadingBox}" FontSize="14.5" />
-                    <StackPanel x:Name="Loading" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed">
-                        <ProgressBar IsIndeterminate="True" Width="220" Margin="0,0,0,10" />
-                        <TextBlock Text="Reading the session..." Style="{StaticResource Caption}" HorizontalAlignment="Center" />
-                    </StackPanel>
-                </Grid>
-            </DockPanel>
-          </Grid>
-        </ContentControl>
+        <!-- one pane, or two side by side -->
+        <Grid x:Name="Panes" Grid.Column="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition x:Name="SecondColumn" Width="0" />
+            </Grid.ColumnDefinitions>
+            <local:SessionPane x:Name="PaneA" Grid.Column="0" />
+            <local:SessionPane x:Name="PaneB" Grid.Column="1" Margin="14,0,0,0" Visibility="Collapsed" />
+        </Grid>
     </Grid>
 </UserControl>
