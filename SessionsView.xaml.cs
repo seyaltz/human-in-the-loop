@@ -21,6 +21,7 @@ public partial class SessionsView : UserControl
     private readonly Dictionary<string, SessionState> _sessions = [];
     private readonly Dictionary<string, Ellipse> _lights = [];
     private IReadOnlyList<SessionInfo> _listed = [];
+    private readonly HashSet<string> _collapsed = new(StringComparer.OrdinalIgnoreCase);
     private SessionPane _active;
     private bool _split;
     private bool _started;
@@ -134,7 +135,9 @@ public partial class SessionsView : UserControl
         {
             foreach (IGrouping<string, SessionInfo> folder in _listed.GroupBy(s => s.Folder.TrimEnd('\\'), StringComparer.OrdinalIgnoreCase))
             {
-                SessionList.Items.Add(FolderHeader(folder.Key, folder.Count()));
+                bool collapsed = _collapsed.Contains(folder.Key);
+                SessionList.Items.Add(FolderHeader(folder.Key, folder.Count(), collapsed));
+                if (collapsed) continue;
                 foreach (SessionInfo session in folder) SessionList.Items.Add(Row(session, inFolder: true));
             }
         }
@@ -150,13 +153,25 @@ public partial class SessionsView : UserControl
     private ListBoxItem? RowOf(string? id) =>
         SessionList.Items.Cast<ListBoxItem>().FirstOrDefault(i => i.Tag is SessionInfo s && s.Id == id);
 
-    // a folder's name and how many sessions it has; not selectable
-    private ListBoxItem FolderHeader(string folder, int count)
+    // a folder's name and how many sessions it has; not selectable - a click folds or unfolds its sessions
+    private ListBoxItem FolderHeader(string folder, int count, bool collapsed)
     {
         var text = new TextBlock { Margin = new Thickness(2, 12, 4, 2), TextTrimming = TextTrimming.CharacterEllipsis };
+        text.Inlines.Add(new Run(collapsed ? "▸ " : "▾ ") { FontSize = 12, Foreground = (Brush)FindResource("VioletBrush") });
         text.Inlines.Add(new Run(System.IO.Path.GetFileName(folder)) { FontWeight = FontWeights.Bold, FontSize = 13 });
         text.Inlines.Add(new Run($"  ·  {count}") { FontSize = 11.5, Foreground = (Brush)FindResource("InkSoftBrush") });
-        return new ListBoxItem { Content = text, ToolTip = folder, Focusable = false, IsHitTestVisible = false };
+        var header = new ListBoxItem
+        {
+            Content = text, ToolTip = folder + (collapsed ? "\nClick to show its sessions" : "\nClick to fold its sessions"),
+            Focusable = false, Cursor = System.Windows.Input.Cursors.Hand,
+        };
+        header.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            e.Handled = true;
+            if (!_collapsed.Remove(folder)) _collapsed.Add(folder);
+            FillList();
+        };
+        return header;
     }
 
     private ListBoxItem Row(SessionInfo session, bool inFolder = false)
