@@ -51,7 +51,8 @@ rather than invent a link). Every topic is prepared in the background when the a
 
 **Discuss** opens a chat with Claude on the right of the same window - on a quiz question (it knows the question, the
 model answer, your answer and your score), on a lesson (the lesson and its check question) or on a TL;DR. Each
-question, lesson and topic keeps its own conversation while you move around.
+question, lesson and topic keeps its own conversation while you move around. Answers are formatted (lists, bold,
+code, links), and you can **paste a screenshot** (Ctrl+V) or drop an image into the message - Claude reads it.
 
 Claude can **look at your machine, read-only**, so answers are about your real code rather than guesses: it can read
 and search the folders you work in with Claude Code, search the web, and run only a short list of read-only commands

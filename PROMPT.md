@@ -158,8 +158,10 @@ feedback, plain text. Reply format `SCORE: <0-10>` then `FEEDBACK:` + text. Pars
 Three kinds, one shape. The CLI keeps no session, so every turn sends everything, split in two:
 - **System prompt** (the context): a friendly senior-engineer tutor persona; the shared rules ("answer their latest
   message directly and concisely, usually under 150 words; go deeper, give examples, or correct them; when they ask
-  what it means for their own work, products or platform, answer in terms of what is known about them; plain text, no
-  markdown headings or bold; code in fenced blocks with the language, short names in backticks"); the knowledge block;
+  what it means for their own work, products or platform, answer in terms of what is known about them; format lightly,
+  it is rendered: short paragraphs, "- " or "1. " lists, **bold** for the key point, no headings and no tables; code in
+  fenced blocks with the language, short names in backticks; when the developer attached images, read each one with
+  the Read tool before answering"); the knowledge block;
   the machine notes (below); then the item:
   - **quiz**: QUESTION, REFERENCE ANSWER, THE DEVELOPER'S OWN ANSWER (or "(none)") and ITS SCORE ("N/10 - feedback" or
     "(not checked yet)"). Answer and score are read at **every turn**, so a check done after the chat opened is known.
@@ -431,10 +433,21 @@ applies to your work, or check an idea."; TL;DR: "...about this TL;DR: what chan
 means for your stack."); an input box (Enter sends, Shift+Enter new line; do NOT name it `MessageBox`, it hides WPF's
 `MessageBox`), a Send button (accent), and "Claude is thinking..." while waiting. On error show it and drop the
 unanswered message from history.
+- **Images**: Ctrl+V with an image on the clipboard (saved as `%TEMP%\devbreak-images\pasted-<time>-<id>.png`) or with
+  image files, or image files dropped on the box (png, jpg, jpeg, gif, webp, bmp), are added to the next message: a
+  thumbnail row above the box, each with a × to take it out (plain-text paste is unchanged). Sending works with images
+  and no text. The transcript shows the images under "You"; the message Claude gets has
+  "[Attached image(s) - read with your Read tool: <paths>]" (the discussion's Read tool can read them; its working
+  folder is the temp folder). The hint under the box: "Enter to send, Shift+Enter for a new line, Ctrl+V or drop to add
+  an image".
 
 ## Code rendering (`CodeRenderer`)
 
 `Render(text)` → `FlowDocument` (Segoe UI, left aligned, not justified); `Append(document, text)` for the chat.
+- Prose takes the light Markdown Claude writes: `#`-`####` headings (bold, 17 / 15.5 pt); `- ` / `* ` / `• ` bullet and
+  `1. ` / `1) ` numbered lines as real WPF `List`s (Disc / Decimal; a line without a marker right after an item
+  continues it); inline `**bold**` (may hold inline code), `*italic*` / `_italic_`, `[text](https://...)` and bare
+  `https://` URLs as links that open in the browser (trailing punctuation stays text).
 - Fenced blocks ```` ```lang ```` → a dark box (`#1E1E1E`, Cascadia Mono / Consolas) coloured like VS Code Dark+:
   keywords `#569CD6`, strings `#CE9178`, comments `#6A9955`, numbers `#B5CEA8`, types (PascalCase) `#4EC9B0`, functions
   (word before `(`) `#DCDCAA`, plain `#D4D4D4`. Token regexes for C-like languages (java, js/ts, c#, kotlin...),
