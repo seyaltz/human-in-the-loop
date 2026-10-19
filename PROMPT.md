@@ -397,15 +397,25 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   4. **Verify**: Dev break runs the verify command itself (PowerShell in the worktree, both streams, 30 min max);
      on failure the session fixes it (the code, not the test) and it runs again, up to 3 fixes. No changed files stops
      the run.
-  4b. **Prove**: the session runs the change in the application - starts the app and the services it needs with the
-     machine's skills, MCP servers and tools, from the worktree; exercises what the task changed (a browser at the
-     sizes that matter for UI, the API for a service, its logs or a debugger for back-end behaviour); stops what it
-     started; saves evidence (screenshots, responses, log excerpts) into `<traces>\<id>-proof` (not the repo); ends
-     `PROOF: PASS`, `PROOF: FAIL <what>` or `PROOF: SKIPPED <why it cannot run here>`. FAIL goes back to the session
-     to fix, then verify and prove again, up to 3 fixes; no PROOF line stops the run. **Open evidence** opens the folder.
+  4b. **Prove**: the session proves the change - starts the app and the services it needs with the machine's skills,
+     MCP servers and tools, from the worktree; exercises what the task changed; stops what it started - and produces
+     **the proof the plan chose** for this feature. The plan ends with `EVIDENCE: <kinds>` from **screenshots** (the
+     running app at the sizes that matter, a "before" from the base commit in a separate worktree when it helps),
+     **video** (a short recording of the interaction), **red-green** (the new tests fail without the change and pass
+     with it, both outputs), **coverage** (of the changed lines, with the uncovered ones), **mutation** (scoped to the
+     changed files - the score and surviving mutants), **crap** (complexity and coverage of the changed methods),
+     **api**, **logs**, **trace**, **perf**, **other** - the repo's own tools first, a missing one run without adding
+     it to the repo's dependencies, a kind that cannot be produced marked skipped with why, never invented. The files
+     go into `<traces>\<id>-proof` (not the repo) with a manifest `evidence.json`: one entry per piece -
+     `kind`, `file`, `proves`, `result` (pass / fail / skipped), `detail`. The turn ends `PROOF: PASS`, `PROOF: FAIL
+     <what>` or `PROOF: SKIPPED <why>`. Dev break reads the manifest and logs it with the planned kinds not produced.
+     FAIL goes back to the session to fix, then verify and prove again, up to 3 fixes; no PROOF line stops the run.
+     **Open evidence** opens the folder.
   5. **Review**: a fresh `claude -p` that can only read (`--tools Read,Grep,Glob`) gets the task, the plan, the
      diff against the base commit and **the evidence** - the verify command's exit code and output end (run by Dev
-     break on that worktree) and the app check - and is told to judge it rather than ask for runs it cannot do; it
+     break on that worktree), the proof planned, the manifest (and what was planned but not produced) and the app
+     check - and is told to judge it rather than ask for runs it cannot do, weak or missing proof being a real
+     problem; it
      replies `VERDICT: PASS` or `FIX` with findings; FIX goes back to the session, then verify, prove and review
      again, up to 2 review rounds.
   6. **Draft PR**: only now may the session publish - until here every turn runs with `--disallowedTools` for
@@ -448,7 +458,10 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   needs you or was stopped; repo · stage · cost). Right the run: title, repo · branch from base · steps · cost, the
   note; **Stop**, **Draft PR anyway** (after failed checks - the description says what failed), **Open PR**, **Open in
   Sessions** (continue the run's session yourself), **Open worktree**; the pipeline as chips (✓ done, violet now,
-  coral where it stopped, faded to come); tabs **Log** (rendered like the chats) · **Trace (N)** (a fold per span:
+  coral where it stopped, faded to come); tabs **Log** (rendered like the chats) · **Evidence (N)** (the proof
+  chosen and what was not produced; a card per piece: kind, ✓ pass / ✗ fail / – skipped, what it proves, its numbers,
+  an image shown (click to open), **Open <file>** for a video, report or any file, a note when the file is missing) ·
+  **Trace (N)** (a fold per span:
   "time title kind · duration · $cost · Nk in / Nk out · N tools · N denied · ✗ error", opening to its tool calls and
   folded Prompt and Answer boxes to read and copy; opened spans stay open while it updates) · **Learned (N)** (the
   lesson cards with their state, buttons and why), **Export trace**; at the bottom the rating row and the feedback box

@@ -128,6 +128,7 @@
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
                         <RadioButton x:Name="LogTab" Content="Log" GroupName="RunTab" Style="{StaticResource PillRadio}" IsChecked="True" Checked="RunTab_Checked" />
                         <RadioButton x:Name="TraceTab" Content="Trace" GroupName="RunTab" Style="{StaticResource PillRadio}" Margin="6,0,0,0" Checked="RunTab_Checked" />
+                        <RadioButton x:Name="EvidenceTab" Content="Evidence" GroupName="RunTab" Style="{StaticResource PillRadio}" Margin="6,0,0,0" Checked="RunTab_Checked" />
                         <RadioButton x:Name="LessonsTab" Content="Learned" GroupName="RunTab" Style="{StaticResource PillRadio}" Margin="6,0,0,0" Checked="RunTab_Checked" />
                         <Button x:Name="ExportButton" Content="Export trace" Style="{StaticResource SecondaryButton}" Height="32" Padding="12,0"
                                 Margin="12,0,0,0" Click="Export_Click" ToolTip="Saves the whole run as .json and .md in the traces folder next to Dev break" />
@@ -139,6 +140,9 @@
                         <RichTextBox x:Name="LogBox" Style="{StaticResource ReadingBox}" FontSize="13.5" AutomationProperties.Name="Run log" />
                         <ScrollViewer x:Name="TraceArea" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
                             <StackPanel x:Name="TraceList" Margin="0,0,8,0" />
+                        </ScrollViewer>
+                        <ScrollViewer x:Name="EvidenceArea" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                            <StackPanel x:Name="EvidenceList" Margin="0,0,8,0" />
                         </ScrollViewer>
                         <ScrollViewer x:Name="LessonsArea" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
                             <StackPanel x:Name="LessonList" Margin="0,0,8,0" />
