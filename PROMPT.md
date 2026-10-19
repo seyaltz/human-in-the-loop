@@ -410,7 +410,9 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      again, up to 2 review rounds.
   6. **Draft PR**: only now may the session publish - until here every turn runs with `--disallowedTools` for
      `git push` and `gh pr create` (Bash and PowerShell; verified: the deny holds under bypass). It commits, pushes
-     and opens a draft PR into the base with the machine's own tools (any host), the description saying how it was
+     and opens a draft PR into the base with the machine's own tools (any host) - the git host's official MCP server
+     first when one is connected and signed in (Atlassian's for Bitbucket, GitHub's for GitHub), else its CLI or tools,
+     saying which it used - the description saying how it was
      verified (and the app check, describing its evidence without committing it; the app is not run again unless
      a check on the machine requires it), linked to the Jira issue; the PR is the URL on the reply's **last line**
      only (a link elsewhere in the reply is not a PR).
