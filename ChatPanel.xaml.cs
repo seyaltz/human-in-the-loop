@@ -203,17 +203,7 @@ public partial class ChatPanel : UserControl
         ThinkingText.Visibility = thinking ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void AddMessage(bool isMine, string text)
-    {
-        FlowDocument document = Transcript.Document;
-        document.Blocks.Add(new Paragraph(new Run(isMine ? "You" : "Claude") { FontWeight = FontWeights.Bold })
-        {
-            Margin = new Thickness(0, document.Blocks.Count == 0 ? 0 : 10, 0, 2),
-            Foreground = (System.Windows.Media.Brush)FindResource(isMine ? "VioletBrush" : "CoralInkBrush"),
-        });
-        CodeRenderer.Append(document, text);
-        Transcript.ScrollToEnd();
-    }
+    private void AddMessage(bool isMine, string text) => Turns.Add(Transcript, isMine, text, this);
 
     /// <summary>The images of a sent message, in the transcript under it.</summary>
     private void AddImages(IEnumerable<string> files)

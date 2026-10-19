@@ -51,7 +51,8 @@ rather than invent a link). Every topic is prepared in the background when the a
 
 **Discuss** opens a chat with Claude on the right of the same window - on a quiz question (it knows the question, the
 model answer, your answer and your score), on a lesson (the lesson and its check question) or on a TL;DR. Each
-question, lesson and topic keeps its own conversation while you move around. Answers are formatted like a tutorial -
+question, lesson and topic keeps its own conversation while you move around. A new answer opens at its first line,
+leads with the direct answer, and long code comes folded with **Show all** and **Copy**. Answers are formatted like a tutorial -
 lists, bold, code, links and **diagrams** (flowcharts and sequence diagrams, drawn in the app) when a picture helps -
 and you can **paste a screenshot** (Ctrl+V) or drop an image into the message - Claude reads it. Lessons draw a
 diagram too where it explains the idea better.
@@ -70,7 +71,7 @@ The **Sessions** tab works like Claude Code itself: **New session...** picks a f
 pick one of your recent sessions (the same ones your CLI keeps, with their titles) to see what was said and carry
 on. Claude runs with your full setup - `CLAUDE.md`, memory, skills, plugins, hooks, MCP servers - and **full
 access** in that folder (it may edit files and run commands without asking, like the CLI in bypass mode), and you
-see its steps as it works. **Stop** ends a turn. **Copy resume command** gives `claude --resume <id>` to continue
+see its steps as it works (folded into one line you can open). **Stop** ends a turn. **Copy resume command** gives `claude --resume <id>` to continue
 the same session in a terminal.
 
 ## Save it to your Claude

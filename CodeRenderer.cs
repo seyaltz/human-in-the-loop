@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 
@@ -28,6 +29,7 @@ public static class CodeRenderer
     private static readonly Brush TypeColor = Frozen(0x4E, 0xC9, 0xB0);
     private static readonly Brush FunctionColor = Frozen(0xDC, 0xDC, 0xAA);
     private static readonly Brush InlineCodeColor = Frozen(0x3A, 0x22, 0xC4);
+    private static readonly Brush HeaderColor = Frozen(0x9A, 0xA0, 0xC8);
 
     private static readonly Regex Fence = new(@"```[ \t]*(\w*)[^\n]*\n([\s\S]*?)```", RegexOptions.Compiled);
 
@@ -225,18 +227,117 @@ public static class CodeRenderer
         return link;
     }
 
-    private static Paragraph CodeBlock(string code, string language)
+    // code longer than this starts folded to a short preview
+    private const int FoldAbove = 12;
+    private const int PreviewLines = 6;
+    private const double CodeLineHeight = 20;
+
+    /// <summary>
+    /// A code card: a header with the language, the line count, Copy and - for long code - Show all / Hide, over the
+    /// highlighted code. Long code starts folded to its first lines, so an answer is not a wall of code.
+    /// </summary>
+    private static BlockUIContainer CodeBlock(string code, string language)
     {
-        var paragraph = new Paragraph
+        var text = new TextBlock
         {
-            Background = CodeBackground,
-            Foreground = PlainColor,
-            FontFamily = CodeFont,
-            FontSize = 13,
-            Padding = new Thickness(14, 12, 14, 12),
-            Margin = new Thickness(0, 2, 0, 12),
-            LineHeight = 20,
+            Foreground = PlainColor, FontFamily = CodeFont, FontSize = 13, LineHeight = CodeLineHeight,
+            LineStackingStrategy = LineStackingStrategy.BlockLineHeight, TextWrapping = TextWrapping.Wrap,
+            Padding = new Thickness(14, 10, 14, 12),
         };
+        Highlight(text.Inlines, code, language);
+
+        int lines = code.Replace("\r", "").Split('\n').Length;
+        bool folds = lines > FoldAbove;
+        double folded = PreviewLines * CodeLineHeight + 10;
+        var body = new Grid { MaxHeight = folds ? folded : double.PositiveInfinity, ClipToBounds = true };
+        body.Children.Add(text);
+        // the folded preview fades out at the bottom
+        var fade = new Border
+        {
+            Height = 36, VerticalAlignment = VerticalAlignment.Bottom, IsHitTestVisible = false,
+            Background = new LinearGradientBrush(Color.FromArgb(0, 0x16, 0x1A, 0x33), Color.FromArgb(0xF0, 0x16, 0x1A, 0x33), 90),
+            Visibility = folds ? Visibility.Visible : Visibility.Collapsed,
+        };
+        body.Children.Add(fade);
+
+        var header = new DockPanel { Margin = new Thickness(14, 7, 8, 0), LastChildFill = false };
+        var label = new TextBlock
+        {
+            Text = (language.Length > 0 ? language : "code") + $"  ·  {lines} line{(lines == 1 ? "" : "s")}",
+            FontFamily = CodeFont, FontSize = 11.5, Foreground = HeaderColor, VerticalAlignment = VerticalAlignment.Center,
+        };
+        header.Children.Add(label);
+        Button copy = HeaderButton("Copy");
+        copy.Click += (_, _) =>
+        {
+            try
+            {
+                Clipboard.SetText(code);
+                copy.Content = "Copied ✓";
+            }
+            catch (System.Runtime.InteropServices.ExternalException)
+            {
+                copy.Content = "Clipboard busy";
+            }
+        };
+        DockPanel.SetDock(copy, Dock.Right);
+        header.Children.Add(copy);
+        if (folds)
+        {
+            Button toggle = HeaderButton($"Show all {lines} lines");
+            toggle.Click += (_, _) =>
+            {
+                bool open = double.IsPositiveInfinity(body.MaxHeight);
+                body.MaxHeight = open ? folded : double.PositiveInfinity;
+                fade.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+                toggle.Content = open ? $"Show all {lines} lines" : "Hide";
+            };
+            DockPanel.SetDock(toggle, Dock.Right);
+            header.Children.Add(toggle);
+        }
+
+        var card = new StackPanel();
+        card.Children.Add(header);
+        card.Children.Add(body);
+        return new BlockUIContainer(new Border
+        {
+            Background = CodeBackground, CornerRadius = new CornerRadius(10), Child = card,
+        })
+        { Margin = new Thickness(0, 4, 0, 14) };
+    }
+
+    private static Button HeaderButton(string text)
+    {
+        var button = new Button
+        {
+            Content = text, FontSize = 11.5, Foreground = HeaderColor, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+            Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(4, 0, 0, 0), Cursor = System.Windows.Input.Cursors.Hand,
+            Template = PlainButtonTemplate,
+        };
+        return button;
+    }
+
+    // a button that is just its text (the app's button styles are for light backgrounds)
+    private static readonly ControlTemplate PlainButtonTemplate = MakePlainTemplate();
+
+    private static ControlTemplate MakePlainTemplate()
+    {
+        var border = new FrameworkElementFactory(typeof(Border));
+        border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
+        border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
+        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
+        var content = new FrameworkElementFactory(typeof(ContentPresenter));
+        border.AppendChild(content);
+        var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
+        var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+        hover.Setters.Add(new Setter(Control.BackgroundProperty, Frozen(0x2A, 0x2F, 0x55)));
+        template.Triggers.Add(hover);
+        template.Seal();
+        return template;
+    }
+
+    private static void Highlight(InlineCollection inlines, string code, string language)
+    {
         (Regex tokens, HashSet<string> keywords) = language switch
         {
             "sql" or "postgres" or "postgresql" or "plsql" or "tsql" => (SqlTokens, SqlKeywords),
@@ -247,17 +348,16 @@ public static class CodeRenderer
         int at = 0;
         foreach (Match token in tokens.Matches(code))
         {
-            AddPlain(paragraph, code[at..token.Index]);
+            AddRun(inlines, code[at..token.Index], null);
             Brush? color = token.Groups["comment"].Success ? CommentColor
                 : token.Groups["string"].Success ? StringColor
                 : token.Groups["annotation"].Success ? FunctionColor
                 : token.Groups["number"].Success ? NumberColor
                 : WordColor(token.Value, code, token.Index + token.Length, keywords);
-            AddRun(paragraph, token.Value, color);
+            AddRun(inlines, token.Value, color);
             at = token.Index + token.Length;
         }
-        AddPlain(paragraph, code[at..]);
-        return paragraph;
+        AddRun(inlines, code[at..], null);
     }
 
     private static Brush? WordColor(string word, string code, int after, HashSet<string> keywords)
@@ -269,18 +369,16 @@ public static class CodeRenderer
         return null;
     }
 
-    private static void AddPlain(Paragraph paragraph, string text) => AddRun(paragraph, text, null);
-
-    private static void AddRun(Paragraph paragraph, string text, Brush? color)
+    private static void AddRun(InlineCollection inlines, string text, Brush? color)
     {
         string[] lines = text.Replace("\r", "").Split('\n');
         for (int i = 0; i < lines.Length; i++)
         {
-            if (i > 0) paragraph.Inlines.Add(new LineBreak());
+            if (i > 0) inlines.Add(new LineBreak());
             if (lines[i].Length == 0) continue;
             var run = new Run(lines[i]);
             if (color != null) run.Foreground = color;
-            paragraph.Inlines.Add(run);
+            inlines.Add(run);
         }
     }
 

@@ -27,6 +27,9 @@ public partial class SessionsView : UserControl
         public FlowDocument Document = CodeRenderer.Render("");
         public CancellationTokenSource? Running;
         public int Steps;
+        // where this turn's reply starts, and the tool steps being folded together
+        public Block? ReplyStart;
+        public StepGroup? Group;
     }
 
     private readonly Dictionary<string, Open> _open = [];
@@ -113,7 +116,7 @@ public partial class SessionsView : UserControl
         if (_current == open)
         {
             Loading.Visibility = Visibility.Collapsed;
-            Transcript.ScrollToEnd();
+            ShowLatest(open);
         }
     }
 
@@ -123,10 +126,17 @@ public partial class SessionsView : UserControl
         SessionTitle.Text = open.Info.Title;
         SessionFolder.Text = open.Info.Folder + "   ·   session " + open.Info.Id;
         Transcript.Document = open.Document;
-        Transcript.ScrollToEnd();
+        ShowLatest(open);
         CopyResumeButton.IsEnabled = OpenFolderButton.IsEnabled = true;
         UpdateRunning();
         InputBox.Focus();
+    }
+
+    // a session opens at the start of its latest reply (or the end, before any reply)
+    private void ShowLatest(Open open)
+    {
+        if (open.ReplyStart != null) Turns.ScrollToStart(Transcript, open.ReplyStart);
+        else Transcript.ScrollToEnd();
     }
 
     private void UpdateRunning()
@@ -198,41 +208,97 @@ public partial class SessionsView : UserControl
         if (_current != null) Process.Start(new ProcessStartInfo(_current.Info.Folder) { UseShellExecute = true });
     }
 
+    /// <summary>
+    /// Adds a step of a session to its transcript, the way it reads best: the developer's message in its box; one
+    /// "Claude" label per turn, its text under it; tool steps in a row folded into one line that opens; the done line.
+    /// While a turn runs on screen, the view goes to the start of Claude's reply once and then stays, so it is read
+    /// from the top while the steps keep counting.
+    /// </summary>
     private void Add(Open open, SessionEntry entry, bool scroll)
     {
         FlowDocument document = open.Document;
+        Brush Res(string key) => (Brush)FindResource(key);
         switch (entry.Kind)
         {
             case SessionEntryKind.You:
+                Turns.Add(document, isMine: true, entry.Text, this);
+                open.ReplyStart = null;
+                open.Group = null;
+                if (scroll) Transcript.ScrollToEnd();
+                return;
             case SessionEntryKind.Claude:
-                bool mine = entry.Kind == SessionEntryKind.You;
-                document.Blocks.Add(new Paragraph(new Run(mine ? "You" : "Claude") { FontWeight = FontWeights.Bold })
-                {
-                    Margin = new Thickness(0, document.Blocks.Count == 0 ? 0 : 12, 0, 2),
-                    Foreground = (Brush)FindResource(mine ? "VioletBrush" : "CoralInkBrush"),
-                });
+                StartReply(open, scroll);
                 CodeRenderer.Append(document, entry.Text);
-                break;
+                open.Group = null;
+                return;
             case SessionEntryKind.Tool:
-                int space = entry.Text.IndexOf("  ", StringComparison.Ordinal);
-                var step = new Paragraph { Margin = new Thickness(0, 0, 0, 3), FontFamily = (FontFamily)FindResource("MonoFont"), FontSize = 12 };
-                step.Inlines.Add(new Run("⚙ " + (space > 0 ? entry.Text[..space] : entry.Text)) { FontWeight = FontWeights.Bold, Foreground = (Brush)FindResource("VioletBrush") });
-                if (space > 0) step.Inlines.Add(new Run("  " + entry.Text[(space + 2)..]) { Foreground = (Brush)FindResource("InkSoftBrush") });
-                document.Blocks.Add(step);
-                break;
+                StartReply(open, scroll);
+                if (open.Group == null)
+                {
+                    open.Group = new StepGroup(Res("VioletBrush"), Res("InkSoftBrush"), (FontFamily)FindResource("MonoFont"));
+                    document.Blocks.Add(open.Group.Block);
+                }
+                open.Group.Add(entry.Text);
+                return;
             case SessionEntryKind.Done:
+                open.Group = null;
                 document.Blocks.Add(new Paragraph(new Run("✓ done · " + entry.Text))
                 {
-                    FontSize = 11.5, Foreground = (Brush)FindResource("InkSoftBrush"), Margin = new Thickness(0, 4, 0, 4),
+                    FontSize = 11.5, Foreground = Res("InkSoftBrush"), Margin = new Thickness(0, 2, 0, 8),
                 });
-                break;
+                return;
             case SessionEntryKind.Error:
+                open.Group = null;
                 document.Blocks.Add(new Paragraph(new Run(entry.Text))
                 {
-                    Foreground = (Brush)FindResource("CoralInkBrush"), Margin = new Thickness(0, 4, 0, 4),
+                    Foreground = Res("CoralInkBrush"), Margin = new Thickness(0, 4, 0, 8),
                 });
-                break;
+                return;
         }
-        if (scroll) Transcript.ScrollToEnd();
+    }
+
+    // the "Claude" label, once per turn; on screen, the view goes to it the first time
+    private void StartReply(Open open, bool scroll)
+    {
+        if (open.ReplyStart != null) return;
+        open.ReplyStart = Turns.Add(open.Document, isMine: false, "", this);
+        if (scroll) Turns.ScrollToStart(Transcript, open.ReplyStart);
+    }
+
+    /// <summary>Tool steps in a row, folded into one line ("⚙ 3 steps · last: ...") that opens to list them.</summary>
+    private sealed class StepGroup
+    {
+        private readonly StackPanel _steps = new() { Margin = new Thickness(20, 4, 0, 2) };
+        private readonly TextBlock _header;
+        private readonly Brush _accent, _soft;
+        private readonly FontFamily _mono;
+        private int _count;
+
+        public BlockUIContainer Block { get; }
+
+        public StepGroup(Brush accent, Brush soft, FontFamily mono)
+        {
+            _accent = accent;
+            _soft = soft;
+            _mono = mono;
+            _header = new TextBlock { FontFamily = mono, FontSize = 12, Foreground = soft, TextTrimming = TextTrimming.CharacterEllipsis };
+            var expander = new Expander { Header = _header, Content = _steps, IsExpanded = false };
+            Block = new BlockUIContainer(expander) { Margin = new Thickness(0, 2, 0, 8) };
+        }
+
+        public void Add(string step)
+        {
+            int space = step.IndexOf("  ", StringComparison.Ordinal);
+            string tool = space > 0 ? step[..space] : step;
+            string detail = space > 0 ? step[(space + 2)..] : "";
+            var line = new TextBlock { FontFamily = _mono, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 1) };
+            line.Inlines.Add(new Run(tool) { FontWeight = FontWeights.Bold, Foreground = _accent });
+            if (detail.Length > 0) line.Inlines.Add(new Run("  " + detail) { Foreground = _soft });
+            _steps.Children.Add(line);
+            _count++;
+            _header.Inlines.Clear();
+            _header.Inlines.Add(new Run($"⚙ {_count} step{(_count == 1 ? "" : "s")}") { FontWeight = FontWeights.Bold, Foreground = _accent });
+            _header.Inlines.Add(new Run($"  ·  last: {tool}{(detail.Length > 0 ? " " + detail : "")}"));
+        }
     }
 }
