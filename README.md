@@ -4,7 +4,8 @@
 
 A Windows tray app that gives your brain a break from working with AI. In the last 5 minutes of every hour it pops up
 a coding / architecture question - heavier in the morning, lighter later in the day. Answer it (optional) and get a
-score, see the answer, and discuss it in a follow-up chat.
+score, see the answer, and discuss it with Claude right beside it. A **Learn** path turns your topics into courses, and
+a daily **TL;DR** keeps you on top of what changed in each of them.
 
 ## Look
 
@@ -37,6 +38,37 @@ open it: the theory, real examples, pitfalls and a check question. When the app 
 your next lesson in the background (about 2 minutes the first time), so they open instantly. Mark lessons as done to track your progress.
 Courses, lessons and progress are saved in `learn\` next to the exe.
 
+## TL;DR
+
+The **TL;DR** tab gives every topic a daily briefing that Claude writes from the web: **Latest releases**, **Hot
+topics**, **Quirks**, **Senior must-know** and **Optimization** - one sub-tab each, plus **Sources** with every page
+it used as a link. Each item is explained: the **context**, **why** it happened, what it is **good for**, and **for
+you** - what it means for your own stack (from "Knowledge about me" below; it says so when an item does not apply,
+rather than invent a link). Every topic is prepared in the background when the app starts and rewritten once a day;
+**Refresh** rewrites it now. Saved in `tldr\` next to the exe.
+
+## Discuss
+
+**Discuss** opens a chat with Claude on the right of the same window - on a quiz question (it knows the question, the
+model answer, your answer and your score), on a lesson (the lesson and its check question) or on a TL;DR. Each
+question, lesson and topic keeps its own conversation while you move around.
+
+Claude can **look at your machine, read-only**, so answers are about your real code rather than guesses: it can read
+and search the folders you work in with Claude Code, search the web, and run only a short list of read-only commands
+(`git log/status/diff/show`, Gradle `dependencies`/`dependencyInsight`, `dir`), for the git repos it finds in those
+folders. It cannot edit files or run anything else.
+
+Gear menu -> **Claude in discussions**: **Clean** (default; only "Knowledge about me") or **My Claude setup** (your
+own `CLAUDE.md`, memory, skills, hooks and MCP servers, as in your CLI - slower).
+
+## Save it to your Claude
+
+What you learn should not vanish: every TL;DR item has a **+ my Claude** button. Claude suggests which of your Claude
+Code projects it is useful for - as a **memory** note (a fact or gotcha, in that project's Claude Code memory) or as a
+**skill** (a procedure, in `<project>\.claude\skills`) - and drafts it with the source and date. Edit or untick each,
+then **Save selected**. Nothing is written before that, and nothing is ever overwritten. (For tests and demos,
+`DEVBREAK_CLAUDE_PROJECTS` points it at another projects folder.)
+
 ## Requirements
 
 - Windows 10/11
@@ -62,8 +94,8 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
 
 ## Knowledge about you (optional)
 
-The app itself is generic. To set questions in your own stack, pick a source in **Knowledge about me** - the
-dropdown at the top of the question window, or the tray menu (saved in `settings.json` next to the exe):
+The app itself is generic. To set questions, lessons, TL;DRs and discussions in your own stack, pick a source in
+**Knowledge about me** - the gear menu, or the tray menu (saved in `settings.json` next to the exe):
 
 - **From my Claude history** - once a day it reads the prompts you typed into Claude Code in the last 7 days
   (`%USERPROFILE%\.claude\projects`, your own prompts only, max 200) and asks Claude for a short summary of your stack
