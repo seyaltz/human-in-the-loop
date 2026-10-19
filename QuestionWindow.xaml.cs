@@ -265,7 +265,7 @@ public partial class QuestionWindow : Window
         TabState state = _tabs[Current];
         if (state.Chat == null)
         {
-            ChatPanel chat = new(state.Topic, state.Question!, state.Mine);
+            ChatPanel chat = new(state.Topic, state.Question!, () => state.Mine, () => state.Score);
             chat.CloseRequested += () =>
             {
                 state.Chat = null;
