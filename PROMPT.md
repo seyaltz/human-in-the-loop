@@ -337,6 +337,15 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   sessions, remembered while the app runs), the folder with the newest session first, and its
   sessions under it, newest first, indented, showing only "N min/h/d ago". Off: the flat list. Toggling rebuilds the
   rows from the last listing (no re-read); sessions started here and not yet listed stay at the top either way.
+- **Written titles** (`SessionTitles.cs`): a listed session with no `ai-title` line (its title is a `custom-title` -
+  often a clipped line of chat - or its first prompt) gets a title Claude writes, once: from its first 3 prompts (500
+  characters each) and its last answer (900), "Name the topic of this Claude Code session in a short title, 3 to 7
+  words, like a good email subject: what it is about, not how it started. Same language as the developer. Reply with
+  only the title." (`RunClaudeAsync`: no tools, no settings, no session saved). Quotes and markdown marks trimmed, the
+  first line, 90 characters. Kept in `session-titles.json` next to the app (id → title; the user's data, git-ignored)
+  and shown in place of the file's title from then on. After each listing the missing ones are written one at a time
+  in the background, each showing in its row and pane as it comes; a session with no prompt, or a failed call, is
+  skipped until the next run. Sessions with an `ai-title` keep it.
 - State (`SessionState`): per session - transcript document, running turn, steps, failed, reply start, step group, the
   pane showing it - with a `Changed` event the panes and the list lights follow.
 

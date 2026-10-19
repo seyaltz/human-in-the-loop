@@ -77,7 +77,8 @@ the same session in a terminal.
 A **light** shows each session's state at a glance, in the list and on its pane: **green** (pulsing) while Claude
 is working on it, **red** when its last turn failed or was stopped. **Split** puts two sessions side by side, each
 with its own chat and Stop, and both can work at the same time; pick a session in the list to open it in the
-outlined (active) pane. **By folder** groups the list under a header per folder; click a header to fold or unfold it.
+outlined (active) pane. **By folder** groups the list under a header per folder; click a header to fold or unfold it. A session Claude Code never gave a topic title (only a clipped line of chat)
+gets a short, clear one Claude writes once, in the background, kept next to the app.
 
 **Setup** shows what Claude Code has in that folder, the way the CLI sees it: your **memory** (the `CLAUDE.md`
 files that apply and your memory notes), **skills** (with what each does - **Use in this session** puts `/skill`

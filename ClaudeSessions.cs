@@ -10,8 +10,11 @@ using System.Threading.Tasks;
 
 namespace DevBreak;
 
-/// <summary>A Claude Code session on this machine: its id, the folder it works in, a title and when it was last used.</summary>
-public sealed record SessionInfo(string Id, string Folder, string Title, DateTime LastActive);
+/// <summary>
+/// A Claude Code session on this machine: its id, the folder it works in, a title and when it was last used, and
+/// whether Claude Code gave it a topic title (ai-title) - without one, Dev break has Claude write one.
+/// </summary>
+public sealed record SessionInfo(string Id, string Folder, string Title, DateTime LastActive, bool HasAiTitle = false);
 
 /// <summary>
 /// One line of a session's transcript: something the developer said, a tool step, a note Claude wrote while working,
@@ -49,8 +52,9 @@ public static class ClaudeSessions
                 (string? folder, string? firstPrompt) = Head(file.FullName);
                 if (folder == null || !Directory.Exists(folder)) continue;
                 if (Path.GetFullPath(folder).StartsWith(temp, StringComparison.OrdinalIgnoreCase)) continue;
-                string title = LastTitle(file.FullName) ?? firstPrompt ?? Path.GetFileName(folder);
-                sessions.Add(new SessionInfo(Path.GetFileNameWithoutExtension(file.Name), folder, Short(title, 90), file.LastWriteTime));
+                (string? last, bool hasAiTitle) = LastTitle(file.FullName);
+                string title = last ?? firstPrompt ?? Path.GetFileName(folder);
+                sessions.Add(new SessionInfo(Path.GetFileNameWithoutExtension(file.Name), folder, Short(title, 90), file.LastWriteTime, hasAiTitle));
             }
             catch (Exception)
             {
@@ -269,13 +273,14 @@ public static class ClaudeSessions
     }
 
     // the session's latest generated title, from the end of the file (titles are rewritten as the session goes on)
-    private static string? LastTitle(string file)
+    private static (string? Title, bool HasAiTitle) LastTitle(string file)
     {
         using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         long from = Math.Max(0, stream.Length - 256 * 1024);
         stream.Seek(from, SeekOrigin.Begin);
         using var reader = new StreamReader(stream);
         string? title = null;
+        bool ai = false;
         while (reader.ReadLine() is { } line)
         {
             if (!line.Contains("\"ai-title\"", StringComparison.Ordinal) && !line.Contains("\"custom-title\"", StringComparison.Ordinal)) continue;
@@ -284,14 +289,18 @@ public static class ClaudeSessions
                 using JsonDocument doc = JsonDocument.Parse(line);
                 foreach (string key in new[] { "customTitle", "aiTitle" })
                 {
-                    if (doc.RootElement.TryGetProperty(key, out JsonElement value) && value.GetString() is { Length: > 0 } v) title = v;
+                    if (doc.RootElement.TryGetProperty(key, out JsonElement value) && value.GetString() is { Length: > 0 } v)
+                    {
+                        title = v;
+                        ai |= key == "aiTitle";
+                    }
                 }
             }
             catch (JsonException)
             {
             }
         }
-        return title;
+        return (title, ai);
     }
 
     private static string Short(string text, int max) => text.Length <= max ? text : text[..(max - 1)] + "…";
