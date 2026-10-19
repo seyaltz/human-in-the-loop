@@ -16,7 +16,7 @@ namespace DevBreak;
 public enum FactorySource { Typed, Jira, Spec }
 
 /// <summary>Where a factory run is.</summary>
-public enum FactoryStage { Queued, Worktree, Plan, Build, Verify, Review, PullRequest, Learn, Done, NeedsYou, Stopped, Locate }
+public enum FactoryStage { Queued, Worktree, Plan, Build, Verify, Review, PullRequest, Learn, Done, NeedsYou, Stopped, Locate, Prove }
 
 /// <summary>One line of a run's log.</summary>
 public sealed class FactoryStep
@@ -102,6 +102,10 @@ public sealed class FactoryRun
     /// <summary>Why the run waits for the developer (NeedsYou), or how it ended.</summary>
     public string Note { get; set; } = "";
     public string Plan { get; set; } = "";
+    /// <summary>The last verify run: its exit code and the end of its output (the reviewer reads it).</summary>
+    public string VerifyResult { get; set; } = "";
+    /// <summary>What Claude saw when it ran the app with the change, ending PROOF: PASS / FAIL / SKIPPED.</summary>
+    public string Proof { get; set; } = "";
     public string Review { get; set; } = "";
     public string PrUrl { get; set; } = "";
     public double Cost { get; set; }
@@ -376,8 +380,11 @@ public static class Factory
             You are working in a fresh git worktree of {run.Repo}, on branch {run.Branch} (from {run.BaseBranch}).
             {task}
 
-            First, plan only - do not change any file yet. Learn how this repo is built, run and tested (its README,
-            build files and scripts), so the plan and the verify command fit it. If you cannot read the task, reply with one line:
+            First, understand the mission and plan - do not change any file yet. Use the skills, MCP servers and tools on
+            this machine that fit the task (ones that run the app or its services, read logs or data, inspect or debug a
+            running service) to see the current behaviour and where it lives, not only the code. Learn how this repo is
+            built, run and tested (its README, build files and scripts), so the plan and the verify command fit it, and
+            say how the change can be seen in the running app. If you cannot read the task, reply with one line:
             CANNOT_READ: <why>. Otherwise reply with a short title for the work on the first line (TITLE: <title>), then
             the plan as short numbered steps, naming the files you will change and the tests you will add or run.
             {verify}
@@ -409,12 +416,14 @@ public static class Factory
         return true;
     }
 
-    // verify, fixing up to MaxFixes times; then review, fixing what the reviewer finds, up to MaxReviews rounds
+    // verify, fixing up to MaxFixes times; prove it in the running app, fixing up to MaxFixes times; then review,
+    // fixing what the reviewer finds, up to MaxReviews rounds
     private static async Task<bool> CheckAsync(FactoryRun run, CancellationToken cancel)
     {
         for (int review = 1; ; review++)
         {
             if (!await VerifyAsync(run, cancel)) return false;
+            if (!await ProveAsync(run, cancel)) return false;
             Enter(run, FactoryStage.Review, $"A reviewer that can only read checks the change (round {review}).");
             (bool pass, string findings) = await ReviewAsync(run, cancel);
             run.Review = findings;
@@ -444,6 +453,7 @@ public static class Factory
             (int exit, string output) = await ShellAsync(run.Worktree, run.Verify, cancel);
             span.Error = exit == 0 ? "" : $"exit {exit}";
             Finish(run, span, $"exit {exit}\n{Tail(output, 20000)}");
+            run.VerifyResult = $"`{run.Verify}` exited {exit}. The end of its output:\n{Tail(output, 3000)}";
             Log(run, $"Verify exit {exit}:\n```\n{Tail(output, 3000)}\n```", ok: exit == 0);
             if (exit == 0) return true;
             if (attempt > MaxFixes) return Wait(run, $"The verify command still fails after {MaxFixes} fixes.");
@@ -457,6 +467,51 @@ public static class Factory
                 """, $"Fix verify failure {attempt}", cancel);
             if (error != null) return Wait(run, "The fix turn failed: " + error);
             Log(run, "Fix:\n" + answer);
+        }
+    }
+
+    /// <summary>Where a run's evidence goes (screenshots, responses, log excerpts): next to its exported trace.</summary>
+    public static string ProofDir(FactoryRun run) => Path.Combine(AppContext.BaseDirectory, "traces", run.Id + "-proof");
+
+    // the change in the running app: Claude starts what it needs, exercises what the task changed and saves the
+    // evidence; a failure goes back to Claude (then verify again), up to MaxFixes times; SKIPPED when it cannot run here
+    private static async Task<bool> ProveAsync(FactoryRun run, CancellationToken cancel)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            string dir = ProofDir(run);
+            Directory.CreateDirectory(dir);
+            Enter(run, FactoryStage.Prove, "Claude runs the app with the change and checks it works.");
+            (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
+                Now prove the change works in the running application, the way a developer would before opening a PR.
+                Start what it needs - the app and the services it depends on - with the skills, MCP servers and tools on
+                this machine, from this worktree. Exercise exactly what the task changed: in a browser for a UI change
+                (the sizes it matters at), by calling the API for a service, by reading its logs or attaching a debugger
+                for back-end behaviour. Stop what you started when you are done.
+                Save the evidence - screenshots, responses, log excerpts - into {dir}, not into the repo.
+                Do not commit or push. Reply with what you ran and what you saw, and end with exactly one line:
+                PROOF: PASS - it works as the task asks
+                PROOF: FAIL <what is wrong>
+                PROOF: SKIPPED <why it cannot be run on this machine>
+                """, $"Prove (attempt {attempt})", cancel);
+            if (error != null) return Wait(run, "The prove turn failed: " + error);
+            run.Proof = answer;
+            string verdict = Line(answer, "PROOF:") ?? "";
+            bool pass = verdict.StartsWith("PASS", StringComparison.OrdinalIgnoreCase);
+            bool skipped = verdict.StartsWith("SKIPPED", StringComparison.OrdinalIgnoreCase);
+            int files = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Count();
+            Log(run, $"Proof: {(verdict.Length > 0 ? verdict : "no verdict")} ({files} evidence file{(files == 1 ? "" : "s")})\n{answer}", ok: pass || skipped);
+            if (pass || skipped) return true;
+            if (verdict.Length == 0) return Wait(run, "Claude ended the app check without a PROOF: line.");
+            if (attempt > MaxFixes) return Wait(run, $"The app check still fails after {MaxFixes} fixes.");
+            Enter(run, FactoryStage.Build, $"Claude fixes what the app check found (fix {attempt} of {MaxFixes}).");
+            (string fix, string? fixError) = await TurnAsync(run, isNew: false, $"""
+                Running the app showed a problem: {verdict}
+                Find the cause and fix it. Do not commit or push. Reply with what you changed.
+                """, $"Fix app check {attempt}", cancel);
+            if (fixError != null) return Wait(run, "The fix turn failed: " + fixError);
+            Log(run, "Fix:\n" + fix);
+            if (!await VerifyAsync(run, cancel)) return false;
         }
     }
 
@@ -475,6 +530,13 @@ public static class Factory
             THE DIFF (against {run.BaseBranch}):
             {(diff.Length > 60000 ? diff[..60000] + "\n... (cut)" : diff)}
 
+            THE EVIDENCE - you can only read, so this is what was run for you:
+            The verify command, run by the tool itself on this exact worktree: {run.VerifyResult}
+            The check in the running app, by the coding agent:
+            {(run.Proof.Length > 0 ? Tail(run.Proof, 4000) : "(none)")}
+
+            Judge the evidence; do not ask for a command to be run that was run above, and do not report something only
+            because your read-only tools cannot see it (say "not verified" in a finding only when it really matters).
             Report only real problems: bugs, a requirement of the task that is missing, changes the task did not ask
             for, missing or weak tests, security issues. No style nits. Reply with VERDICT: PASS or VERDICT: FIX on the
             first line, then the findings as a short list (file:line - problem - what to do). PASS when nothing real is left.
@@ -496,9 +558,11 @@ public static class Factory
               {run.Review}
               """
             : $"""
-              The checks passed: `{run.Verify}` exited 0, and the reviewer passed the change. Review notes:
+              The checks passed: `{run.Verify}` exited 0, the app check said {Line(run.Proof, "PROOF:") ?? "nothing"}, and the
+              reviewer passed the change. Review notes:
               {run.Review}
               """;
+        checks += $"\nThe app check's evidence is in {ProofDir(run)} - describe it in the PR, do not commit it. The app was already run after the last change; do not run it again unless a check on this machine requires it.";
         string link = run.Source == FactorySource.Jira ? $" Link it to the Jira issue {run.Task} the way this repo does." : "";
         string todo = update
             ? $"""
@@ -924,6 +988,13 @@ public static class Factory
             if (s.Tools.Count > 0) md.AppendLine();
             md.AppendLine("Prompt:").AppendLine(Fence).AppendLine(s.Prompt.Trim()).AppendLine(Fence);
             md.AppendLine("Answer:").AppendLine(Fence).AppendLine(s.Answer.Trim()).AppendLine(Fence).AppendLine();
+        }
+        string proof = ProofDir(run);
+        if (Directory.Exists(proof) && Directory.EnumerateFiles(proof, "*", SearchOption.AllDirectories).Any())
+        {
+            md.AppendLine("## Evidence from the app").AppendLine();
+            foreach (string f in Directory.EnumerateFiles(proof, "*", SearchOption.AllDirectories)) md.AppendLine($"- {f}");
+            md.AppendLine();
         }
         md.AppendLine("## Learned").AppendLine();
         foreach (FactoryLesson l in run.Lessons)

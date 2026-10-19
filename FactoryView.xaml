@@ -84,6 +84,8 @@
                             <Button x:Name="OpenPrButton" Content="Open PR" Style="{StaticResource PrimaryButton}" Margin="0,0,8,6" Click="OpenPr_Click" />
                             <Button x:Name="SessionButton" Content="Open in Sessions" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6"
                                     Click="Session_Click" ToolTip="Continue this run's Claude Code session yourself" />
+                            <Button x:Name="ProofButton" Content="Open evidence" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6"
+                                    Click="Proof_Click" ToolTip="Screenshots, responses and logs from running the app with the change" />
                             <Button x:Name="FolderButton" Content="Open worktree" Style="{StaticResource SecondaryButton}" Margin="0,0,0,6"
                                     Click="Folder_Click" />
                         </WrapPanel>

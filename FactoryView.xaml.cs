@@ -21,7 +21,7 @@ namespace DevBreak;
 public partial class FactoryView : UserControl
 {
     private static readonly FactoryStage[] Stages =
-        [FactoryStage.Locate, FactoryStage.Worktree, FactoryStage.Plan, FactoryStage.Build, FactoryStage.Verify, FactoryStage.Review, FactoryStage.PullRequest, FactoryStage.Learn];
+        [FactoryStage.Locate, FactoryStage.Worktree, FactoryStage.Plan, FactoryStage.Build, FactoryStage.Verify, FactoryStage.Prove, FactoryStage.Review, FactoryStage.PullRequest, FactoryStage.Learn];
 
     private readonly Dictionary<string, (Ellipse Light, TextBlock Status)> _rows = [];
     private FactoryRun? _shown;
@@ -204,6 +204,9 @@ public partial class FactoryView : UserControl
             ? Visibility.Visible : Visibility.Collapsed;
         OpenPrButton.Visibility = run.PrUrl.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         SessionButton.Visibility = FolderButton.Visibility = Directory.Exists(run.Worktree) ? Visibility.Visible : Visibility.Collapsed;
+        string proof = Factory.ProofDir(run);
+        ProofButton.Visibility = Directory.Exists(proof) && Directory.EnumerateFiles(proof, "*", SearchOption.AllDirectories).Any()
+            ? Visibility.Visible : Visibility.Collapsed;
         SessionButton.IsEnabled = !run.Working;
         ShowPipeline(run);
         if (run.Log.Count != _shownLog)
@@ -500,6 +503,11 @@ public partial class FactoryView : UserControl
     private void Session_Click(object sender, RoutedEventArgs e)
     {
         if (_shown != null) OpenSessionRequested?.Invoke(new SessionInfo(_shown.SessionId, _shown.Worktree, _shown.Title, DateTime.Now, HasAiTitle: true));
+    }
+
+    private void Proof_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown != null && Directory.Exists(Factory.ProofDir(_shown))) Process.Start(new ProcessStartInfo(Factory.ProofDir(_shown)) { UseShellExecute = true });
     }
 
     private void Folder_Click(object sender, RoutedEventArgs e)
