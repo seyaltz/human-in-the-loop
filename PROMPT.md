@@ -389,19 +389,31 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      - the developer's checkout is never touched. A worktree shares its repo's Claude memory (verified: both report
      the same `memory_paths.auto`).
   2. **Plan**: a new Claude Code session in the worktree (as in Sessions: full setup, bypass) reads the task - Jira
-     and spec with the tools on the machine - learns how the repo is built, run and tested, and replies `TITLE:`, numbered steps and, when no verify command was
+     and spec with the tools on the machine - first understands the mission with the machine's skills, MCP servers
+     and tools (running the app or its services, reading logs or data, inspecting or debugging a running service),
+     learns how the repo is built, run and tested and how the change can be seen in the running app, and replies `TITLE:`, numbered steps and, when no verify command was
      given, `VERIFY: <command>`; `CANNOT_READ: <why>` stops the run.
   3. **Build**: the same session implements the plan and its tests, without committing or pushing.
   4. **Verify**: Dev break runs the verify command itself (PowerShell in the worktree, both streams, 30 min max);
      on failure the session fixes it (the code, not the test) and it runs again, up to 3 fixes. No changed files stops
      the run.
-  5. **Review**: a fresh `claude -p` that can only read (`--tools Read,Grep,Glob`) gets the task, the plan and the
-     diff against the base commit and replies `VERDICT: PASS` or `FIX` with findings; FIX goes back to the session,
-     then verify and review again, up to 2 review rounds.
+  4b. **Prove**: the session runs the change in the application - starts the app and the services it needs with the
+     machine's skills, MCP servers and tools, from the worktree; exercises what the task changed (a browser at the
+     sizes that matter for UI, the API for a service, its logs or a debugger for back-end behaviour); stops what it
+     started; saves evidence (screenshots, responses, log excerpts) into `<traces>\<id>-proof` (not the repo); ends
+     `PROOF: PASS`, `PROOF: FAIL <what>` or `PROOF: SKIPPED <why it cannot run here>`. FAIL goes back to the session
+     to fix, then verify and prove again, up to 3 fixes; no PROOF line stops the run. **Open evidence** opens the folder.
+  5. **Review**: a fresh `claude -p` that can only read (`--tools Read,Grep,Glob`) gets the task, the plan, the
+     diff against the base commit and **the evidence** - the verify command's exit code and output end (run by Dev
+     break on that worktree) and the app check - and is told to judge it rather than ask for runs it cannot do; it
+     replies `VERDICT: PASS` or `FIX` with findings; FIX goes back to the session, then verify, prove and review
+     again, up to 2 review rounds.
   6. **Draft PR**: only now may the session publish - until here every turn runs with `--disallowedTools` for
      `git push` and `gh pr create` (Bash and PowerShell; verified: the deny holds under bypass). It commits, pushes
      and opens a draft PR into the base with the machine's own tools (any host), the description saying how it was
-     verified, linked to the Jira issue; the last URL in its reply is the PR.
+     verified (and the app check, describing its evidence without committing it; the app is not run again unless
+     a check on the machine requires it), linked to the Jira issue; the PR is the URL on the reply's **last line**
+     only (a link elsewhere in the reply is not a PR).
   7. **Learn** (after every run that got a worktree, unless stopped): a `claude -p` without tools reads the task, the
      log and the repo's `MEMORY.md` and replies `LESSON: <memory|claude-md|hook|skill> | <name> | <description>` blocks
      (at most 4). **Memory** notes are saved at once into the repo's memory folder (from the init line), listed in
