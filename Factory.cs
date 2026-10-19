@@ -121,6 +121,8 @@ public sealed class FactoryRun
     /// <summary>Why the run waits for the developer (NeedsYou), or how it ended.</summary>
     public string Note { get; set; } = "";
     public string Plan { get; set; } = "";
+    /// <summary>A verify command used in this repo before: its environment and flags, for the plan to reuse.</summary>
+    public string VerifyHint { get; set; } = "";
     /// <summary>The last verify run: its exit code and the end of its output (the reviewer reads it).</summary>
     public string VerifyResult { get; set; } = "";
     /// <summary>What Claude saw when it ran the app with the change, ending PROOF: PASS / FAIL / SKIPPED.</summary>
@@ -129,6 +131,8 @@ public sealed class FactoryRun
     public List<string> EvidencePlan { get; set; } = [];
     /// <summary>The proof produced, read from the evidence manifest.</summary>
     public List<FactoryEvidence> Evidence { get; set; } = [];
+    /// <summary>What the task asked to be handed back (a curl, an answer, a link), ready to use - shown on top.</summary>
+    public string Result { get; set; } = "";
     public string Review { get; set; } = "";
     public string PrUrl { get; set; } = "";
     public double Cost { get; set; }
@@ -149,6 +153,11 @@ public sealed class FactoryRun
     public bool UseWorktree { get; set; }
     /// <summary>The branch (or commit) the developer's checkout was on, to switch back to when the run is done.</summary>
     public string ReturnTo { get; set; } = "";
+    /// <summary>
+    /// The developer's own uncommitted changes in their checkout when the run started (path → a fingerprint of its
+    /// content): never committed by the run; the run stops and asks when its change touches one of them.
+    /// </summary>
+    public Dictionary<string, string> LocalChanges { get; set; } = [];
 
     [System.Text.Json.Serialization.JsonIgnore] public CancellationTokenSource? Running { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public bool Working => Running != null;
@@ -186,6 +195,17 @@ public static class Factory
     private static readonly string StorePath = Path.Combine(AppContext.BaseDirectory, "factory.json");
     private static readonly string WorktreesDir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DevBreak", "worktrees");
+
+    // every turn: work only inside the run's folder; what must change outside it is the developer's to decide
+    private const string OutsideRule = """
+
+        Change files only inside this folder. Never change anything outside it - shared build homes (Gradle, Maven, npm
+        or Ivy settings), the developer's profile, tool or system settings - not even to make a command work. If the
+        work needs a change there, do not make it: end your reply with one line NEEDS_YOU: <what should change, where, and why>.
+        """;
+
+    /// <summary>Claude stopped to ask the developer (NEEDS_YOU, or the plan's questions): the run waits with the question.</summary>
+    private sealed class NeedsYouException(string message) : Exception(message);
 
     // before the checks pass, a run may not publish anything
     private static readonly string[] NoPublish =
@@ -284,6 +304,12 @@ public static class Factory
             if (!await PlanAsync(run, cancel)) return true;
             if (!await BuildAsync(run, cancel)) return true;
         }
+        else if (!run.Log.Any(s => s.Stage == FactoryStage.Build))
+        {
+            // it waited on the plan's questions: Continue goes with the suggested answers
+            Log(run, "Continue without answers: the plan's suggested answers are used.");
+            if (!await BuildAsync(run, cancel)) return true;
+        }
         else
         {
             Enter(run, FactoryStage.Build, $"Claude continues where the run stopped ({stoppedAt}).");
@@ -315,11 +341,7 @@ public static class Factory
         // uncommitted work of the run: in its worktree, or in the checkout while it is on the run's branch
         string? workDir = worktree ? run.Worktree
             : run.InCheckout && Directory.Exists(run.Repo) && await HeadAsync(run.Repo) == run.Branch ? run.Repo : null;
-        if (workDir != null)
-        {
-            (int code, string status) = await GitAsync(workDir, "status", "--porcelain");
-            if (code == 0) uncommitted = status.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
-        }
+        if (workDir != null) uncommitted = (await RunChangesAsync(run, workDir)).Count;
         if (run.Repo.Length > 0 && run.Branch.Length > 0 && Directory.Exists(run.Repo))
         {
             (int code, string heads) = await GitAsync(run.Repo, "ls-remote", "--heads", "origin", run.Branch);
@@ -432,6 +454,26 @@ public static class Factory
         run.Feedback.Add(new FactoryFeedback { At = DateTime.Now, Text = text.Trim() });
         if (!Directory.Exists(run.Worktree)) return Wait(run, "The run's worktree is gone, so the feedback has nowhere to go.");
         if (!await OnRunBranchAsync(run)) return true;
+        // nothing built yet: the feedback answers the plan's questions - the plan is updated, then built
+        if (!run.Log.Any(s => s.Stage == FactoryStage.Build))
+        {
+            Enter(run, FactoryStage.Plan, "Your answers: " + text.Trim());
+            (string plan, string? planError) = await TurnAsync(run, isNew: false, $"""
+                The developer answered the plan's questions:
+                {text.Trim()}
+
+                Update the plan with these answers. For any question the developer did not answer, use the answer you
+                suggested. Reply with the updated plan as numbered steps; add QUESTIONS: only for something the answers
+                made newly unclear or contradictory - not for questions they skipped. Do not change any file yet.
+                """, "Your answers", cancel);
+            if (planError != null) return Wait(run, "The answers turn failed: " + planError);
+            run.Plan = plan;
+            Log(run, "Plan:\n" + plan);
+            if (Questions(plan) is { Length: > 0 } open) throw new NeedsYouException("The plan still has questions for you:\n" + open);
+            if (!await BuildAsync(run, cancel)) return true;
+            if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
+            return true;
+        }
         Enter(run, FactoryStage.Build, "Your feedback: " + text.Trim());
         (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
             The developer looked at your change and says:
@@ -469,6 +511,10 @@ public static class Factory
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (NeedsYouException ex)
+        {
+            Wait(run, ex.Message);
         }
         catch (Exception ex)
         {
@@ -517,7 +563,8 @@ public static class Factory
             run.Repo = repo;
             return Wait(run, $"{repo} has no branch with a commit to start from (a new repo with nothing committed yet?). Commit first, or name the base branch.");
         }
-        if (run.Verify.Length == 0) run.Verify = AppSettings.Get("factoryVerify:" + repo.ToLowerInvariant()) ?? "";
+        // a verify command used here before is a hint (its environment and flags), not this change's test selection
+        if (run.Verify.Length == 0) run.VerifyHint = AppSettings.Get("factoryVerify:" + repo.ToLowerInvariant()) ?? "";
         run.Branch = $"devbreak/{Slug(run.Title)}-{run.Id}";
         Log(run, $"The repo: {repo} (base {run.BaseBranch}).");
         return true;
@@ -586,6 +633,15 @@ public static class Factory
         }
         Enter(run, FactoryStage.Worktree, $"Working in your checkout {run.Repo}, on a new branch {run.Branch} from {run.BaseBranch}.");
         if (await CheckoutProblemAsync(run, "start") is { } problem) return Wait(run, problem);
+        // the developer's own local changes (temp files, local settings) stay theirs: noted with a fingerprint each
+        run.LocalChanges = [];
+        foreach (string path in await ChangedPathsAsync(run.Repo)) run.LocalChanges[path] = Fingerprint(run.Repo, path);
+        if (run.LocalChanges.Count > 0)
+        {
+            Log(run, $"Your {run.LocalChanges.Count} local change{(run.LocalChanges.Count == 1 ? "" : "s")} stay yours - not committed, and the run " +
+                "stops and asks if the change needs to touch them: " + string.Join(", ", run.LocalChanges.Keys.Take(20)) +
+                (run.LocalChanges.Count > 20 ? ", ..." : ""));
+        }
         run.ReturnTo = await HeadAsync(run.Repo);
         (exit, output) = branchExists
             ? await GitSpanAsync(run, run.Repo, "switch", run.Branch)
@@ -597,21 +653,62 @@ public static class Factory
         return true;
     }
 
-    // why the developer's checkout cannot be used now - another run in it, or uncommitted changes (untracked files
-    // too: the PR step commits everything) - as a question; null when it can
+    // why the developer's checkout cannot be used now - another run working in it, or git cannot read it - as a
+    // question; null when it can. The developer's own local changes do not block a run (they stay theirs).
     private static async Task<string?> CheckoutProblemAsync(FactoryRun run, string what)
     {
         if (Runs.FirstOrDefault(r => r != run && r.Working && r.InCheckout && r.Repo.Equals(run.Repo, StringComparison.OrdinalIgnoreCase)) is { } other)
         {
-            return $"Another run (\"{other.Title}\") is working in your checkout {run.Repo}. Wait for it and press Continue - " +
-                "or press Use a separate worktree to run this one beside it.";
+            return $"Another run (\"{other.Title}\") is working in your checkout {run.Repo}, so this one cannot {what} there. " +
+                "Wait for it and press Continue - or press Use a separate worktree to run this one beside it.";
         }
         (int code, string status) = await GitAsync(run.Repo, "status", "--porcelain");
-        int changes = code == 0 ? status.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length : 0;
-        if (code != 0) return $"git cannot read your checkout {run.Repo}: {status.Trim()}";
-        if (changes == 0) return null;
-        return $"Your checkout {run.Repo} has {changes} uncommitted change{(changes == 1 ? "" : "s")}, so the run cannot {what} there. " +
-            "Commit or stash them and press Continue - or press Use a separate worktree to leave your checkout as it is.";
+        return code == 0 ? null : $"git cannot read your checkout {run.Repo}: {status.Trim()}";
+    }
+
+    // the files with uncommitted changes in a folder (modified, staged, new, deleted; the new name of a rename)
+    private static async Task<List<string>> ChangedPathsAsync(string dir)
+    {
+        (int code, string status) = await GitAsync(dir, "status", "--porcelain", "-z", "--untracked-files=all");
+        if (code != 0) return [];
+        var paths = new List<string>();
+        string[] entries = status.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < entries.Length; i++)
+        {
+            if (entries[i].Length < 4) continue;
+            paths.Add(entries[i][3..].Replace('\\', '/'));
+            // a rename or copy is followed by its old name
+            if (entries[i][0] is 'R' or 'C') i++;
+        }
+        return paths;
+    }
+
+    // what a file holds now, as a fingerprint - to see whether the run changed a file the developer had changed
+    private static string Fingerprint(string dir, string path)
+    {
+        string file = Path.Combine(dir, path.Replace('/', '\\'));
+        if (!File.Exists(file)) return "missing";
+        using var stream = File.OpenRead(file);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream));
+    }
+
+    // the run's own uncommitted changes: what changed in its folder, besides the developer's local changes it left alone
+    private static async Task<List<string>> RunChangesAsync(FactoryRun run, string dir) =>
+        (await ChangedPathsAsync(dir)).Where(p => !run.LocalChanges.ContainsKey(p) || Fingerprint(dir, p) != run.LocalChanges[p]).ToList();
+
+    // the developer's local changes the run's change has touched (their content is not what it was)
+    private static List<string> TouchedLocalChanges(FactoryRun run) =>
+        run.InCheckout ? run.LocalChanges.Where(kv => Fingerprint(run.Repo, kv.Key) != kv.Value).Select(kv => kv.Key).ToList() : [];
+
+    // stops the run when its change touched the developer's own local changes - they decide what happens to them
+    private static bool LocalChangesTouched(FactoryRun run)
+    {
+        List<string> touched = TouchedLocalChanges(run);
+        if (touched.Count == 0) return false;
+        Wait(run, $"The change touched {(touched.Count == 1 ? "a file that holds" : "files that hold")} your own local changes: {string.Join(", ", touched)}. " +
+            "The run does not commit your changes, so decide: undo the run's edits there and press Continue - or commit or " +
+            "stash your own changes first, or run it in a separate worktree.");
+        return true;
     }
 
     // the branch the checkout is on, or its commit when it is detached
@@ -639,8 +736,8 @@ public static class Factory
     private static async Task LeaveCheckoutAsync(FactoryRun run)
     {
         if (!run.InCheckout || run.ReturnTo.Length == 0 || await HeadAsync(run.Repo) != run.Branch) return;
-        (int code, string status) = await GitAsync(run.Repo, "status", "--porcelain");
-        if (code != 0 || status.Trim().Length > 0)
+        // the run's own work is committed: back to the developer's branch, their local changes carried along
+        if ((await RunChangesAsync(run, run.Repo)).Count > 0)
         {
             string stay = $"Your checkout stays on {run.Branch}: the run's changes are not committed. Continue the run - or commit or stash them yourself to switch back.";
             run.Note = (run.Note.Length > 0 ? run.Note + "\n" : "") + stay;
@@ -676,9 +773,14 @@ public static class Factory
         };
         string verify = run.Verify.Length > 0
             ? $"The command that verifies this repo is: {run.Verify}"
-            : """
-              End with one line: VERIFY: <one shell command, run from this folder in PowerShell, that builds this repo and
-              runs its tests - the proof the change works>.
+            : $"""
+              End with one line: VERIFY: <one shell command, run from this folder in a fresh PowerShell>, chosen by
+              regression risk, not the whole suite by habit: it compiles everything, and runs the tests that cover the
+              code you will change and the code that uses it (find its usages) - name the test classes. Run the full
+              suite only when the change touches shared code that many places use, and say so. Make the tests really run
+              (no build-cache result). It runs in a new shell with the machine's default environment: include what your
+              own commands needed, e.g. $env:JAVA_HOME='...'; before the build. Say in one line before it why these
+              tests are the regression scope.{(run.VerifyHint.Length > 0 ? $"\nThis repo was verified before with: {run.VerifyHint}\nReuse its environment and flags; choose the tests for this change." : "")}
               """;
         string prompt = $"""
             You are working in {(run.InCheckout ? "the developer's own checkout of " + run.Repo : "a separate git worktree of " + run.Repo)}, on a new branch {run.Branch} (from {run.BaseBranch}).
@@ -695,6 +797,9 @@ public static class Factory
             works - and end with one line: EVIDENCE: <comma-separated kinds from: {string.Join(", ", EvidenceKinds)}>.
             (A UI change: screenshots, often a video of the interaction. A logic change: red-green, coverage, mutation,
             crap. A service: api, logs, trace. Pick only what proves this change.)
+            If the task leaves a decision that is the developer's to make - behaviour, naming, defaults, which of several
+            options - do not guess: after the plan, add a line QUESTIONS: and then the numbered questions, each with the
+            answer you suggest. The run waits for the answers before building. Leave QUESTIONS out when nothing is open.
             {verify}
             """;
         (string answer, string? error) = await TurnAsync(run, isNew: true, prompt, "Plan", cancel);
@@ -710,7 +815,43 @@ public static class Factory
         run.EvidencePlan = (Line(answer, "EVIDENCE:") ?? "").Split(',', ';').Select(k => k.Trim().Trim('`', '*', '.').ToLowerInvariant())
             .Where(k => EvidenceKinds.Contains(k)).Distinct().ToList();
         Log(run, "Plan:\n" + answer);
+        // decisions that are the developer's: the run asks before it builds
+        if (Questions(answer) is { Length: > 0 } questions)
+        {
+            throw new NeedsYouException("The plan has questions for you. Answer them in the box below and press Send to the run - " +
+                "the ones you skip take the suggested answer (or press Continue to take all the suggestions):\n" + questions);
+        }
         return true;
+    }
+
+    // the text after a line starting with a marker, up to a line starting with the end marker (or the end)
+    private static string Block(string text, string marker, string end)
+    {
+        string[] lines = text.Replace("\r", "").Split('\n');
+        int start = Array.FindIndex(lines, l => l.Trim().TrimStart('*', '#', ' ').StartsWith(marker, StringComparison.OrdinalIgnoreCase));
+        if (start < 0) return "";
+        var block = new List<string> { lines[start].Trim().TrimStart('*', '#', ' ')[marker.Length..].Trim().Trim('*').Trim() };
+        for (int i = start + 1; i < lines.Length && !lines[i].Trim().TrimStart('*', '#', ' ').StartsWith(end, StringComparison.OrdinalIgnoreCase); i++) block.Add(lines[i]);
+        return string.Join("\n", block).Trim();
+    }
+
+    // the plan's QUESTIONS block: everything after the QUESTIONS: line up to the EVIDENCE: or VERIFY: line
+    private static string Questions(string plan)
+    {
+        string[] lines = plan.Replace("\r", "").Split('\n');
+        int start = Array.FindIndex(lines, l => l.Trim().TrimStart('*', '#', ' ').StartsWith("QUESTIONS:", StringComparison.OrdinalIgnoreCase));
+        if (start < 0) return "";
+        var block = new List<string>();
+        string first = lines[start].Trim().TrimStart('*', '#', ' ')["QUESTIONS:".Length..].Trim().Trim('*').Trim();
+        if (first.Length > 0) block.Add(first);
+        for (int i = start + 1; i < lines.Length; i++)
+        {
+            string l = lines[i].Trim().TrimStart('*', '#', ' ');
+            if (l.StartsWith("EVIDENCE:", StringComparison.OrdinalIgnoreCase) || l.StartsWith("VERIFY:", StringComparison.OrdinalIgnoreCase)) break;
+            block.Add(lines[i]);
+        }
+        string text = string.Join("\n", block).Trim();
+        return text.Equals("none", StringComparison.OrdinalIgnoreCase) ? "" : text;
     }
 
     private static async Task<bool> BuildAsync(FactoryRun run, CancellationToken cancel)
@@ -758,8 +899,8 @@ public static class Factory
     {
         for (int attempt = 1; ; attempt++)
         {
-            (int changed, string status) = await GitAsync(run.Worktree, "status", "--porcelain");
-            if (changed == 0 && status.Trim().Length == 0) return Wait(run, "Claude changed no files.");
+            if (LocalChangesTouched(run)) return false;
+            if ((await RunChangesAsync(run, run.Worktree)).Count == 0) return Wait(run, "Claude changed no files.");
             Enter(run, FactoryStage.Verify, $"Dev break runs the verify command: {run.Verify}");
             FactorySpan span = Begin(run, "verify", $"Verify (attempt {attempt})", run.Verify);
             (int exit, string output) = await ShellAsync(run.Worktree, run.Verify, cancel);
@@ -775,10 +916,20 @@ public static class Factory
                 {Tail(output, 6000)}
 
                 Find the cause and fix it. Fix the code, not the test, unless the test itself is wrong (then say why).
+                If the cause is the verify command itself or its environment (a wrong JDK, a missing setting) and not
+                the code, do not change code or build files to get around it: end your reply with one line
+                VERIFY: <the corrected command> - it runs in a new PowerShell with the machine's default environment.
                 Do not commit or push. Reply with what you changed.
                 """, $"Fix verify failure {attempt}", cancel);
             if (error != null) return Wait(run, "The fix turn failed: " + error);
             Log(run, "Fix:\n" + answer);
+            // the command was the problem: the corrected one is used from now on, and remembered for the repo
+            if (Line(answer, "VERIFY:")?.Trim('`', ' ') is { Length: > 0 } corrected && corrected != run.Verify)
+            {
+                Log(run, $"The verify command is corrected: {corrected}");
+                run.Verify = corrected;
+                AppSettings.Set("factoryVerify:" + run.Repo.ToLowerInvariant(), corrected);
+            }
         }
     }
 
@@ -808,13 +959,16 @@ public static class Factory
                 [{"{"}"kind": "<kind>", "file": "<file name in that folder, or empty>", "proves": "<what it shows, one line>",
                   "result": "pass|fail|skipped", "detail": "<the numbers or the reason>"{"}"}]
 
-                Do not commit or push. Reply with what you ran and what you saw, and end with exactly one line:
+                Do not commit or push. Reply with what you ran and what you saw. If the task asked for something to be
+                handed back - a curl or command to try it, an answer, a link - give it ready to use after a line RESULT:
+                (as it works now, checked). Then end with exactly one line:
                 PROOF: PASS - it works as the task asks
                 PROOF: FAIL <what is wrong>
                 PROOF: SKIPPED <why it cannot be run on this machine>
                 """, $"Prove (attempt {attempt})", cancel);
             if (error != null) return Wait(run, "The prove turn failed: " + error);
             run.Proof = answer;
+            if (Block(answer, "RESULT:", "PROOF:") is { Length: > 0 } result) run.Result = result;
             run.Evidence = ReadManifest(dir);
             string verdict = Line(answer, "PROOF:") ?? "";
             bool pass = verdict.StartsWith("PASS", StringComparison.OrdinalIgnoreCase);
@@ -878,8 +1032,14 @@ public static class Factory
 
     private static async Task<(bool Pass, string Findings)> ReviewAsync(FactoryRun run, CancellationToken cancel)
     {
-        await GitAsync(run.Worktree, "add", "-A");
-        (_, string diff) = await GitAsync(run.Worktree, "diff", "--cached", run.BaseCommit);
+        // the change against the base - the run's files only: new files are marked "intent to add" so the diff shows
+        // them, and the developer's local changes are left out (their files and their index are not touched)
+        List<string> mine = await RunChangesAsync(run, run.Worktree);
+        string[] untracked = (await GitAsync(run.Worktree, "ls-files", "--others", "--exclude-standard", "-z")).Output
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries).Where(p => mine.Contains(p.Replace('\\', '/'))).ToArray();
+        if (untracked.Length > 0) await GitAsync(run.Worktree, ["add", "--intent-to-add", "--", .. untracked]);
+        string[] exclude = run.LocalChanges.Keys.Where(k => !mine.Contains(k)).Select(k => ":(exclude)" + k).ToArray();
+        (_, string diff) = await GitAsync(run.Worktree, ["diff", run.BaseCommit, "--", ".", .. exclude]);
         string prompt = $"""
             You review a change before it becomes a pull request. Be strict and concrete; you can read the repo.
             THE TASK ({run.Source}):
@@ -928,6 +1088,14 @@ public static class Factory
               reviewer passed the change. Review notes:
               {run.Review}
               """;
+        if (LocalChangesTouched(run)) return false;
+        if (run.LocalChanges.Count > 0)
+        {
+            checks += "\nThese files hold the developer's own local changes - never stage or commit them, and leave them exactly " +
+                "as they are; commit only this change's files (stage them by name, not with git add -A or git add .): " +
+                string.Join(", ", run.LocalChanges.Keys) + ".";
+        }
+        if (run.Result.Length > 0) checks += $"\nWhat the task asked to be handed back (put it in the PR description too):\n{run.Result}";
         checks += $"\nThe evidence:\n{EvidenceSummary(run)}\nIts files are in {ProofDir(run)} - list it in the PR description (attach the images or video to the PR if the host's tools can), do not commit it. The app was already run after the last change; do not run it again unless a check on this machine requires it.";
         string link = run.Source == FactorySource.Jira ? $" Link it to the Jira issue {run.Task} the way this repo does." : "";
         // the git host's own MCP server first (Atlassian's for Bitbucket, GitHub's for GitHub), then its CLI or tools
@@ -1162,6 +1330,7 @@ public static class Factory
     private static async Task<(string Answer, string? Error)> TurnAsync(FactoryRun run, bool isNew, string prompt, string title,
         CancellationToken cancel, bool publish = false)
     {
+        prompt += OutsideRule;
         FactorySpan span = Begin(run, "turn", title, prompt);
         string answer = "";
         string? error = null;
@@ -1189,6 +1358,12 @@ public static class Factory
             Finish(run, span, answer);
         }
         cancel.ThrowIfCancellationRequested();
+        // Claude needs something changed outside the folder: the developer decides
+        if (error == null && Line(answer, "NEEDS_YOU:") is { Length: > 0 } need)
+        {
+            Log(run, $"{title}:\n{answer}");
+            throw new NeedsYouException("Claude needs you: " + need);
+        }
         return (answer, error);
     }
 
@@ -1484,17 +1659,25 @@ public static class Factory
             CreateNoWindow = true, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
         };
         foreach (string arg in new[] { "-NoProfile", "-NonInteractive", "-Command", command + "; exit $LASTEXITCODE" }) start.ArgumentList.Add(arg);
-        using Process process = Process.Start(start) ?? throw new InvalidOperationException("could not start PowerShell");
+        // the command is done when ITS process exits (the Exited event) - not when every process holding its output
+        // pipe has closed it: a build tool's daemon started by the command (Gradle) inherits the pipe and lives for
+        // hours, and waiting for it hung a verify (measured: 11.4 s for a 12 s child against 0.5 s this way)
+        using Process process = new() { StartInfo = start, EnableRaisingEvents = true };
+        var exited = new TaskCompletionSource();
+        process.Exited += (_, _) => exited.TrySetResult();
         var output = new StringBuilder();
         process.OutputDataReceived += (_, e) => { if (e.Data != null) lock (output) output.AppendLine(e.Data); };
         process.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (output) output.AppendLine(e.Data); };
+        if (!process.Start()) throw new InvalidOperationException("could not start PowerShell");
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
+        if (process.HasExited) exited.TrySetResult();
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         timeout.CancelAfter(TimeSpan.FromMinutes(30));
         try
         {
-            await process.WaitForExitAsync(timeout.Token);
+            await exited.Task.WaitAsync(timeout.Token);
+            await Task.Delay(300, CancellationToken.None); // the last lines in flight
         }
         catch (OperationCanceledException)
         {

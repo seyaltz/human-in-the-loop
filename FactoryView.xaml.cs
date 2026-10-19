@@ -214,6 +214,11 @@ public partial class FactoryView : UserControl
         if (_shown != null) await Factory.ContinueAsync(_shown);
     }
 
+    private void CopyResult_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResultText.Text.Length > 0) Clipboard.SetText(ResultText.Text);
+    }
+
     private async void Worktree_Click(object sender, RoutedEventArgs e)
     {
         if (_shown != null) await Factory.UseWorktreeAsync(_shown);
@@ -331,6 +336,9 @@ public partial class FactoryView : UserControl
         RunNote.Text = run.Working ? $"{StageName(run)}..." : run.Note.Replace("\r", "").Split('\n')[0].Trim();
         RunNote.Foreground = (Brush)FindResource(!run.Working && run.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped ? "CoralInkBrush" : "VioletBrush");
         StopButton.Visibility = run.Working ? Visibility.Visible : Visibility.Collapsed;
+        string result = run.Result + (run.PrUrl.Length > 0 ? (run.Result.Length > 0 ? "\n\n" : "") + "Draft PR: " + run.PrUrl : "");
+        ResultBox.Visibility = result.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (ResultText.Text != result) ResultText.Text = result;
         ContinueButton.Visibility = !run.Working && !run.CleanedUp && run.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped
             ? Visibility.Visible : Visibility.Collapsed;
         CleanButton.Visibility = !run.Working && !run.CleanedUp ? Visibility.Visible : Visibility.Collapsed;
@@ -744,6 +752,8 @@ public partial class FactoryView : UserControl
     private static string StageName(FactoryStage stage) => stage switch
     {
         FactoryStage.PullRequest => "Draft PR",
+        // where the run works: the developer's checkout, or a separate worktree when they chose one
+        FactoryStage.Worktree => "Workspace",
         FactoryStage.NeedsYou => "Needs you",
         _ => stage.ToString(),
     };

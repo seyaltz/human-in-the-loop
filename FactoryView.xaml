@@ -125,6 +125,20 @@
                                        TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                     </DockPanel>
+                    <!-- what the task asked to be handed back (a curl, an answer, a link), ready to use -->
+                    <Border x:Name="ResultBox" DockPanel.Dock="Top" Visibility="Collapsed" Background="{StaticResource MarkerBrush}"
+                            BorderBrush="{StaticResource InkBrush}" BorderThickness="1.5" CornerRadius="12" Padding="12,8" Margin="0,0,0,10">
+                        <DockPanel>
+                            <Button x:Name="CopyResultButton" DockPanel.Dock="Right" Content="Copy" Style="{StaticResource SecondaryButton}"
+                                    Height="32" Padding="12,0" Margin="8,0,0,0" VerticalAlignment="Top" Click="CopyResult_Click" />
+                            <StackPanel>
+                                <TextBlock Text="Result" FontWeight="Bold" FontSize="13" Margin="0,0,0,4" />
+                                <TextBox x:Name="ResultText" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent"
+                                         FontFamily="{StaticResource MonoFont}" FontSize="12.5" MaxHeight="150" VerticalScrollBarVisibility="Auto"
+                                         AutomationProperties.Name="Result" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
                     <!-- what a clean up would delete, before it does -->
                     <Border x:Name="ConfirmBar" DockPanel.Dock="Top" Visibility="Collapsed" BorderBrush="{StaticResource CoralInkBrush}"
                             BorderThickness="1.5" CornerRadius="12" Padding="12,8" Margin="0,0,0,10">

@@ -90,8 +90,9 @@ model and Claude Code version. Filter by name, open any file.
 Give the **Factory** a task - typed, a **Jira** issue or a **spec** document - and a folder: the repo, or just the
 folder where your repos are; Claude finds the one the task is for and learns how to build and test it. A run works
 in **your own checkout**, on a new branch from the base - no copy, your dependencies already installed - and switches
-back to your branch when it is done. When the checkout can't be used (uncommitted changes, another run in it), the run
-stops and asks: commit or stash and **Continue**, or **Use a separate worktree** beside the repo. The steps:
+back to your branch when it is done. Your own local changes (temp files, local settings) don't stop it - they are
+never committed, and the run stops and asks only if the feature needs to touch one of them. When another run is
+already working in that checkout, it asks: wait and **Continue**, or **Use a separate worktree** beside the repo. The steps:
 **locate → plan → build → verify → prove → review → draft PR**. Claude understands the mission with your skills,
 MCP servers and tools, plans and builds; Dev break runs your verify command (or one Claude proposes) and Claude
 fixes until it passes; then Claude **runs the app** with the change and proves it with the evidence the feature
@@ -106,6 +107,10 @@ Tell it what you think: **send feedback to the run** ("also handle underscores")
 updates the draft PR; **rate the run** good or bad with a note; say **why** when you undo or dismiss a lesson. All of
 it goes into what the factory learns. Every run has a **Trace** - each step with its time, cost, tokens, every tool
 call and the exact prompt and answer - and **Export trace** saves it as JSON and Markdown.
+
+When the task leaves a decision to you, the run **stops after its plan and asks** - answer in the box and it builds.
+It never changes anything outside the repo (shared build settings, your profile); if something there must change, it
+stops and asks. What you asked to get back - a curl, an answer, a link - is shown on top of the run, ready to copy.
 
 Every step is timed: a step or tool call that runs **over a minute** turns amber and you get a Windows notification;
 what was slow goes into what the factory learns, so the next run in that repo is faster.

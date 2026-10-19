@@ -388,13 +388,22 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   1. **Workspace - the developer's own checkout by default** (no copy: its dependencies and build output are already
      there; a worktree is a second copy of the files - 603 MB with a fresh `npm ci` in a measured run - and a deep
      repo can pass Windows' 260-character path limit under a longer folder). The run checks the checkout can be used
-     and **asks when it cannot** (stops at Needs you with the question): another run working in it, or uncommitted
-     changes - untracked files too, as the PR step commits everything ("... commit or stash them and press Continue -
-     or press Use a separate worktree ..."). Then it notes the branch the checkout is on (or its commit when
+     and **asks when it cannot** (stops at Needs you with the question): another run working in it ("... Wait for it
+     and press Continue - or press Use a separate worktree ...") or git cannot read it. Then it notes the branch the checkout is on (or its commit when
      detached), `git switch -c devbreak/<slug>-<id> <base commit>` (or `git switch` to it when the branch exists) and
-     works there. When a run (or its continue, feedback, PR anyway) is done, the checkout goes back to that branch if
-     the run's work is committed; otherwise it stays on the run's branch and the run says so. Continue, feedback and
-     PR anyway first switch the checkout to the run's branch, asking when it has changes.
+     works there. **The developer's own local changes do not block it** (temp files, local settings - modified,
+     staged or untracked): their paths are noted with a SHA-256 fingerprint of the content and logged ("Your N local
+     changes stay yours ..."); the switch carries them along untouched. They are never committed: "did the run change
+     anything" and "is its work committed" count only the run's own changes (a noted file counts only once its
+     content differs); the review diff is `git diff <base> -- . :(exclude)<each local file>` with the run's new files
+     marked `--intent-to-add` (no `git add -A`, so the developer's index is untouched); the PR step is told the files
+     and to stage only the change's files by name. Before verify and before the PR, a local change whose content
+     differs stops the run and asks ("The change touched files that hold your own local changes: ... undo the run's
+     edits there and press Continue - or commit or stash your own changes first, or run it in a separate worktree").
+     A switch git refuses (a local change in the way) stops it too. When a run (or its continue, feedback, PR anyway)
+     is done, the checkout goes back to that branch - local changes carried along - if the run's own work is
+     committed; otherwise it stays on the run's branch and the run says so. Continue, feedback and PR anyway first
+     switch the checkout to the run's branch.
      **Use a separate worktree** (when the run asked): `git -c core.longpaths=true worktree add <beside the repo:
      <repo>-<4 of the id>> -b <branch> <base commit>` (or the existing branch), and the run goes on there, the
      checkout untouched. A worktree shares its repo's Claude memory (verified: both report the same `memory_paths.auto`).
@@ -403,9 +412,28 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      and tools (running the app or its services, reading logs or data, inspecting or debugging a running service),
      learns how the repo is built, run and tested and how the change can be seen in the running app, and replies `TITLE:`, numbered steps and, when no verify command was
      given, `VERIFY: <command>`; `CANNOT_READ: <why>` stops the run.
+     **Questions**: when the task leaves a decision that is the developer's (behaviour, naming, defaults, which of
+     several options), the plan adds `QUESTIONS:` with numbered questions and suggested answers, and the run **stops
+     before building** ("The plan has questions for you. Answer them in the box below and press Send to the run (or
+     press Continue to go with the suggested answers)"). Answers sent to the run update the plan in its session (more
+     questions stop it again), then it builds; Continue builds with the suggested answers.
+     **Every turn** is told to change files only inside its folder - never shared build homes (Gradle, Maven, npm,
+     Ivy settings), the developer's profile, tool or system settings, not even to make a command work - and to end
+     with `NEEDS_YOU: <what, where, why>` instead; that line stops the run with "Claude needs you: ...".
   3. **Build**: the same session implements the plan and its tests, without committing or pushing.
-  4. **Verify**: Dev break runs the verify command itself (PowerShell in the worktree, both streams, 30 min max);
-     on failure the session fixes it (the code, not the test) and it runs again, up to 3 fixes. No changed files stops
+  4. **Verify**: Dev break runs the verify command itself (a fresh PowerShell in the run's folder with the machine's
+     default environment, both streams, 30 min max - so the plan's command must carry what its own commands needed,
+     e.g. `$env:JAVA_HOME=...`). It is done when the command's own process exits (the `Exited` event), not when every
+     holder of its output pipe has closed it - a build daemon the command starts inherits the pipe and lives for hours
+     (that hung a verify; measured 11.4 s against 0.5 s for a 12 s child). The plan chooses the command **by regression
+     risk**, not the whole suite by habit: compile everything and really run (no build-cache result) the tests that
+     cover the changed code and the code that uses it (found by its usages), naming them and saying in one line why
+     that is the scope; the full suite only when shared code many places use changes. A command used in the repo
+     before is passed as a hint (its environment and flags), not reused as it is; one the developer typed is used as
+     it is; on failure the session fixes it (the code, not the test) and it runs again, up to 3
+     fixes. When the cause is the command or its environment, the fix ends with `VERIFY: <corrected command>`: Dev
+     break uses it from then on and remembers it for the repo (seen in a real run: the default JDK 17 could not start
+     a build that needs JDK 25, and without this the session changed a shared Gradle home to get around it). No changed files stops
      the run.
   4b. **Prove**: the session proves the change - starts the app and the services it needs with the machine's skills,
      MCP servers and tools, from the worktree; exercises what the task changed; stops what it started - and produces
@@ -415,7 +443,9 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      with it, both outputs), **coverage** (of the changed lines, with the uncovered ones), **mutation** (scoped to the
      changed files - the score and surviving mutants), **crap** (complexity and coverage of the changed methods),
      **api**, **logs**, **trace**, **perf**, **other** - the repo's own tools first, a missing one run without adding
-     it to the repo's dependencies, a kind that cannot be produced marked skipped with why, never invented. The files
+     it to the repo's dependencies, a kind that cannot be produced marked skipped with why, never invented. What the
+     task asked to be handed back (a curl to try it, an answer, a link) comes after a `RESULT:` line, checked, and is
+     kept as the run's **Result** - shown in a box on top of the run with the PR link and Copy, and put in the PR. The files
      go into `<traces>\<id>-proof` (not the repo) with a manifest `evidence.json`: one entry per piece -
      `kind`, `file`, `proves`, `result` (pass / fail / skipped), `detail`. The turn ends `PROOF: PASS`, `PROOF: FAIL
      <what>` or `PROOF: SKIPPED <why>`. Dev break reads the manifest and logs it with the planned kinds not produced.
