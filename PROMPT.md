@@ -323,6 +323,26 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   may edit files and run commands in this folder.". Every opened session keeps its transcript, and a running turn
   keeps going while another session is on screen. After a new session's first turn the list refreshes.
 
+### Setup (`CliSetup.cs`, `SetupPanel`)
+
+**Setup** in a session's header shows, in place of the chat, what Claude Code has in that folder - as the CLI sees it:
+- Read by starting `claude -p --output-format stream-json --verbose --no-session-persistence` in the folder (prompt
+  "hi") and stopping it (process tree) as soon as its `system`/`init` line arrives - before any answer. That line
+  gives `model`, `claude_code_version`, `permissionMode`, `output_style`, `tools`, `mcp_servers` (name + status),
+  `skills` (names), `plugins` (name, version, source, path), `agents` and `memory_paths.auto`. 90 s timeout. Cached
+  per folder; **Refresh** reads it again.
+- Skill descriptions from their `SKILL.md` front matter (`name`, `description`, also a folded `>`/`|` block): the
+  project's `.claude\skills`, the user's `~\.claude\skills`, and each plugin's `<path>\skills` (named `plugin:skill`).
+- **Memory**: the `CLAUDE.md` files that apply (`~\.claude\CLAUDE.md`, then from the drive root down to the folder:
+  `CLAUDE.md`, `.claude\CLAUDE.md`, `CLAUDE.local.md`), then the memory folder's `MEMORY.md` and its notes (front
+  matter name and description).
+- View: a facts line (folder · model · Claude Code version · tools · output style · "in Dev break sessions: full
+  access"), a filter box, **Refresh** and **Back to chat**; sub-tabs **Memory · Skills · Plugins · MCP servers ·
+  Agents** with counts; a list (name, description or source; MCP status as a chip: connected lime, needs-auth coral)
+  and the selected item on the right: its source, status and file, its text without front matter (markdown files
+  rendered with soft wraps), **Open file**, and for a skill **Use in this session** (puts `/<skill> ` in the
+  message box and goes back to the chat - a skill runs from `-p` that way). MCP items explain their status.
+
 ## Tray app (`App.xaml.cs`)
 
 - **First run** (no `topics.json`): first check that Claude Code works by running the prompt "Reply with just: OK"
