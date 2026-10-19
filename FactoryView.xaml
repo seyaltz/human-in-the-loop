@@ -31,12 +31,13 @@
                     <TextBox x:Name="TaskBox" Style="{StaticResource NotebookBox}" Height="92" TextWrapping="Wrap" AcceptsReturn="True"
                              VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top" AutomationProperties.Name="Task" />
 
-                    <TextBlock Text="Repository" Style="{StaticResource Caption}" Margin="2,10,0,4" />
+                    <TextBlock Text="Folder - the repo, or where your repos are (Claude finds the one for the task)" Style="{StaticResource Caption}"
+                               Margin="2,10,0,4" TextWrapping="Wrap" />
                     <DockPanel>
                         <Button DockPanel.Dock="Right" Content="Browse..." Style="{StaticResource SecondaryButton}" Height="40"
                                 Padding="10,0" Margin="6,0,0,0" Click="BrowseRepo_Click" />
                         <ComboBox x:Name="RepoBox" IsEditable="True" Height="40" VerticalContentAlignment="Center" FontSize="13"
-                                  AutomationProperties.Name="Repository" SelectionChanged="RepoBox_SelectionChanged"
+                                  AutomationProperties.Name="Folder" SelectionChanged="RepoBox_SelectionChanged"
                                   LostKeyboardFocus="RepoBox_LostFocus" />
                     </DockPanel>
                     <Grid Margin="0,10,0,0">
@@ -45,7 +46,8 @@
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                            <TextBlock Text="Base branch" Style="{StaticResource Caption}" Margin="2,0,0,4" />
+                            <TextBlock Text="Base branch" Style="{StaticResource Caption}" Margin="2,0,0,4"
+                                       ToolTip="Empty: the branch the repo has checked out" />
                             <TextBox x:Name="BaseBox" Style="{StaticResource NotebookBox}" FontSize="13" AutomationProperties.Name="Base branch" />
                         </StackPanel>
                         <StackPanel Grid.Column="1">

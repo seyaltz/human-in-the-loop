@@ -54,31 +54,41 @@ public static class ClaudeProjects
     public static IReadOnlyList<string> GitRepos()
     {
         var repos = new List<string>();
-        void Look(string dir, int depth)
+        foreach (ClaudeProject project in Find()) Look(repos, project.Folder, 2, worktrees: false);
+        return repos;
+    }
+
+    /// <summary>The git repositories in a folder: the folder itself, or folders up to <paramref name="depth"/> levels below it.</summary>
+    public static IReadOnlyList<string> ReposUnder(string folder, int depth)
+    {
+        var repos = new List<string>();
+        Look(repos, folder.TrimEnd('\\'), depth, worktrees: true);
+        return repos;
+    }
+
+    // .git is a folder in a repository, a file in a worktree
+    private static void Look(List<string> repos, string dir, int depth, bool worktrees)
+    {
+        if (repos.Count >= 100) return;
+        try
         {
-            if (repos.Count >= 100) return;
-            try
+            if (Directory.Exists(Path.Combine(dir, ".git")) || (worktrees && File.Exists(Path.Combine(dir, ".git"))))
             {
-                if (Directory.Exists(Path.Combine(dir, ".git")))
-                {
-                    if (!repos.Contains(dir, StringComparer.OrdinalIgnoreCase)) repos.Add(dir);
-                    return;
-                }
-                if (depth == 0) return;
-                foreach (string sub in Directory.GetDirectories(dir))
-                {
-                    string name = Path.GetFileName(sub);
-                    if (name.StartsWith('.') || name is "node_modules" or "build" or "bin" or "obj") continue;
-                    Look(sub, depth - 1);
-                }
+                if (!repos.Contains(dir, StringComparer.OrdinalIgnoreCase)) repos.Add(dir);
+                return;
             }
-            catch (Exception)
+            if (depth == 0) return;
+            foreach (string sub in Directory.GetDirectories(dir))
             {
-                // no access to a folder: skip it
+                string name = Path.GetFileName(sub);
+                if (name.StartsWith('.') || name is "node_modules" or "build" or "bin" or "obj") continue;
+                Look(repos, sub, depth - 1, worktrees);
             }
         }
-        foreach (ClaudeProject project in Find()) Look(project.Folder, 2);
-        return repos;
+        catch (Exception)
+        {
+            // no access to a folder: skip it
+        }
     }
 
     private static string? FolderOf(string projectDir)
@@ -104,7 +114,7 @@ public static class ClaudeProjects
     }
 
     /// <summary>A short description of a folder for Claude: its top-level entries and the start of its CLAUDE.md or README.</summary>
-    private static string Fingerprint(string folder)
+    internal static string Fingerprint(string folder)
     {
         var text = new StringBuilder();
         try
