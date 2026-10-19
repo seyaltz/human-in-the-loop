@@ -27,6 +27,9 @@ public partial class FactoryView : UserControl
     private FactoryRun? _shown;
     private int _shownLog = -1;
     private string? _shownLessons;
+    private string? _shownTrace;
+    // the trace steps the developer opened stay open while the trace updates
+    private readonly HashSet<int> _openSpans = [];
     private bool _started;
 
     /// <summary>"Open in Sessions": the run's Claude Code session, to continue it there.</summary>
@@ -169,6 +172,24 @@ public partial class FactoryView : UserControl
             _shown = run;
             _shownLog = -1;
             _shownLessons = null;
+            _shownTrace = null;
+            _openSpans.Clear();
+            GoodRating.IsChecked = run.Rating == "good";
+            BadRating.IsChecked = run.Rating == "bad";
+            RatingNote.Text = run.RatingNote;
+            FeedbackBox.Clear();
+            ExportText.Visibility = Visibility.Collapsed;
+        }
+        // feedback needs a run that is not working and still has its worktree and session
+        bool canFeedback = !run.Working && run.Plan.Length > 0 && Directory.Exists(run.Worktree);
+        FeedbackButton.IsEnabled = canFeedback;
+        FeedbackBox.IsEnabled = canFeedback;
+        RateButton.IsEnabled = !run.Working && run.Repo.Length > 0;
+        string trace = $"{run.Trace.Count}:{run.Trace.LastOrDefault()?.Tools.Count}:{run.Trace.LastOrDefault()?.Ended}:{string.Concat(run.Trace.LastOrDefault()?.Tools.Select(t => t.Result[0]) ?? [])}";
+        if (trace != _shownTrace)
+        {
+            _shownTrace = trace;
+            ShowTrace(run);
         }
         EmptyText.Visibility = Visibility.Collapsed;
         RunArea.Visibility = Visibility.Visible;
@@ -238,10 +259,140 @@ public partial class FactoryView : UserControl
         LogBox.ScrollToEnd();
     }
 
+    private void RunTab_Checked(object sender, RoutedEventArgs e)
+    {
+        if (LogBox == null || TraceArea == null || LessonsArea == null) return;
+        LogBox.Visibility = LogTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        TraceArea.Visibility = TraceTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        LessonsArea.Visibility = LessonsTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // each step a line - time, stage, what, how long, cost, tokens, tools - that opens to its tool calls, prompt and answer
+    private void ShowTrace(FactoryRun run)
+    {
+        TraceList.Children.Clear();
+        TraceTab.Content = run.Trace.Count > 0 ? $"Trace ({run.Trace.Count})" : "Trace";
+        Brush soft = (Brush)FindResource("InkSoftBrush"), coral = (Brush)FindResource("CoralInkBrush"), accent = (Brush)FindResource("VioletBrush");
+        var mono = (FontFamily)FindResource("MonoFont");
+        for (int i = 0; i < run.Trace.Count; i++)
+        {
+            FactorySpan span = run.Trace[i];
+            int index = i;
+            var header = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 13 };
+            header.Inlines.Add(new Run($"{span.Started:HH:mm:ss}  ") { FontFamily = mono, FontSize = 12, Foreground = soft });
+            header.Inlines.Add(new Run(span.Title) { FontWeight = FontWeights.Bold, Foreground = span.Error.Length > 0 ? coral : (Brush)FindResource("InkBrush") });
+            var stats = new List<string> { span.Kind, Factory.Duration(span) };
+            if (span.Cost > 0) stats.Add($"${span.Cost:0.00}");
+            if (span.InputTokens + span.OutputTokens > 0) stats.Add($"{Tokens(span.InputTokens)} in / {Tokens(span.OutputTokens)} out");
+            if (span.Tools.Count > 0) stats.Add($"{span.Tools.Count} tool{(span.Tools.Count == 1 ? "" : "s")}");
+            int denied = span.Tools.Count(t => t.Result == "denied"), failed = span.Tools.Count(t => t.Result == "error");
+            if (denied > 0) stats.Add($"{denied} denied");
+            if (failed > 0) stats.Add($"{failed} failed");
+            header.Inlines.Add(new Run("   " + string.Join(" · ", stats)) { FontSize = 12, Foreground = soft });
+            if (span.Error.Length > 0) header.Inlines.Add(new Run("   ✗ " + Short(span.Error, 90)) { FontSize = 12, Foreground = coral });
+
+            var expander = new Expander { Header = header, IsExpanded = _openSpans.Contains(index), Margin = new Thickness(0, 0, 0, 4) };
+            expander.Expanded += (_, _) =>
+            {
+                _openSpans.Add(index);
+                if (expander.Content == null) expander.Content = SpanDetail(span, soft, coral, accent, mono);
+            };
+            expander.Collapsed += (_, _) => _openSpans.Remove(index);
+            if (expander.IsExpanded) expander.Content = SpanDetail(span, soft, coral, accent, mono);
+            TraceList.Children.Add(expander);
+        }
+        if (run.Trace.Count == 0) TraceList.Children.Add(new TextBlock { Text = "No steps yet.", Style = (Style)FindResource("Caption"), Margin = new Thickness(4) });
+    }
+
+    private UIElement SpanDetail(FactorySpan span, Brush soft, Brush coral, Brush accent, FontFamily mono)
+    {
+        var panel = new StackPanel { Margin = new Thickness(22, 4, 0, 8) };
+        foreach (FactoryToolCall tool in span.Tools)
+        {
+            var line = new TextBlock { FontFamily = mono, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 1) };
+            line.Inlines.Add(new Run($"{tool.At:HH:mm:ss} ") { Foreground = soft });
+            line.Inlines.Add(new Run(tool.Name) { FontWeight = FontWeights.Bold, Foreground = accent });
+            if (tool.Detail.Length > 0) line.Inlines.Add(new Run("  " + tool.Detail) { Foreground = soft });
+            line.Inlines.Add(new Run("  " + tool.Result) { FontWeight = FontWeights.SemiBold, Foreground = tool.Result is "ok" or "running" ? soft : coral });
+            panel.Children.Add(line);
+        }
+        panel.Children.Add(TextFold("Prompt", span.Prompt, mono));
+        panel.Children.Add(TextFold(span.Kind == "verify" ? "Output" : "Answer", span.Answer, mono));
+        return panel;
+    }
+
+    // a long text, folded: opens to a read-only box that can be selected and copied
+    private Expander TextFold(string label, string text, FontFamily mono)
+    {
+        var fold = new Expander
+        {
+            Header = new TextBlock { Text = $"{label} · {text.Length:N0} characters", FontSize = 12, FontWeight = FontWeights.SemiBold },
+            Margin = new Thickness(0, 4, 0, 0),
+        };
+        fold.Expanded += (_, _) => fold.Content ??= new TextBox
+        {
+            Text = text, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, FontFamily = mono, FontSize = 12, MaxHeight = 320,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, BorderThickness = new Thickness(1), Padding = new Thickness(8),
+            Background = Brushes.Transparent,
+        };
+        return fold;
+    }
+
+    private static string Tokens(long n) => n >= 1000 ? $"{n / 1000.0:0.#}k" : n.ToString();
+
+    private static string Short(string text, int max)
+    {
+        string line = text.Replace("\r", "").Split('\n')[0];
+        return line.Length <= max ? line : line[..(max - 1)] + "…";
+    }
+
+    private void Export_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown == null) return;
+        try
+        {
+            string file = Factory.Export(_shown);
+            ExportRun.Text = System.IO.Path.GetFileName(file);
+            ExportLink.Tag = file;
+            ExportLink.ToolTip = file + "\nClick to show it in its folder";
+        }
+        catch (Exception ex)
+        {
+            ExportRun.Text = "Could not export: " + ex.Message;
+            ExportLink.Tag = null;
+        }
+        ExportText.Visibility = Visibility.Visible;
+    }
+
+    private void ExportLink_Click(object sender, RoutedEventArgs e)
+    {
+        if (ExportLink.Tag is string file && File.Exists(file)) Process.Start("explorer.exe", $"/select,\"{file}\"");
+    }
+
+    private async void Rate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown == null) return;
+        string rating = GoodRating.IsChecked == true ? "good" : BadRating.IsChecked == true ? "bad" : "";
+        if (rating.Length == 0) return;
+        await Factory.RateAsync(_shown, rating, RatingNote.Text);
+    }
+
+    private async void Feedback_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown == null || FeedbackBox.Text.Trim().Length == 0) return;
+        string text = FeedbackBox.Text;
+        FeedbackBox.Clear();
+        await Factory.FeedbackAsync(_shown, text);
+    }
+
     private void ShowLessons(FactoryRun run)
     {
         LessonList.Children.Clear();
-        LessonsArea.Visibility = run.Lessons.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        LessonsTab.Content = run.Lessons.Count > 0 ? $"Learned ({run.Lessons.Count})" : "Learned";
+        if (run.Lessons.Count == 0)
+        {
+            LessonList.Children.Add(new TextBlock { Text = "Nothing learned yet - the run learns when it ends.", Style = (Style)FindResource("Caption"), Margin = new Thickness(4) });
+        }
         foreach (FactoryLesson lesson in run.Lessons) LessonList.Children.Add(LessonCard(run, lesson));
     }
 
@@ -282,15 +433,33 @@ public partial class FactoryView : UserControl
             };
             return button;
         }
+        // Undo and Dismiss first ask why (optional): later lessons for the repo avoid the like
+        void AskWhy(string label, Action<string> act)
+        {
+            buttons.Children.Clear();
+            var why = new TextBox
+            {
+                Style = (Style)FindResource("NotebookBox"), FontSize = 12.5, MinHeight = 34, Padding = new Thickness(10, 5, 10, 5), Width = 330,
+                Margin = new Thickness(0, 0, 8, 0), ToolTip = "Why? (optional) - the next lessons avoid this",
+            };
+            System.Windows.Automation.AutomationProperties.SetName(why, "Why");
+            buttons.Children.Add(why);
+            buttons.Children.Add(Act(label, true, () => act(why.Text)));
+            why.Focus();
+        }
         if (lesson.Status == "saved")
         {
-            buttons.Children.Add(Act("Undo", false, () => Factory.Undo(run, lesson)));
+            buttons.Children.Add(Act("Undo", false, () => AskWhy("Undo it", why => Factory.Undo(run, lesson, why))));
             buttons.Children.Add(Act("Open note", false, () => OpenFile(lesson.File)));
         }
         else if (lesson.Status == "pending")
         {
             buttons.Children.Add(Act("Apply", true, () => Factory.Apply(run, lesson)));
-            buttons.Children.Add(Act("Dismiss", false, () => Factory.Dismiss(run, lesson)));
+            buttons.Children.Add(Act("Dismiss", false, () => AskWhy("Dismiss it", why => Factory.Dismiss(run, lesson, why))));
+        }
+        if (lesson.Feedback.Length > 0)
+        {
+            body.Children.Add(new TextBlock { Text = "Why: " + lesson.Feedback, FontSize = 12, FontStyle = FontStyles.Italic, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
         }
         else if (lesson.Status == "applied")
         {

@@ -100,14 +100,48 @@
                     </DockPanel>
                     <!-- the pipeline: each stage done, now, or to come -->
                     <WrapPanel x:Name="Pipeline" DockPanel.Dock="Top" Margin="0,0,0,10" />
-                    <!-- what it learned -->
-                    <StackPanel x:Name="LessonsArea" DockPanel.Dock="Bottom" Margin="0,10,0,0" Visibility="Collapsed">
-                        <TextBlock Text="Learned for this repo's Claude" Style="{StaticResource Eyebrow}" Margin="2,0,0,6" />
-                        <ScrollViewer MaxHeight="190" VerticalScrollBarVisibility="Auto">
-                            <StackPanel x:Name="LessonList" />
-                        </ScrollViewer>
+                    <!-- your feedback: rate the run, or send it what to change -->
+                    <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1.5,0,0" Padding="0,10,0,0" Margin="0,10,0,0">
+                        <StackPanel>
+                            <DockPanel>
+                                <Button x:Name="RateButton" DockPanel.Dock="Right" Content="Save rating" Style="{StaticResource SecondaryButton}"
+                                        Height="36" Padding="12,0" Margin="8,0,0,0" Click="Rate_Click"
+                                        ToolTip="Saves your verdict; the run learns again from what you said" />
+                                <RadioButton x:Name="GoodRating" DockPanel.Dock="Left" Content="👍 Good" GroupName="Rating" Style="{StaticResource PillRadio}" />
+                                <RadioButton x:Name="BadRating" DockPanel.Dock="Left" Content="👎 Bad" GroupName="Rating" Style="{StaticResource PillRadio}" Margin="6,0,8,0" />
+                                <TextBox x:Name="RatingNote" Style="{StaticResource NotebookBox}" FontSize="13" MinHeight="36" Padding="10,6"
+                                         AutomationProperties.Name="Rating note" ToolTip="What was good or bad about this run" />
+                            </DockPanel>
+                            <DockPanel Margin="0,8,0,0">
+                                <Button x:Name="FeedbackButton" DockPanel.Dock="Right" Content="Send to the run" Style="{StaticResource PrimaryButton}"
+                                        Height="40" Padding="14,0" Margin="8,0,0,0" VerticalAlignment="Top" Click="Feedback_Click"
+                                        ToolTip="Claude applies it, verify and review run again, and the draft PR updates" />
+                                <TextBox x:Name="FeedbackBox" Style="{StaticResource NotebookBox}" FontSize="13" MinHeight="40" MaxHeight="90" Padding="10,7"
+                                         TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                                         AutomationProperties.Name="Feedback to the run" />
+                            </DockPanel>
+                        </StackPanel>
+                    </Border>
+                    <!-- what happened: the log, the trace (each step with its tools, prompt and answer), what it learned -->
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                        <RadioButton x:Name="LogTab" Content="Log" GroupName="RunTab" Style="{StaticResource PillRadio}" IsChecked="True" Checked="RunTab_Checked" />
+                        <RadioButton x:Name="TraceTab" Content="Trace" GroupName="RunTab" Style="{StaticResource PillRadio}" Margin="6,0,0,0" Checked="RunTab_Checked" />
+                        <RadioButton x:Name="LessonsTab" Content="Learned" GroupName="RunTab" Style="{StaticResource PillRadio}" Margin="6,0,0,0" Checked="RunTab_Checked" />
+                        <Button x:Name="ExportButton" Content="Export trace" Style="{StaticResource SecondaryButton}" Height="32" Padding="12,0"
+                                Margin="12,0,0,0" Click="Export_Click" ToolTip="Saves the whole run as .json and .md in the traces folder next to Dev break" />
+                        <TextBlock x:Name="ExportText" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12" Visibility="Collapsed">
+                            <Hyperlink x:Name="ExportLink" Click="ExportLink_Click"><Run x:Name="ExportRun" /></Hyperlink>
+                        </TextBlock>
                     </StackPanel>
-                    <RichTextBox x:Name="LogBox" Style="{StaticResource ReadingBox}" FontSize="13.5" AutomationProperties.Name="Run log" />
+                    <Grid>
+                        <RichTextBox x:Name="LogBox" Style="{StaticResource ReadingBox}" FontSize="13.5" AutomationProperties.Name="Run log" />
+                        <ScrollViewer x:Name="TraceArea" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                            <StackPanel x:Name="TraceList" Margin="0,0,8,0" />
+                        </ScrollViewer>
+                        <ScrollViewer x:Name="LessonsArea" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                            <StackPanel x:Name="LessonList" Margin="0,0,8,0" />
+                        </ScrollViewer>
+                    </Grid>
                 </DockPanel>
             </Grid>
         </ContentControl>

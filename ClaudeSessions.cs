@@ -126,10 +126,11 @@ public static class ClaudeSessions
     /// <summary>
     /// Runs one turn of a session in its folder: <paramref name="isNew"/> starts it with that id, otherwise it resumes.
     /// Each step is reported as it streams in. Cancelling stops claude and everything it started.
-    /// <paramref name="extraArgs"/> go to claude as they are (the factory denies pushing with them).
+    /// <paramref name="extraArgs"/> go to claude as they are (the factory denies pushing with them); <paramref name="onLine"/>
+    /// sees every streamed line as it is parsed (the factory's trace), valid only during the call.
     /// </summary>
     public static async Task RunTurnAsync(string folder, string id, bool isNew, string prompt, Action<SessionEntry> onEntry,
-        CancellationToken cancel, IEnumerable<string>? extraArgs = null)
+        CancellationToken cancel, IEnumerable<string>? extraArgs = null, Action<JsonElement>? onLine = null)
     {
         var start = new ProcessStartInfo("claude")
         {
@@ -168,6 +169,7 @@ public static class ClaudeSessions
             {
                 using JsonDocument doc = JsonDocument.Parse(line);
                 JsonElement root = doc.RootElement;
+                onLine?.Invoke(root);
                 string type = root.TryGetProperty("type", out JsonElement t) ? t.GetString() ?? "" : "";
                 if (type == "assistant" && root.TryGetProperty("message", out JsonElement message)
                     && message.TryGetProperty("content", out JsonElement content) && content.ValueKind == JsonValueKind.Array)
@@ -230,7 +232,7 @@ public static class ClaudeSessions
     }
 
     // the one detail that says what a tool step does: its command, file, pattern or url
-    private static string ToolSummary(JsonElement block)
+    internal static string ToolSummary(JsonElement block)
     {
         if (!block.TryGetProperty("input", out JsonElement input) || input.ValueKind != JsonValueKind.Object) return "";
         foreach (string key in new[] { "command", "file_path", "pattern", "url", "query", "description", "prompt", "skill" })
