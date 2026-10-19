@@ -20,9 +20,10 @@ public partial class ChatPanel : UserControl
     /// <summary>The close button was pressed; the owner removes the panel.</summary>
     public event Action? CloseRequested;
 
-    public ChatPanel(string topic, Question question, string mine)
+    /// <param name="mine">The developer's answer and <paramref name="score"/> its score, read at every turn.</param>
+    public ChatPanel(string topic, Question question, Func<string> mine, Func<Score?> score)
         : this(topic, "Ask anything about this question or its answer: why, what if, a deeper example, or check an idea.",
-               history => QuestionGenerator.ChatAsync(question, mine, history))
+               history => QuestionGenerator.ChatAsync(question, mine(), score(), history))
     {
     }
 

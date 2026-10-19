@@ -150,41 +150,45 @@ public static class QuestionGenerator
         return conversation.ToString();
     }
 
-    /// <summary>A follow-up about a TL;DR. It may use the web, like the TL;DR itself, so answers stay current.</summary>
+    // what every discussion's system prompt says about how to answer
+    private const string HowToAnswer = """
+        Answer their latest message directly and concisely (usually under 150 words). Go deeper, give examples,
+        or correct them when they are wrong. When they ask what it means for their own work, products or platform,
+        answer in terms of what is known about them below.
+        Plain text, no markdown headings or bold.
+        Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
+        """;
+
+    // the user turn of every discussion: the talk so far; the item itself is in the system prompt
+    private static string Turn(IReadOnlyList<(bool IsMine, string Text)> history) => $"""
+        CONVERSATION SO FAR (the last DEVELOPER message is the one to answer):
+        {Conversation(history)}
+
+        Reply with your answer only, without a "TUTOR:" prefix.
+        """;
+
+    /// <summary>A follow-up about a TL;DR: the TL;DR is the system context. It may use the web, so answers stay current.</summary>
     public static async Task<string> ChatAboutTldrAsync(string topic, TldrContent tldr, IReadOnlyList<(bool IsMine, string Text)> history)
     {
-        string prompt = $"""
+        string system = $"""
             You are a friendly senior engineer discussing the latest news on {topic} with a developer during a break.
-            Answer their latest message directly and concisely (usually under 150 words). Go deeper, give examples,
-            or correct them when they are wrong. When it is about something recent, search the web and fetch the
-            official source first, and name the page you used with its full https URL.
-            When they ask what it means for their own work, products or platform, answer in terms of what is known
-            about them below.
-            Plain text, no markdown headings or bold.
-            Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
+            When it is about something recent, search the web and fetch the official source first, and name the page
+            you used with its full https URL.
+            {HowToAnswer}
             {await LearnPath.AboutThemAsync()}
             {OnTheirMachine()}
             THE TL;DR YOU ARE DISCUSSING (written {tldr.Written:yyyy-MM-dd}):
             {tldr.ToText()}
-
-            CONVERSATION SO FAR (the last DEVELOPER message is the one to answer):
-            {Conversation(history)}
-
-            Reply with your answer only, without a "TUTOR:" prefix.
             """;
-        return await RunDiscussionAsync(prompt);
+        return await RunDiscussionAsync(system, Turn(history));
     }
 
-    /// <summary>A follow-up about a lesson of the learn path: it knows the lesson, its check question and answer.</summary>
+    /// <summary>A follow-up about a lesson of the learn path: the lesson and its check question and answer are the system context.</summary>
     public static async Task<string> ChatAboutLessonAsync(string course, Lesson lesson, LessonContent content, IReadOnlyList<(bool IsMine, string Text)> history)
     {
-        string prompt = $"""
+        string system = $"""
             You are a friendly senior engineer tutoring a developer through a lesson of their {course} course during a break.
-            Answer their latest message directly and concisely (usually under 150 words). Go deeper, give examples,
-            or correct them when they are wrong. When they ask how it applies to their own work, products or
-            platform, answer in terms of what is known about them below.
-            Plain text, no markdown headings or bold.
-            Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
+            {HowToAnswer}
             {await LearnPath.AboutThemAsync()}
             {OnTheirMachine()}
             THE LESSON: {lesson.Title} - {lesson.Summary}
@@ -195,29 +199,22 @@ public static class QuestionGenerator
 
             ITS ANSWER:
             {content.Answer}
-
-            CONVERSATION SO FAR (the last DEVELOPER message is the one to answer):
-            {Conversation(history)}
-
-            Reply with your answer only, without a "TUTOR:" prefix.
             """;
-        return await RunDiscussionAsync(prompt);
+        return await RunDiscussionAsync(system, Turn(history));
     }
 
-    public static async Task<string> ChatAsync(Question question, string mine, IReadOnlyList<(bool IsMine, string Text)> history)
+    /// <summary>
+    /// A follow-up about a quiz question: the question, the reference answer, the developer's own answer and its score
+    /// (once checked) are the system context. Answer and score are read at each turn, so a later check is known too.
+    /// </summary>
+    public static async Task<string> ChatAsync(Question question, string mine, Score? score, IReadOnlyList<(bool IsMine, string Text)> history)
     {
-        string conversation = Conversation(history);
-
-        string prompt = $"""
+        string scored = score == null ? "(not checked yet)" : $"{score.Points}/10 - {score.Feedback}";
+        string system = $"""
             You are a friendly senior engineer tutoring a developer about a quiz question they just did during a break.
-            Answer their latest message directly and concisely (usually under 150 words). Go deeper, give examples,
-            or correct them when they are wrong. When they ask how it applies to their own work, products or
-            platform, answer in terms of what is known about them below.
-            Plain text, no markdown headings or bold.
-            Put code in fenced blocks with the language (```java, ```sql, ...); short names in single backticks.
+            {HowToAnswer}
             {await LearnPath.AboutThemAsync()}
             {OnTheirMachine()}
-
             QUESTION:
             {question.Text}
 
@@ -227,12 +224,10 @@ public static class QuestionGenerator
             THE DEVELOPER'S OWN ANSWER:
             {(mine.Trim().Length > 0 ? mine : "(none)")}
 
-            CONVERSATION SO FAR (the last DEVELOPER message is the one to answer):
-            {conversation}
-
-            Reply with your answer only, without a "TUTOR:" prefix.
+            ITS SCORE:
+            {scored}
             """;
-        return await RunDiscussionAsync(prompt);
+        return await RunDiscussionAsync(system, Turn(history));
     }
 
     public static Task<string> RunClaudeAsync(string prompt, bool web = false) =>
@@ -261,8 +256,10 @@ public static class QuestionGenerator
     /// -p cannot ask, so anything else is denied. Clean leaves out the user's settings, hooks and MCP servers; Mine
     /// loads them. A dependency report can be slow, so it gets more time.
     /// </summary>
-    private static Task<string> RunDiscussionAsync(string prompt)
+    private static async Task<string> RunDiscussionAsync(string system, string prompt)
     {
+        // own files per turn: two discussions can run at the same time; removed when the turn ends
+        string id = Guid.NewGuid().ToString("N");
         // git -C <path> and gradlew -p <path> take any subcommand or task, so each is allowed per repo and per read-only
         // subcommand only. Dozens of repos make the rules too long for a command line, so they go in a settings file.
         IReadOnlyList<string> repos = ClaudeProjects.GitRepos();
@@ -276,19 +273,32 @@ public static class QuestionGenerator
                 allow.Add($@"PowerShell({repo}\gradlew -p {repo} {task}:*)");
             }
         }
-        string settings = Path.Combine(Path.GetTempPath(), "devbreak-discussion-permissions.json");
+        string settings = Path.Combine(Path.GetTempPath(), $"devbreak-discussion-{id}-permissions.json");
         File.WriteAllText(settings, System.Text.Json.JsonSerializer.Serialize(new
         {
             permissions = new { allow, deny = new[] { "Write", "Edit", "NotebookEdit" } },
         }));
+        // the discussion's context (the item, the learner, the machine) is its system prompt; a TL;DR is too long for a
+        // command line, so it goes in a file
+        string systemFile = Path.Combine(Path.GetTempPath(), $"devbreak-discussion-{id}-system.txt");
+        File.WriteAllText(systemFile, system);
         var args = new List<string>
         {
             "-p", "--tools", "Read,Grep,Glob,WebSearch,WebFetch,PowerShell", "--settings", settings,
-            "--disallowedTools", "Write,Edit,NotebookEdit", "--no-session-persistence",
+            "--disallowedTools", "Write,Edit,NotebookEdit", "--append-system-prompt-file", systemFile,
+            "--no-session-persistence",
         };
         if (DiscussSetup == ClaudeSetup.Clean) args.AddRange(["--setting-sources", "", "--strict-mcp-config"]);
         foreach (ClaudeProject project in ClaudeProjects.Find()) args.AddRange(["--add-dir", project.Folder]);
-        return RunAsync(args, prompt, Path.GetTempPath(), TimeSpan.FromMinutes(10));
+        try
+        {
+            return await RunAsync(args, prompt, Path.GetTempPath(), TimeSpan.FromMinutes(10));
+        }
+        finally
+        {
+            File.Delete(settings);
+            File.Delete(systemFile);
+        }
     }
 
     /// <summary>Tells a discussion what it may look at on the developer's machine, and how to run the allowed commands.</summary>
