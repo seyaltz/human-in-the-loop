@@ -282,25 +282,28 @@ public partial class QuestionWindow : Window
 
     private void Mode_Checked(object sender, RoutedEventArgs e)
     {
-        if (LearnView == null || StatsView == null || TldrView == null || QuizView == null) return;
+        if (LearnView == null || StatsView == null || TldrView == null || SessionsView == null || QuizView == null) return;
         bool learn = LearnMode.IsChecked == true;
         bool stats = StatsMode.IsChecked == true;
         bool tldr = TldrMode.IsChecked == true;
-        QuizView.Visibility = learn || stats || tldr ? Visibility.Collapsed : Visibility.Visible;
+        bool sessions = SessionsMode.IsChecked == true;
+        QuizView.Visibility = learn || stats || tldr || sessions ? Visibility.Collapsed : Visibility.Visible;
         LearnView.Visibility = learn ? Visibility.Visible : Visibility.Collapsed;
         StatsView.Visibility = stats ? Visibility.Visible : Visibility.Collapsed;
         TldrView.Visibility = tldr ? Visibility.Visible : Visibility.Collapsed;
-        if (learn || stats || tldr)
+        SessionsView.Visibility = sessions ? Visibility.Visible : Visibility.Collapsed;
+        if (learn || stats || tldr || sessions)
         {
-            Title = learn ? "Dev break - learn path" : stats ? "Dev break - stats" : "Dev break - TL;DR";
-            // courses, stats and the TL;DR need room; grow once, never shrink
+            Title = learn ? "Dev break - learn path" : stats ? "Dev break - stats" : tldr ? "Dev break - TL;DR" : "Dev break - sessions";
+            // courses, stats, the TL;DR and sessions need room; grow once, never shrink
             Rect area = SystemParameters.WorkArea;
             Width = Math.Max(Width, Math.Min(WideWidth, area.Width - 32));
             PlaceBottomRight(Math.Min(WideHeight, area.Height - 32));
             if (learn) LearnView.Start();
             else if (stats) StatsView.Refresh();
-            else TldrView.Start();
-            // each mode keeps its own discussion: the lesson's and the TL;DR's come back, stats has none
+            else if (tldr) TldrView.Start();
+            else SessionsView.Start();
+            // each mode keeps its own discussion: the lesson's and the TL;DR's come back; stats and sessions have none
             ShowChat(tldr ? TldrView.CurrentChat : learn ? LearnView.CurrentChat : null);
         }
         else if (Topics.SelectedItem != null && _tabs.ContainsKey(Current))

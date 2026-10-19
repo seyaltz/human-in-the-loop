@@ -23,7 +23,7 @@ public static class ClaudeProjects
 {
     private static readonly string Home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     // DEVBREAK_CLAUDE_PROJECTS points at another projects folder (a sandbox for tests and demos)
-    private static readonly string ProjectsDir =
+    internal static readonly string ProjectsDir =
         Environment.GetEnvironmentVariable("DEVBREAK_CLAUDE_PROJECTS") is { Length: > 0 } dir ? dir : Path.Combine(Home, ".claude", "projects");
 
     /// <summary>
