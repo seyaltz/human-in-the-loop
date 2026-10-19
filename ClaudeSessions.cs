@@ -13,10 +13,13 @@ namespace DevBreak;
 /// <summary>A Claude Code session on this machine: its id, the folder it works in, a title and when it was last used.</summary>
 public sealed record SessionInfo(string Id, string Folder, string Title, DateTime LastActive);
 
-/// <summary>One line of a session's transcript: something the developer said, Claude's text, or a tool step.</summary>
+/// <summary>
+/// One line of a session's transcript: something the developer said, a tool step, a note Claude wrote while working,
+/// the answer that ends a turn, or how the turn ended.
+/// </summary>
 public sealed record SessionEntry(SessionEntryKind Kind, string Text);
 
-public enum SessionEntryKind { You, Claude, Tool, Done, Error }
+public enum SessionEntryKind { You, Note, Tool, Answer, Done, Error }
 
 /// <summary>
 /// Real Claude Code sessions, the same ones the CLI keeps under .claude\projects: listed, read back and continued.
@@ -94,7 +97,26 @@ public static class ClaudeSessions
                 // a line being written: skip it
             }
         }
+        AnswerPerTurn(entries);
         return entries.Count > MaxEntries ? entries[^MaxEntries..] : entries;
+    }
+
+    // a saved turn has no separate result: its last text is the answer, the texts before it were notes on the way
+    private static void AnswerPerTurn(List<SessionEntry> entries)
+    {
+        int last = -1;
+        for (int i = 0; i <= entries.Count; i++)
+        {
+            if (i == entries.Count || entries[i].Kind == SessionEntryKind.You)
+            {
+                if (last >= 0) entries[last] = entries[last] with { Kind = SessionEntryKind.Answer };
+                last = -1;
+            }
+            else if (entries[i].Kind == SessionEntryKind.Note)
+            {
+                last = i;
+            }
+        }
     }
 
     /// <summary>
@@ -154,9 +176,16 @@ public static class ClaudeSessions
                     double seconds = root.TryGetProperty("duration_ms", out JsonElement ms) && ms.ValueKind == JsonValueKind.Number ? ms.GetDouble() / 1000 : 0;
                     double cost = root.TryGetProperty("total_cost_usd", out JsonElement c) && c.ValueKind == JsonValueKind.Number ? c.GetDouble() : 0;
                     string text = root.TryGetProperty("result", out JsonElement r) && r.ValueKind == JsonValueKind.String ? r.GetString()! : "";
-                    onEntry(error
-                        ? new SessionEntry(SessionEntryKind.Error, text.Length > 0 ? text : "the turn ended with an error")
-                        : new SessionEntry(SessionEntryKind.Done, $"{seconds:0.#} s · ${cost:0.00}"));
+                    if (error)
+                    {
+                        onEntry(new SessionEntry(SessionEntryKind.Error, text.Length > 0 ? text : "the turn ended with an error"));
+                    }
+                    else
+                    {
+                        // the answer that ends the turn; the texts streamed before it were notes on the way
+                        if (text.Length > 0) onEntry(new SessionEntry(SessionEntryKind.Answer, text));
+                        onEntry(new SessionEntry(SessionEntryKind.Done, $"{seconds:0.#} s · ${cost:0.00}"));
+                    }
                 }
             }
             catch (JsonException)
@@ -184,7 +213,7 @@ public static class ClaudeSessions
         string kind = block.TryGetProperty("type", out JsonElement k) ? k.GetString() ?? "" : "";
         if (kind == "text" && block.TryGetProperty("text", out JsonElement text) && text.GetString() is { Length: > 0 } t)
         {
-            entries.Add(new SessionEntry(SessionEntryKind.Claude, t));
+            entries.Add(new SessionEntry(SessionEntryKind.Note, t));
         }
         else if (kind == "tool_use")
         {
