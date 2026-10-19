@@ -97,6 +97,11 @@ may Claude push and open a **draft** PR - you review and merge. If a check keeps
 Then it **learns**: facts the run had to discover go straight into the repo's Claude memory (with Undo), and rules -
 a CLAUDE.md line, a hook, a skill - wait for your **Apply**. The next run starts smarter.
 
+Tell it what you think: **send feedback to the run** ("also handle underscores") and it applies it, checks again and
+updates the draft PR; **rate the run** good or bad with a note; say **why** when you undo or dismiss a lesson. All of
+it goes into what the factory learns. Every run has a **Trace** - each step with its time, cost, tokens, every tool
+call and the exact prompt and answer - and **Export trace** saves it as JSON and Markdown.
+
 ## Save it to your Claude
 
 What you learn should not vanish: every TL;DR item has a **+ my Claude** button. Claude suggests which of your Claude

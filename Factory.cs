@@ -39,6 +39,46 @@ public sealed class FactoryLesson
     public string Content { get; set; } = "";
     public string Status { get; set; } = "pending"; // saved | pending | applied | dismissed | undone
     public string? File { get; set; }
+    /// <summary>Why the developer dismissed or undid it; later lessons for the repo avoid the like.</summary>
+    public string Feedback { get; set; } = "";
+}
+
+/// <summary>A tool call Claude made in a step, and how it ended.</summary>
+public sealed class FactoryToolCall
+{
+    public DateTime At { get; set; }
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Detail { get; set; } = "";
+    public string Result { get; set; } = "running"; // running | ok | error | denied
+}
+
+/// <summary>
+/// One step of a run in the trace: a Claude turn, a one-off Claude (locate, review, learn), the verify command or a
+/// git command - when it ran, what it cost, the tools it used, and exactly what went in and came out.
+/// </summary>
+public sealed class FactorySpan
+{
+    public FactoryStage Stage { get; set; }
+    public string Kind { get; set; } = ""; // turn | claude | verify | git
+    public string Title { get; set; } = "";
+    public DateTime Started { get; set; }
+    public DateTime? Ended { get; set; }
+    public double Cost { get; set; }
+    public long InputTokens { get; set; }
+    public long OutputTokens { get; set; }
+    public int Denied { get; set; }
+    public string Prompt { get; set; } = "";
+    public string Answer { get; set; } = "";
+    public string Error { get; set; } = "";
+    public List<FactoryToolCall> Tools { get; set; } = [];
+}
+
+/// <summary>Something the developer told a run to change.</summary>
+public sealed class FactoryFeedback
+{
+    public DateTime At { get; set; }
+    public string Text { get; set; } = "";
 }
 
 /// <summary>A task taken from its source to a draft pull request, in its own worktree and branch.</summary>
@@ -69,6 +109,11 @@ public sealed class FactoryRun
     public DateTime Created { get; set; }
     public List<FactoryStep> Log { get; set; } = [];
     public List<FactoryLesson> Lessons { get; set; } = [];
+    public List<FactorySpan> Trace { get; set; } = [];
+    public List<FactoryFeedback> Feedback { get; set; } = [];
+    /// <summary>The developer's verdict on the run: good, bad, or none yet; with a note.</summary>
+    public string Rating { get; set; } = "";
+    public string RatingNote { get; set; } = "";
 
     [System.Text.Json.Serialization.JsonIgnore] public CancellationTokenSource? Running { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public bool Working => Running != null;
@@ -151,21 +196,66 @@ public static class Factory
     }
 
     /// <summary>Takes a run from its task to a draft PR, then learns from it. Ends at Done, NeedsYou or Stopped.</summary>
-    public static async Task RunAsync(FactoryRun run)
+    public static Task RunAsync(FactoryRun run) => DriveAsync(run, learnAfter: false, async cancel =>
+    {
+        if (!await LocateAsync(run, cancel)) return false;
+        if (!await WorktreeAsync(run, cancel)) return false;
+        // from here on there is something to learn from
+        if (!await PlanAsync(run, cancel)) return true;
+        if (!await BuildAsync(run, cancel)) return true;
+        if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
+        return true;
+    });
+
+    /// <summary>After a run waited on failed checks: opens the draft PR anyway (it says what failed).</summary>
+    public static Task PullRequestAnywayAsync(FactoryRun run) => DriveAsync(run, learnAfter: false, async cancel =>
+    {
+        await PullRequestAsync(run, cancel, anyway: true);
+        return false;
+    });
+
+    /// <summary>
+    /// The developer's feedback goes back to the run: Claude applies it in the run's session, verify and review run
+    /// again, and the draft PR is updated (or opened); then the run learns again.
+    /// </summary>
+    public static Task FeedbackAsync(FactoryRun run, string text) => DriveAsync(run, learnAfter: true, async cancel =>
+    {
+        run.Feedback.Add(new FactoryFeedback { At = DateTime.Now, Text = text.Trim() });
+        if (!Directory.Exists(run.Worktree)) return Wait(run, "The run's worktree is gone, so the feedback has nowhere to go.");
+        Enter(run, FactoryStage.Build, "Your feedback: " + text.Trim());
+        (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
+            The developer looked at your change and says:
+            {text.Trim()}
+
+            Apply it in this worktree (if part of it is wrong, say why instead of doing it). Do not commit or push.
+            Reply with what you changed.
+            """, "Your feedback", cancel);
+        if (error != null) return Wait(run, "The feedback turn failed: " + error);
+        Log(run, "Fix:\n" + answer);
+        if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
+        return true;
+    });
+
+    /// <summary>The developer rates the run (good / bad, with a note); the run learns again from what they said.</summary>
+    public static Task RateAsync(FactoryRun run, string rating, string note) => DriveAsync(run, learnAfter: true, cancel =>
+    {
+        run.Rating = rating;
+        run.RatingNote = note.Trim();
+        Log(run, $"You rated the run {rating}" + (run.RatingNote.Length > 0 ? ": " + run.RatingNote : "."));
+        return Task.FromResult(false);
+    });
+
+    // runs a body that moves the run on; afterwards (unless stopped) the run learns, when the body says there is
+    // something to learn from or the caller asks for it, and its stage and note are what the body left
+    private static async Task DriveAsync(FactoryRun run, bool learnAfter, Func<CancellationToken, Task<bool>> body)
     {
         if (run.Working) return;
         run.Running = new CancellationTokenSource();
         CancellationToken cancel = run.Running.Token;
-        bool learn = false;
+        bool learn = learnAfter;
         try
         {
-            if (!await LocateAsync(run, cancel)) return;
-            if (!await WorktreeAsync(run)) return;
-            learn = true;
-            if (!await PlanAsync(run, cancel)) return;
-            if (!await BuildAsync(run, cancel)) return;
-            if (!await CheckAsync(run, cancel)) return;
-            await PullRequestAsync(run, cancel);
+            learn |= await body(cancel);
         }
         catch (OperationCanceledException)
         {
@@ -178,28 +268,6 @@ public static class Factory
         {
             if (cancel.IsCancellationRequested) End(run, FactoryStage.Stopped, "Stopped.");
             else if (learn) await LearnAsync(run);
-            run.Running.Dispose();
-            run.Running = null;
-            Notify(run);
-        }
-    }
-
-    /// <summary>After a run waited on failed checks: opens the draft PR anyway (it says what failed), then learns.</summary>
-    public static async Task PullRequestAnywayAsync(FactoryRun run)
-    {
-        if (run.Working) return;
-        run.Running = new CancellationTokenSource();
-        try
-        {
-            await PullRequestAsync(run, run.Running.Token, anyway: true);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            Wait(run, "Something went wrong: " + ex.Message);
-        }
-        finally
-        {
-            if (run.Running.IsCancellationRequested) End(run, FactoryStage.Stopped, "Stopped.");
             run.Running.Dispose();
             run.Running = null;
             Notify(run);
@@ -260,8 +328,7 @@ public static class Factory
         string[] tools = run.Source == FactorySource.Typed
             ? ["--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob"]
             : ["--permission-mode", "bypassPermissions", "--disallowedTools", "Edit", "Write", "NotebookEdit", .. NoPublish[1..]];
-        (string answer, double cost) = await ClaudeJsonAsync(run.Folder, prompt, tools, cancel);
-        run.Cost += cost;
+        string answer = await ClaudeOnceAsync(run, run.Folder, prompt, tools, "Pick the repo", cancel);
         string pick = answer.Replace("\r", "").Split('\n').Select(l => l.Trim().Trim('*', '`').Trim()).LastOrDefault(l => l.StartsWith("REPO:", StringComparison.OrdinalIgnoreCase)) ?? "";
         string value = pick.Length > 5 ? pick[5..].Trim() : "";
         Log(run, $"{repos.Count} repos in the folder; Claude picked: {value}");
@@ -272,14 +339,15 @@ public static class Factory
         return null;
     }
 
-    private static async Task<bool> WorktreeAsync(FactoryRun run)
+    private static async Task<bool> WorktreeAsync(FactoryRun run, CancellationToken cancel)
     {
         Enter(run, FactoryStage.Worktree, $"New worktree {run.Worktree} on branch {run.Branch}, from {run.BaseBranch}.");
-        (int exit, string output) = await GitAsync(run.Repo, "rev-parse", run.BaseBranch);
+        (int exit, string output) = await GitSpanAsync(run, run.Repo, "rev-parse", run.BaseBranch);
         if (exit != 0) return Wait(run, $"Can't find branch {run.BaseBranch} in {run.Repo}: {output.Trim()}");
         run.BaseCommit = output.Trim();
         Directory.CreateDirectory(WorktreesDir);
-        (exit, output) = await GitAsync(run.Repo, "worktree", "add", run.Worktree, "-b", run.Branch, run.BaseCommit);
+        cancel.ThrowIfCancellationRequested();
+        (exit, output) = await GitSpanAsync(run, run.Repo, "worktree", "add", run.Worktree, "-b", run.Branch, run.BaseCommit);
         if (exit != 0) return Wait(run, "Could not create the worktree: " + output.Trim());
         return true;
     }
@@ -314,7 +382,7 @@ public static class Factory
             the plan as short numbered steps, naming the files you will change and the tests you will add or run.
             {verify}
             """;
-        (string answer, string? error) = await TurnAsync(run, isNew: true, prompt, cancel);
+        (string answer, string? error) = await TurnAsync(run, isNew: true, prompt, "Plan", cancel);
         if (error != null) return Wait(run, "The plan turn failed: " + error);
         if (Line(answer, "CANNOT_READ:") is { } why) return Wait(run, "Claude could not read the task: " + why);
         if (Line(answer, "TITLE:") is { Length: > 0 } title && run.Source != FactorySource.Typed) run.Title = title;
@@ -335,7 +403,7 @@ public static class Factory
             Now implement the plan in this worktree. Change only what the task needs, and add or update tests for it.
             Do not commit, push or open a pull request - that comes after the checks. Reply with a short summary of
             what you changed.
-            """, cancel);
+            """, "Build", cancel);
         if (error != null) return Wait(run, "The build turn failed: " + error);
         Log(run, "Build:\n" + answer);
         return true;
@@ -359,7 +427,7 @@ public static class Factory
                 {findings}
 
                 Fix what is right in it (say why if you leave something). Do not commit or push. Reply with what you changed.
-                """, cancel);
+                """, $"Fix review round {review}", cancel);
             if (error != null) return Wait(run, "The fix turn failed: " + error);
             Log(run, "Fix:\n" + answer);
         }
@@ -372,7 +440,10 @@ public static class Factory
             (int changed, string status) = await GitAsync(run.Worktree, "status", "--porcelain");
             if (changed == 0 && status.Trim().Length == 0) return Wait(run, "Claude changed no files.");
             Enter(run, FactoryStage.Verify, $"Dev break runs the verify command: {run.Verify}");
+            FactorySpan span = Begin(run, "verify", $"Verify (attempt {attempt})", run.Verify);
             (int exit, string output) = await ShellAsync(run.Worktree, run.Verify, cancel);
+            span.Error = exit == 0 ? "" : $"exit {exit}";
+            Finish(run, span, $"exit {exit}\n{Tail(output, 20000)}");
             Log(run, $"Verify exit {exit}:\n```\n{Tail(output, 3000)}\n```", ok: exit == 0);
             if (exit == 0) return true;
             if (attempt > MaxFixes) return Wait(run, $"The verify command still fails after {MaxFixes} fixes.");
@@ -383,7 +454,7 @@ public static class Factory
 
                 Find the cause and fix it. Fix the code, not the test, unless the test itself is wrong (then say why).
                 Do not commit or push. Reply with what you changed.
-                """, cancel);
+                """, $"Fix verify failure {attempt}", cancel);
             if (error != null) return Wait(run, "The fix turn failed: " + error);
             Log(run, "Fix:\n" + answer);
         }
@@ -408,8 +479,7 @@ public static class Factory
             for, missing or weak tests, security issues. No style nits. Reply with VERDICT: PASS or VERDICT: FIX on the
             first line, then the findings as a short list (file:line - problem - what to do). PASS when nothing real is left.
             """;
-        (string answer, double cost) = await ClaudeJsonAsync(run.Worktree, prompt, ["--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob"], cancel);
-        run.Cost += cost;
+        string answer = await ClaudeOnceAsync(run, run.Worktree, prompt, ["--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob"], "Review", cancel);
         bool pass = Line(answer, "VERDICT:")?.StartsWith("PASS", StringComparison.OrdinalIgnoreCase) == true;
         int newline = answer.IndexOf('\n');
         return (pass, newline > 0 ? answer[(newline + 1)..].Trim() : answer.Trim());
@@ -417,7 +487,8 @@ public static class Factory
 
     private static async Task<bool> PullRequestAsync(FactoryRun run, CancellationToken cancel, bool anyway = false)
     {
-        Enter(run, FactoryStage.PullRequest, "Claude commits, pushes the branch and opens a draft PR.");
+        bool update = run.PrUrl.Length > 0;
+        Enter(run, FactoryStage.PullRequest, update ? "Claude commits and pushes, so the draft PR updates." : "Claude commits, pushes the branch and opens a draft PR.");
         string checks = anyway
             ? $"""
               The checks did NOT all pass: {run.Note} The developer asked for the draft PR anyway - say clearly in its
@@ -429,20 +500,33 @@ public static class Factory
               {run.Review}
               """;
         string link = run.Source == FactorySource.Jira ? $" Link it to the Jira issue {run.Task} the way this repo does." : "";
+        string todo = update
+            ? $"""
+              The draft pull request {run.PrUrl} already exists for branch {run.Branch}. Commit the new changes with a
+              clear message and push to the same branch, so the PR updates. If the description no longer fits (what
+              changed, how it was verified), update it with the tools on this machine. Do not merge.
+              Reply with the pull request URL on the last line.
+              """
+            : $"""
+              Now commit all the changes on branch {run.Branch} with a clear message, push the branch to the remote, and
+              open a DRAFT pull request into {run.BaseBranch} with the tools on this machine.{link} The description: what
+              changed and why, how it was verified (the command and its result), and the review notes. Do not merge.
+              Reply with the pull request URL on the last line.
+              """;
         (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
             {checks}
 
-            Now commit all the changes on branch {run.Branch} with a clear message, push the branch to the remote, and
-            open a DRAFT pull request into {run.BaseBranch} with the tools on this machine.{link} The description: what
-            changed and why, how it was verified (the command and its result), and the review notes. Do not merge.
-            Reply with the pull request URL on the last line.
-            """, cancel, publish: true);
+            {todo}
+            """, update ? "Update the draft PR" : "Draft PR", cancel, publish: true);
         if (error != null) return Wait(run, "The pull request turn failed: " + error);
-        Match url = Regex.Matches(answer, @"https?://[^\s)>\]""'`]+").LastOrDefault() ?? Match.Empty;
+        // the PR is the URL on the reply's last line, as asked - a link elsewhere in the reply (in a quoted
+        // description, say) is not a PR
+        string last = answer.Replace("\r", "").Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.Length > 0) ?? "";
+        Match url = Regex.Match(last, @"https?://[^\s)>\]""'`*]+");
         if (!url.Success) return Wait(run, "Claude did not give a pull request URL:\n" + answer);
         run.PrUrl = url.Value.TrimEnd('.', ',');
         Log(run, "Draft PR: " + run.PrUrl);
-        End(run, FactoryStage.Done, anyway ? "Draft PR opened - with failed checks." : "Draft PR opened.");
+        End(run, FactoryStage.Done, (update ? "Draft PR updated" : "Draft PR opened") + (anyway ? " - with failed checks." : "."));
         return true;
     }
 
@@ -454,21 +538,40 @@ public static class Factory
         Enter(run, FactoryStage.Learn, "Claude looks back at the run for what to remember.");
         try
         {
+            if (run.Repo.Length == 0) throw new InvalidOperationException("the run never found its repo");
             string? memoryDir = await CliSetup.MemoryDirAsync(run.Repo);
             string index = memoryDir != null && File.Exists(Path.Combine(memoryDir, "MEMORY.md")) ? File.ReadAllText(Path.Combine(memoryDir, "MEMORY.md")) : "";
             string log = string.Join("\n\n", run.Log.Select(s => $"[{s.Stage}{(s.Ok ? "" : ", FAILED")}] {Tail(s.Text, 1500)}"));
+            // what the developer said: their feedback, their rating, and the lessons they turned down for this repo
+            string said = string.Join("\n", run.Feedback.Select(f => "- feedback: " + f.Text));
+            if (run.Rating.Length > 0) said += $"\n- rated the run {run.Rating}" + (run.RatingNote.Length > 0 ? ": " + run.RatingNote : "");
+            string rejected = string.Join("\n", Runs.Where(r => r.Repo.Equals(run.Repo, StringComparison.OrdinalIgnoreCase))
+                .SelectMany(r => r.Lessons).Where(l => l.Status is "dismissed" or "undone")
+                .Select(l => $"- {l.Kind} {l.Name}: {l.Description}" + (l.Feedback.Length > 0 ? $" - why: {l.Feedback}" : "")));
+            string already = string.Join("\n", run.Lessons.Select(l => $"- {l.Kind} {l.Name}: {l.Description}"));
+            int before = run.Lessons.Count;
             string prompt = $"""
                 A coding agent just worked on a task in the repo {run.Repo}. Below is the run: the task, its log (plan,
-                build, verify output, fixes, review findings) and how it ended. Find what is worth keeping for the next
-                agent working in this repo, so the same mistakes and detours do not happen again.
+                build, verify output, fixes, review findings), how it ended and what the developer said about it. Find
+                what is worth keeping for the next agent working in this repo, so the same mistakes and detours do not
+                happen again. What the developer said weighs most: it is the truth about whether the run did well.
 
                 THE TASK ({run.Source}): {run.Task}
                 HOW IT ENDED: {ended} - {note}
                 THE LOG:
                 {Tail(log, 24000)}
 
+                WHAT THE DEVELOPER SAID:
+                {(said.Trim().Length > 0 ? said.Trim() : "(nothing yet)")}
+
                 WHAT THE REPO'S MEMORY ALREADY SAYS (do not repeat it):
                 {(index.Length > 0 ? index : "(nothing yet)")}
+
+                ALREADY LEARNED FROM THIS RUN (do not repeat it):
+                {(already.Length > 0 ? already : "(nothing yet)")}
+
+                LESSONS THE DEVELOPER TURNED DOWN FOR THIS REPO (do not suggest anything like them):
+                {(rejected.Length > 0 ? rejected : "(none)")}
 
                 Lessons can be:
                 - memory: a fact about this repo the run had to discover (a build or test quirk, a command, where things
@@ -484,9 +587,8 @@ public static class Factory
                 END
                 Or reply with the single word NONE.
                 """;
-            (string answer, double cost) = await ClaudeJsonAsync(Path.GetTempPath(), prompt,
-                ["--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence"], CancellationToken.None);
-            run.Cost += cost;
+            string answer = await ClaudeOnceAsync(run, Path.GetTempPath(), prompt,
+                ["--tools", "", "--strict-mcp-config", "--setting-sources", ""], "Learn", CancellationToken.None);
             foreach (FactoryLesson lesson in ParseLessons(answer))
             {
                 if (lesson.Kind == "memory" && memoryDir != null)
@@ -497,8 +599,9 @@ public static class Factory
                 }
                 run.Lessons.Add(lesson);
             }
-            Log(run, run.Lessons.Count == 0 ? "Nothing new to remember." :
-                $"Learned {run.Lessons.Count}: {run.Lessons.Count(l => l.Status == "saved")} saved to memory, {run.Lessons.Count(l => l.Status == "pending")} rules wait for you.");
+            List<FactoryLesson> learned = run.Lessons[before..];
+            Log(run, learned.Count == 0 ? "Nothing new to remember." :
+                $"Learned {learned.Count}: {learned.Count(l => l.Status == "saved")} saved to memory, {learned.Count(l => l.Status == "pending")} rules wait for you.");
         }
         catch (Exception ex)
         {
@@ -548,9 +651,10 @@ public static class Factory
     }
 
     /// <summary>Takes a saved memory note back out: its file and its line in MEMORY.md.</summary>
-    public static void Undo(FactoryRun run, FactoryLesson lesson)
+    public static void Undo(FactoryRun run, FactoryLesson lesson, string why = "")
     {
         if (lesson.Status != "saved" || lesson.File == null) return;
+        lesson.Feedback = why.Trim();
         string name = Path.GetFileName(lesson.File);
         if (File.Exists(lesson.File)) File.Delete(lesson.File);
         string index = Path.Combine(Path.GetDirectoryName(lesson.File)!, "MEMORY.md");
@@ -604,8 +708,9 @@ public static class Factory
         return file;
     }
 
-    public static void Dismiss(FactoryRun run, FactoryLesson lesson)
+    public static void Dismiss(FactoryRun run, FactoryLesson lesson, string why = "")
     {
+        lesson.Feedback = why.Trim();
         lesson.Status = "dismissed";
         Save();
         Notify(run);
@@ -613,69 +718,229 @@ public static class Factory
 
     // --- running things ---
 
-    // a turn of the run's own Claude Code session, in its worktree
-    private static async Task<(string Answer, string? Error)> TurnAsync(FactoryRun run, bool isNew, string prompt, CancellationToken cancel, bool publish = false)
+    // a turn of the run's own Claude Code session, in its worktree; traced as a span
+    private static async Task<(string Answer, string? Error)> TurnAsync(FactoryRun run, bool isNew, string prompt, string title,
+        CancellationToken cancel, bool publish = false)
     {
+        FactorySpan span = Begin(run, "turn", title, prompt);
         string answer = "";
         string? error = null;
-        await ClaudeSessions.RunTurnAsync(run.Worktree, run.SessionId, isNew, prompt, entry =>
+        try
         {
-            switch (entry.Kind)
+            await ClaudeSessions.RunTurnAsync(run.Worktree, run.SessionId, isNew, prompt, entry =>
             {
-                case SessionEntryKind.Tool:
-                    run.Steps++;
-                    Notify(run);
-                    break;
-                case SessionEntryKind.Answer:
-                    answer = entry.Text;
-                    break;
-                case SessionEntryKind.Done:
-                    Match cost = Regex.Match(entry.Text, @"\$(\d+(\.\d+)?)");
-                    if (cost.Success) run.Cost += double.Parse(cost.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
-                    break;
-                case SessionEntryKind.Error:
-                    error = entry.Text;
-                    break;
-            }
-        }, cancel, publish ? null : NoPublish);
+                switch (entry.Kind)
+                {
+                    case SessionEntryKind.Tool:
+                        run.Steps++;
+                        break;
+                    case SessionEntryKind.Answer:
+                        answer = entry.Text;
+                        break;
+                    case SessionEntryKind.Error:
+                        error = entry.Text;
+                        break;
+                }
+            }, cancel, publish ? null : NoPublish, root => Observe(run, span, root));
+        }
+        finally
+        {
+            span.Error = error ?? (cancel.IsCancellationRequested ? "stopped" : "");
+            Finish(run, span, answer);
+        }
         cancel.ThrowIfCancellationRequested();
         return (answer, error);
     }
 
-    // a one-off claude -p with json output: its answer and what it cost
-    private static async Task<(string Answer, double Cost)> ClaudeJsonAsync(string folder, string prompt, IEnumerable<string> args, CancellationToken cancel)
+    // a one-off claude -p (locate, review, learn), streamed so its tools show in the trace; its answer
+    private static async Task<string> ClaudeOnceAsync(FactoryRun run, string folder, string prompt, IEnumerable<string> args, string title, CancellationToken cancel)
     {
+        FactorySpan span = Begin(run, "claude", title, prompt);
         var start = new ProcessStartInfo("claude")
         {
             WorkingDirectory = folder, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
             UseShellExecute = false, CreateNoWindow = true,
         };
-        foreach (string arg in new[] { "-p", "--output-format", "json", "--no-session-persistence" }.Concat(args)) start.ArgumentList.Add(arg);
-        using Process process = Process.Start(start) ?? throw new InvalidOperationException("could not start claude");
-        using CancellationTokenRegistration stop = cancel.Register(() =>
-        {
-            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-        });
-        await process.StandardInput.WriteAsync(prompt);
-        process.StandardInput.Close();
-        Task<string> stderr = process.StandardError.ReadToEndAsync();
-        string output = await process.StandardOutput.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        cancel.ThrowIfCancellationRequested();
+        foreach (string arg in new[] { "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence" }.Concat(args)) start.ArgumentList.Add(arg);
+        string answer = "";
         try
         {
-            using JsonDocument doc = JsonDocument.Parse(output);
-            JsonElement root = doc.RootElement;
-            double cost = root.TryGetProperty("total_cost_usd", out JsonElement c) && c.ValueKind == JsonValueKind.Number ? c.GetDouble() : 0;
-            string text = root.TryGetProperty("result", out JsonElement r) && r.ValueKind == JsonValueKind.String ? r.GetString()! : "";
-            if (root.TryGetProperty("is_error", out JsonElement e) && e.ValueKind == JsonValueKind.True) throw new InvalidOperationException("claude: " + text);
-            return (text, cost);
+            using Process process = Process.Start(start) ?? throw new InvalidOperationException("could not start claude");
+            using CancellationTokenRegistration stop = cancel.Register(() =>
+            {
+                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            });
+            await process.StandardInput.WriteAsync(prompt);
+            process.StandardInput.Close();
+            Task<string> stderr = process.StandardError.ReadToEndAsync();
+            bool finished = false;
+            while (await process.StandardOutput.ReadLineAsync() is { } line)
+            {
+                if (!line.StartsWith('{')) continue;
+                try
+                {
+                    using JsonDocument doc = JsonDocument.Parse(line);
+                    JsonElement root = doc.RootElement;
+                    Observe(run, span, root);
+                    if (root.TryGetProperty("type", out JsonElement t) && t.GetString() == "result")
+                    {
+                        finished = true;
+                        answer = root.TryGetProperty("result", out JsonElement r) && r.ValueKind == JsonValueKind.String ? r.GetString()! : "";
+                        if (root.TryGetProperty("is_error", out JsonElement e) && e.ValueKind == JsonValueKind.True) span.Error = "claude: " + answer;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // not a whole JSON line: skip it
+                }
+            }
+            await process.WaitForExitAsync();
+            cancel.ThrowIfCancellationRequested();
+            if (!finished) span.Error = $"claude exited with {process.ExitCode}: {(await stderr).Trim()}";
         }
-        catch (JsonException)
+        catch (OperationCanceledException)
         {
-            throw new InvalidOperationException($"claude exited with {process.ExitCode}: {(await stderr).Trim()} {Tail(output, 500)}");
+            span.Error = "stopped";
+            throw;
         }
+        catch (Exception ex) when (span.Error.Length == 0)
+        {
+            span.Error = ex.Message;
+            throw;
+        }
+        finally
+        {
+            Finish(run, span, answer);
+        }
+        if (span.Error.Length > 0) throw new InvalidOperationException(span.Error);
+        return answer;
+    }
+
+    // --- the trace ---
+
+    private static FactorySpan Begin(FactoryRun run, string kind, string title, string prompt)
+    {
+        var span = new FactorySpan
+        {
+            Stage = run.Stage, Kind = kind, Title = title, Started = DateTime.Now,
+            Prompt = prompt.Length > 100_000 ? prompt[..100_000] + "\n... (cut)" : prompt,
+        };
+        run.Trace.Add(span);
+        Notify(run);
+        return span;
+    }
+
+    private static void Finish(FactoryRun run, FactorySpan span, string answer)
+    {
+        span.Ended = DateTime.Now;
+        span.Answer = answer;
+        foreach (FactoryToolCall tool in span.Tools.Where(t => t.Result == "running")) tool.Result = "no result";
+        run.Cost += span.Cost;
+        Save();
+        Notify(run);
+    }
+
+    // one streamed line of claude: a tool it calls, how a tool call ended, and the turn's cost and tokens
+    private static void Observe(FactoryRun run, FactorySpan span, JsonElement root)
+    {
+        string type = root.TryGetProperty("type", out JsonElement t) ? t.GetString() ?? "" : "";
+        IEnumerable<JsonElement> Blocks() =>
+            root.TryGetProperty("message", out JsonElement m) && m.TryGetProperty("content", out JsonElement c) && c.ValueKind == JsonValueKind.Array
+                ? c.EnumerateArray().ToList() : [];
+        if (type == "assistant")
+        {
+            foreach (JsonElement block in Blocks().Where(b => b.TryGetProperty("type", out JsonElement k) && k.GetString() == "tool_use"))
+            {
+                span.Tools.Add(new FactoryToolCall
+                {
+                    At = DateTime.Now, Id = block.TryGetProperty("id", out JsonElement id) ? id.GetString() ?? "" : "",
+                    Name = block.TryGetProperty("name", out JsonElement n) ? n.GetString() ?? "tool" : "tool",
+                    Detail = ClaudeSessions.ToolSummary(block),
+                });
+            }
+            Notify(run);
+        }
+        else if (type == "user")
+        {
+            foreach (JsonElement block in Blocks().Where(b => b.TryGetProperty("type", out JsonElement k) && k.GetString() == "tool_result"))
+            {
+                string id = block.TryGetProperty("tool_use_id", out JsonElement i) ? i.GetString() ?? "" : "";
+                if (span.Tools.FirstOrDefault(x => x.Id == id) is not { } tool) continue;
+                bool error = block.TryGetProperty("is_error", out JsonElement e) && e.ValueKind == JsonValueKind.True;
+                string content = block.TryGetProperty("content", out JsonElement body) ? body.ToString() : "";
+                tool.Result = !error ? "ok" : content.Contains("denied", StringComparison.OrdinalIgnoreCase) ? "denied" : "error";
+            }
+            Notify(run);
+        }
+        else if (type == "result")
+        {
+            span.Cost = root.TryGetProperty("total_cost_usd", out JsonElement c) && c.ValueKind == JsonValueKind.Number ? c.GetDouble() : 0;
+            if (root.TryGetProperty("usage", out JsonElement u))
+            {
+                long Num(string key) => u.TryGetProperty(key, out JsonElement v) && v.ValueKind == JsonValueKind.Number ? v.GetInt64() : 0;
+                span.InputTokens = Num("input_tokens") + Num("cache_creation_input_tokens") + Num("cache_read_input_tokens");
+                span.OutputTokens = Num("output_tokens");
+            }
+            span.Denied = root.TryGetProperty("permission_denials", out JsonElement d) && d.ValueKind == JsonValueKind.Array ? d.GetArrayLength() : 0;
+        }
+    }
+
+    // a git command of the run, traced
+    private static async Task<(int Exit, string Output)> GitSpanAsync(FactoryRun run, string folder, params string[] args)
+    {
+        FactorySpan span = Begin(run, "git", "git " + args[0], "git -C \"" + folder + "\" " + string.Join(" ", args));
+        (int exit, string output) = await GitAsync(folder, args);
+        span.Error = exit == 0 ? "" : $"exit {exit}";
+        Finish(run, span, output.Trim());
+        return (exit, output);
+    }
+
+    /// <summary>
+    /// Writes a run's whole trace to the traces folder next to the app: <c>.json</c> (everything) and <c>.md</c> (to
+    /// read). Returns the Markdown file.
+    /// </summary>
+    public static string Export(FactoryRun run)
+    {
+        string dir = Path.Combine(AppContext.BaseDirectory, "traces");
+        Directory.CreateDirectory(dir);
+        string name = $"{run.Created:yyyy-MM-dd-HHmm}-{Slug(run.Title)}-{run.Id}";
+        File.WriteAllText(Path.Combine(dir, name + ".json"), JsonSerializer.Serialize(run, new JsonSerializerOptions { WriteIndented = true }));
+        var md = new StringBuilder();
+        const string Fence = "````";
+        md.AppendLine($"# {run.Title}").AppendLine();
+        md.AppendLine($"- Task ({run.Source}): {run.Task.Replace("\n", " ")}");
+        md.AppendLine($"- Folder: {run.Folder}  ·  repo: {run.Repo}  ·  branch: {run.Branch} from {run.BaseBranch}");
+        md.AppendLine($"- Ended: {run.Stage} - {run.Note.Replace("\n", " ")}");
+        md.AppendLine($"- Cost: ${run.Cost:0.00}  ·  steps: {run.Steps}  ·  PR: {(run.PrUrl.Length > 0 ? run.PrUrl : "none")}");
+        if (run.Rating.Length > 0) md.AppendLine($"- Your rating: {run.Rating}{(run.RatingNote.Length > 0 ? " - " + run.RatingNote : "")}");
+        foreach (FactoryFeedback f in run.Feedback) md.AppendLine($"- Your feedback ({f.At:HH:mm}): {f.Text.Replace("\n", " ")}");
+        md.AppendLine().AppendLine("## Trace").AppendLine();
+        foreach (FactorySpan s in run.Trace)
+        {
+            md.AppendLine($"### {s.Started:HH:mm:ss} · {s.Stage} · {s.Title}{(s.Error.Length > 0 ? " ✗ " + s.Error : "")}");
+            md.AppendLine($"{Duration(s)} · ${s.Cost:0.00} · {s.InputTokens:N0} in / {s.OutputTokens:N0} out tokens · {s.Tools.Count} tools{(s.Denied > 0 ? $", {s.Denied} denied" : "")}").AppendLine();
+            foreach (FactoryToolCall tool in s.Tools) md.AppendLine($"- `{tool.Name}` {tool.Detail} - {tool.Result}");
+            if (s.Tools.Count > 0) md.AppendLine();
+            md.AppendLine("Prompt:").AppendLine(Fence).AppendLine(s.Prompt.Trim()).AppendLine(Fence);
+            md.AppendLine("Answer:").AppendLine(Fence).AppendLine(s.Answer.Trim()).AppendLine(Fence).AppendLine();
+        }
+        md.AppendLine("## Learned").AppendLine();
+        foreach (FactoryLesson l in run.Lessons)
+        {
+            md.AppendLine($"- {l.Kind} **{l.Name}** ({l.Status}{(l.Feedback.Length > 0 ? ", why: " + l.Feedback : "")}): {l.Description}");
+        }
+        string file = Path.Combine(dir, name + ".md");
+        File.WriteAllText(file, md.ToString());
+        return file;
+    }
+
+    /// <summary>How long a span took ("running" while it runs).</summary>
+    public static string Duration(FactorySpan span)
+    {
+        if (span.Ended is not { } ended) return "running";
+        double seconds = (ended - span.Started).TotalSeconds;
+        return seconds < 60 ? $"{seconds:0.0} s" : $"{(int)(seconds / 60)} min {(int)(seconds % 60)} s";
     }
 
     private static async Task<(int Exit, string Output)> GitAsync(string folder, params string[] args)

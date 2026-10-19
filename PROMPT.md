@@ -411,12 +411,34 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      **Dismiss** drops it.
   Anything that stops a run (a failed turn, checks still failing, no PR URL) ends it at **Needs you** with the reason;
   **Stop** ends it at **Stopped**. A run open when Dev break closes is marked Stopped on the next start.
+- **Feedback**, three kinds:
+  - **Send to the run** (a run that is not working and has its plan and worktree): the text is kept on the run, a
+    "Your feedback" turn in the run's session applies it (without committing), verify and review run again, then the
+    PR step - an existing draft PR is **updated** (commit and push to the same branch, description refreshed),
+    otherwise it is opened - and the run learns again.
+  - **Rate the run**: 👍 Good / 👎 Bad and a note; **Save rating** keeps it, logs it, and the run learns again.
+  - **Why**, when undoing a memory note or dismissing a rule (optional): kept on the lesson.
+  The Learn prompt carries "what the developer said" (every feedback, the rating and note) - weighed most - the
+  lessons already learned in this run, and the lessons turned down for the same repo across runs with their why
+  ("do not suggest anything like them").
+- **Trace**: every step is a span - a Claude turn (`turn`), a one-off Claude (`claude`: pick the repo, review, learn -
+  streamed now, so their tools show), the verify command (`verify`) or a git command (`git`) - with its stage, title,
+  start and end, cost (`total_cost_usd`), tokens (input = input + cache creation + cache read; output), permission
+  denials, every tool call in order (time, tool, its command/file/pattern, result: ok, error, denied - a
+  `tool_result` with `is_error` whose text says denied - or no result) and the exact prompt (100k characters max) and
+  answer (for verify: the exit code and the output's last 20k). The run's cost is the sum of its spans.
+  **Export trace** writes `<traces>\<date>-<slug>-<id>.json` (the whole run) and `.md` (summary, your feedback and
+  rating, each span with its tools, prompt and answer, the lessons with their why), next to the exe; a link shows it
+  in its folder.
 - **View** (6th mode tab **Factory**): left the form and the runs (light: green pulsing while working, red when it
   needs you or was stopped; repo · stage · cost). Right the run: title, repo · branch from base · steps · cost, the
   note; **Stop**, **Draft PR anyway** (after failed checks - the description says what failed), **Open PR**, **Open in
   Sessions** (continue the run's session yourself), **Open worktree**; the pipeline as chips (✓ done, violet now,
-  coral where it stopped, faded to come); the log rendered like the chats; the lessons as cards with their state and
-  buttons.
+  coral where it stopped, faded to come); tabs **Log** (rendered like the chats) · **Trace (N)** (a fold per span:
+  "time title kind · duration · $cost · Nk in / Nk out · N tools · N denied · ✗ error", opening to its tool calls and
+  folded Prompt and Answer boxes to read and copy; opened spans stay open while it updates) · **Learned (N)** (the
+  lesson cards with their state, buttons and why), **Export trace**; at the bottom the rating row and the feedback box
+  with **Send to the run**.
 
 ## Tray app (`App.xaml.cs`)
 
