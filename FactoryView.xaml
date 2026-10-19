@@ -14,7 +14,17 @@
                 <StackPanel DockPanel.Dock="Top" Margin="0,0,6,8">
                     <TextBlock Text="from task to draft PR" Style="{StaticResource HandNote}" FontSize="19" />
                     <TextBlock Text="Factory" Style="{StaticResource Heading}" FontSize="22" Margin="0,2,0,10" />
-
+                    <!-- a new task, or the runs so far -->
+                    <StackPanel Orientation="Horizontal">
+                        <RadioButton x:Name="NewTab" Content="New task" GroupName="LeftTab" Style="{StaticResource PillRadio}" IsChecked="True"
+                                     Checked="LeftTab_Checked" />
+                        <RadioButton x:Name="RunsTab" Content="History" GroupName="LeftTab" Style="{StaticResource PillRadio}" Margin="6,0,0,0"
+                                     Checked="LeftTab_Checked" />
+                    </StackPanel>
+                </StackPanel>
+                <Grid>
+                <ScrollViewer x:Name="FormArea" VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="0,0,6,8">
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                         <RadioButton x:Name="TypedSource" Content="Typed" GroupName="Source" Style="{StaticResource PillRadio}"
                                      IsChecked="True" Checked="Source_Checked" />
@@ -62,10 +72,19 @@
                     <Button x:Name="StartButton" Content="Start run" Style="{StaticResource PrimaryButton}" Margin="0,12,0,0"
                             Click="Start_Click"
                             ToolTip="Plan, build, verify, review, then a draft PR - in its own worktree and branch" />
-                    <TextBlock Text="Runs" Style="{StaticResource Eyebrow}" Margin="2,16,0,0" />
                 </StackPanel>
-                <ListBox x:Name="RunList" BorderThickness="0" Background="Transparent" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         SelectionChanged="RunList_SelectionChanged" AutomationProperties.Name="Runs" />
+                </ScrollViewer>
+                <DockPanel x:Name="RunsArea" Visibility="Collapsed">
+                    <DockPanel DockPanel.Dock="Top" Margin="2,0,6,6">
+                        <Button x:Name="CleanAllButton" DockPanel.Dock="Right" Content="Clean up all" Style="{StaticResource SecondaryButton}"
+                                Height="32" Padding="12,0" Click="CleanAll_Click"
+                                ToolTip="Delete the worktrees, evidence and session files of every run that is not working - the records stay" />
+                        <TextBlock x:Name="RunsSummary" Style="{StaticResource Caption}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                    </DockPanel>
+                    <ListBox x:Name="RunList" BorderThickness="0" Background="Transparent" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             SelectionChanged="RunList_SelectionChanged" AutomationProperties.Name="Runs" />
+                </DockPanel>
+                </Grid>
             </DockPanel>
         </Border>
 
@@ -79,6 +98,12 @@
                         <WrapPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top" MaxWidth="420"
                                    HorizontalAlignment="Right">
                             <Button x:Name="StopButton" Content="Stop" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6" Click="Stop_Click" />
+                            <Button x:Name="ContinueButton" Content="Continue" Style="{StaticResource PrimaryButton}" Margin="0,0,8,6" Click="Continue_Click"
+                                    ToolTip="Pick up where the run stopped: finish what is missing, then verify, prove, review and the draft PR" />
+                            <Button x:Name="WorktreeButton" Content="Use a separate worktree" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6"
+                                    Click="Worktree_Click" ToolTip="Leave your checkout as it is: this run goes on in its own worktree beside the repo" />
+                            <Button x:Name="CleanButton" Content="Clean up" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6" Click="Clean_Click"
+                                    ToolTip="Delete this run's worktree, evidence and session files - the record stays" />
                             <Button x:Name="AnywayButton" Content="Draft PR anyway" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6"
                                     Click="Anyway_Click" ToolTip="Open the draft PR even though a check failed - its description says what failed" />
                             <Button x:Name="OpenPrButton" Content="Open PR" Style="{StaticResource PrimaryButton}" Margin="0,0,8,6" Click="OpenPr_Click" />
@@ -86,7 +111,7 @@
                                     Click="Session_Click" ToolTip="Continue this run's Claude Code session yourself" />
                             <Button x:Name="ProofButton" Content="Open evidence" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6"
                                     Click="Proof_Click" ToolTip="Screenshots, responses and logs from running the app with the change" />
-                            <Button x:Name="FolderButton" Content="Open worktree" Style="{StaticResource SecondaryButton}" Margin="0,0,0,6"
+                            <Button x:Name="FolderButton" Content="Open folder" Style="{StaticResource SecondaryButton}" Margin="0,0,0,6"
                                     Click="Folder_Click" />
                         </WrapPanel>
                         <StackPanel>
@@ -100,6 +125,18 @@
                                        TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                     </DockPanel>
+                    <!-- what a clean up would delete, before it does -->
+                    <Border x:Name="ConfirmBar" DockPanel.Dock="Top" Visibility="Collapsed" BorderBrush="{StaticResource CoralInkBrush}"
+                            BorderThickness="1.5" CornerRadius="12" Padding="12,8" Margin="0,0,0,10">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="ConfirmButton" Content="Delete it" Style="{StaticResource PrimaryButton}" Height="34" Padding="14,0"
+                                        Margin="8,0,8,0" Click="Confirm_Click" />
+                                <Button Content="Cancel" Style="{StaticResource SecondaryButton}" Height="34" Padding="12,0" Click="CancelConfirm_Click" />
+                            </StackPanel>
+                            <TextBlock x:Name="ConfirmText" TextWrapping="Wrap" FontSize="13" VerticalAlignment="Center" />
+                        </DockPanel>
+                    </Border>
                     <!-- the pipeline: each stage done, now, or to come -->
                     <WrapPanel x:Name="Pipeline" DockPanel.Dock="Top" Margin="0,0,0,10" />
                     <!-- your feedback: rate the run, or send it what to change -->

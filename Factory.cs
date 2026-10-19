@@ -51,6 +51,10 @@ public sealed class FactoryToolCall
     public string Name { get; set; } = "";
     public string Detail { get; set; } = "";
     public string Result { get; set; } = "running"; // running | ok | error | denied
+    /// <summary>When its result came back.</summary>
+    public DateTime? Ended { get; set; }
+    /// <summary>It ran over the slow limit (a minute) - the developer was told.</summary>
+    public bool Slow { get; set; }
 }
 
 /// <summary>
@@ -68,6 +72,8 @@ public sealed class FactorySpan
     public long InputTokens { get; set; }
     public long OutputTokens { get; set; }
     public int Denied { get; set; }
+    /// <summary>The step ran over the slow limit (a minute) - the developer was told.</summary>
+    public bool Slow { get; set; }
     public string Prompt { get; set; } = "";
     public string Answer { get; set; } = "";
     public string Error { get; set; } = "";
@@ -135,6 +141,14 @@ public sealed class FactoryRun
     /// <summary>The developer's verdict on the run: good, bad, or none yet; with a note.</summary>
     public string Rating { get; set; } = "";
     public string RatingNote { get; set; } = "";
+    /// <summary>Its worktree, evidence and session files were deleted; the record and trace stay.</summary>
+    public bool CleanedUp { get; set; }
+    /// <summary>The run works in the developer's own checkout (the default), on its branch; Worktree is then the repo.</summary>
+    public bool InCheckout { get; set; }
+    /// <summary>The developer chose a separate worktree for this run (when their checkout could not be used).</summary>
+    public bool UseWorktree { get; set; }
+    /// <summary>The branch (or commit) the developer's checkout was on, to switch back to when the run is done.</summary>
+    public string ReturnTo { get; set; } = "";
 
     [System.Text.Json.Serialization.JsonIgnore] public CancellationTokenSource? Running { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public bool Working => Running != null;
@@ -245,9 +259,166 @@ public static class Factory
         return true;
     });
 
+    /// <summary>
+    /// Picks up a run that stopped or waits for the developer where it left off: the steps already done (repo, worktree,
+    /// plan) are not redone; Claude finishes what is missing, then verify, prove, review and the draft PR.
+    /// </summary>
+    public static Task ContinueAsync(FactoryRun run) => DriveAsync(run, learnAfter: false, async cancel =>
+    {
+        if (run.CleanedUp) return Wait(run, "This run was cleaned up - start a new run for the task.");
+        FactoryStage stoppedAt = run.Log.LastOrDefault(s => s.Stage is not (FactoryStage.NeedsYou or FactoryStage.Stopped or FactoryStage.Learn))?.Stage ?? FactoryStage.Queued;
+        string why = run.Note;
+        if (run.Repo.Length == 0 && !await LocateAsync(run, cancel)) return false;
+        if (run.InCheckout)
+        {
+            if (!await OnRunBranchAsync(run)) return false;
+        }
+        else if (run.Worktree.Length == 0 || !Directory.Exists(run.Worktree))
+        {
+            if (!await WorktreeAsync(run, cancel)) return false;
+        }
+        if (run.Plan.Length == 0)
+        {
+            // the plan never finished: a fresh session plans it
+            run.SessionId = Guid.NewGuid().ToString();
+            if (!await PlanAsync(run, cancel)) return true;
+            if (!await BuildAsync(run, cancel)) return true;
+        }
+        else
+        {
+            Enter(run, FactoryStage.Build, $"Claude continues where the run stopped ({stoppedAt}).");
+            (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
+                The run stopped at its {stoppedAt} step: {why}
+                Continue the task from where this folder is now: finish what is missing, fix what stopped it.
+                Do not commit or push. Reply with what you changed.
+                """, "Continue", cancel);
+            if (error != null) return Wait(run, "The continue turn failed: " + error);
+            Log(run, "Continue:\n" + answer);
+        }
+        if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
+        return true;
+    });
+
+    /// <summary>What cleaning up a run would delete, and whether that loses work.</summary>
+    public sealed record CleanupInfo(long Bytes, int Uncommitted, bool Pushed, bool HasWorktree);
+
+    // a separate worktree of the run - never the developer's checkout
+    private static bool HasOwnWorktree(FactoryRun run) =>
+        !run.InCheckout && run.Worktree.Length > 0 && Directory.Exists(run.Worktree)
+        && !run.Worktree.TrimEnd('\\').Equals(run.Repo.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+
+    public static async Task<CleanupInfo> InspectAsync(FactoryRun run)
+    {
+        bool worktree = HasOwnWorktree(run);
+        int uncommitted = 0;
+        bool pushed = false;
+        // uncommitted work of the run: in its worktree, or in the checkout while it is on the run's branch
+        string? workDir = worktree ? run.Worktree
+            : run.InCheckout && Directory.Exists(run.Repo) && await HeadAsync(run.Repo) == run.Branch ? run.Repo : null;
+        if (workDir != null)
+        {
+            (int code, string status) = await GitAsync(workDir, "status", "--porcelain");
+            if (code == 0) uncommitted = status.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+        }
+        if (run.Repo.Length > 0 && run.Branch.Length > 0 && Directory.Exists(run.Repo))
+        {
+            (int code, string heads) = await GitAsync(run.Repo, "ls-remote", "--heads", "origin", run.Branch);
+            pushed = code == 0 && heads.Contains(run.Branch, StringComparison.Ordinal);
+        }
+        long bytes = await Task.Run(() => CleanupPaths(run).Sum(SizeOf));
+        return new CleanupInfo(bytes, uncommitted, pushed, worktree);
+    }
+
+    /// <summary>
+    /// Deletes a run's drafted data: its worktree (and its local branch when that is pushed - an unpushed branch
+    /// keeps its commits), its evidence and exported trace files, and its Claude session files. Never the developer's
+    /// checkout, its memory, or the remote branch and PR. The record and its trace stay. Returns what was freed.
+    /// </summary>
+    public static async Task<string> CleanUpAsync(FactoryRun run)
+    {
+        if (run.Working) return "the run is working";
+        CleanupInfo info = await InspectAsync(run);
+        // what to delete is decided before anything is: once the worktree is gone, its session folder is not recognised
+        List<string> paths = CleanupPaths(run).ToList();
+        var done = new List<string>();
+        if (info.HasWorktree && Directory.Exists(run.Repo))
+        {
+            (int code, _) = await GitAsync(run.Repo, "worktree", "remove", "--force", run.Worktree);
+            if (code != 0 && Directory.Exists(run.Worktree)) await Task.Run(() => DeleteTree(run.Worktree));
+            await GitAsync(run.Repo, "worktree", "prune");
+            done.Add("worktree");
+        }
+        else if (run.InCheckout && Directory.Exists(run.Repo) && await HeadAsync(run.Repo) == run.Branch)
+        {
+            // the checkout is still on the run's branch: back to the developer's branch first, when nothing is lost
+            if (info.Uncommitted > 0) return $"Your checkout is on {run.Branch} with {info.Uncommitted} uncommitted change(s) - commit or stash them first.";
+            (int back, string output) = await GitAsync(run.Repo, "switch", run.ReturnTo.Length == 40 ? "--detach" : "--no-guess", run.ReturnTo.Length > 0 ? run.ReturnTo : run.BaseBranch);
+            if (back != 0) return $"Could not switch your checkout off {run.Branch}: {output.Trim()}";
+            done.Add($"checkout back on {(run.ReturnTo.Length > 0 ? run.ReturnTo : run.BaseBranch)}");
+        }
+        if (info.Pushed && Directory.Exists(run.Repo) && await HeadAsync(run.Repo) != run.Branch)
+        {
+            (int deleted, _) = await GitAsync(run.Repo, "branch", "-D", run.Branch);
+            if (deleted == 0) done.Add("local branch (it is on the remote)");
+        }
+        foreach (string path in paths.Where(p => p != run.Worktree))
+        {
+            if (Directory.Exists(path)) await Task.Run(() => DeleteTree(path));
+            else if (File.Exists(path)) File.Delete(path);
+        }
+        done.Add("evidence, exported trace and session files");
+        run.CleanedUp = true;
+        string freed = $"Cleaned up: {string.Join(", ", done)} - {Size(info.Bytes)} freed.";
+        Log(run, freed);
+        return freed;
+    }
+
+    // everything a run left on disk besides its record: its own worktree and that worktree's session files, its
+    // evidence, its exported traces. A run in the developer's checkout has no worktree, and its sessions are among
+    // the developer's own for that repo - never deleted.
+    private static IEnumerable<string> CleanupPaths(FactoryRun run)
+    {
+        bool worktree = HasOwnWorktree(run);
+        if (worktree) yield return run.Worktree;
+        if (Directory.Exists(ProofDir(run))) yield return ProofDir(run);
+        string traces = Path.Combine(AppContext.BaseDirectory, "traces");
+        if (Directory.Exists(traces)) foreach (string f in Directory.GetFiles(traces, $"*-{run.Id}.*")) yield return f;
+        // Claude Code keeps a folder's sessions under projects\<the path with every other character as '-'>
+        if (worktree)
+        {
+            string key = string.Concat(run.Worktree.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-'));
+            string sessions = Path.Combine(ClaudeProjects.ProjectsDir, key);
+            if (Directory.Exists(sessions)) yield return sessions;
+        }
+    }
+
+    private static long SizeOf(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? new FileInfo(path).Length
+                : new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    // a folder tree, read-only files too (git keeps its objects read-only)
+    private static void DeleteTree(string dir)
+    {
+        foreach (FileInfo file in new DirectoryInfo(dir).EnumerateFiles("*", SearchOption.AllDirectories)) file.Attributes = FileAttributes.Normal;
+        Directory.Delete(dir, recursive: true);
+    }
+
+    public static string Size(long bytes) =>
+        bytes >= 1L << 30 ? $"{bytes / (double)(1L << 30):0.0} GB" : bytes >= 1L << 20 ? $"{bytes / (double)(1L << 20):0} MB" : $"{bytes / 1024.0:0} KB";
+
     /// <summary>After a run waited on failed checks: opens the draft PR anyway (it says what failed).</summary>
     public static Task PullRequestAnywayAsync(FactoryRun run) => DriveAsync(run, learnAfter: false, async cancel =>
     {
+        if (!await OnRunBranchAsync(run)) return false;
         await PullRequestAsync(run, cancel, anyway: true);
         return false;
     });
@@ -260,12 +431,13 @@ public static class Factory
     {
         run.Feedback.Add(new FactoryFeedback { At = DateTime.Now, Text = text.Trim() });
         if (!Directory.Exists(run.Worktree)) return Wait(run, "The run's worktree is gone, so the feedback has nowhere to go.");
+        if (!await OnRunBranchAsync(run)) return true;
         Enter(run, FactoryStage.Build, "Your feedback: " + text.Trim());
         (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
             The developer looked at your change and says:
             {text.Trim()}
 
-            Apply it in this worktree (if part of it is wrong, say why instead of doing it). Do not commit or push.
+            Apply it in this folder (if part of it is wrong, say why instead of doing it). Do not commit or push.
             Reply with what you changed.
             """, "Your feedback", cancel);
         if (error != null) return Wait(run, "The feedback turn failed: " + error);
@@ -306,6 +478,14 @@ public static class Factory
         {
             if (cancel.IsCancellationRequested) End(run, FactoryStage.Stopped, "Stopped.");
             else if (learn) await LearnAsync(run);
+            try
+            {
+                await LeaveCheckoutAsync(run);
+            }
+            catch (Exception ex)
+            {
+                Log(run, "Could not switch your checkout back: " + ex.Message, ok: false);
+            }
             run.Running.Dispose();
             run.Running = null;
             Notify(run);
@@ -339,7 +519,6 @@ public static class Factory
         }
         if (run.Verify.Length == 0) run.Verify = AppSettings.Get("factoryVerify:" + repo.ToLowerInvariant()) ?? "";
         run.Branch = $"devbreak/{Slug(run.Title)}-{run.Id}";
-        run.Worktree = Path.Combine(WorktreesDir, $"{Path.GetFileName(repo)}-{run.Id}");
         Log(run, $"The repo: {repo} (base {run.BaseBranch}).");
         return true;
     }
@@ -382,17 +561,103 @@ public static class Factory
         return null;
     }
 
+    // where the run works: the developer's own checkout (the default) on the run's new branch - no copy, its
+    // dependencies already there - and when the checkout cannot be used, the run asks; or, when the developer chose
+    // it, a separate worktree beside the repo
     private static async Task<bool> WorktreeAsync(FactoryRun run, CancellationToken cancel)
     {
-        Enter(run, FactoryStage.Worktree, $"New worktree {run.Worktree} on branch {run.Branch}, from {run.BaseBranch}.");
         (int exit, string output) = await GitSpanAsync(run, run.Repo, "rev-parse", run.BaseBranch);
         if (exit != 0) return Wait(run, $"Can't find branch {run.BaseBranch} in {run.Repo}: {output.Trim()}");
         run.BaseCommit = output.Trim();
-        Directory.CreateDirectory(WorktreesDir);
         cancel.ThrowIfCancellationRequested();
-        (exit, output) = await GitSpanAsync(run, run.Repo, "worktree", "add", run.Worktree, "-b", run.Branch, run.BaseCommit);
-        if (exit != 0) return Wait(run, "Could not create the worktree: " + output.Trim());
+        bool branchExists = (await GitAsync(run.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/" + run.Branch)).Exit == 0;
+        if (run.UseWorktree)
+        {
+            // beside the repo, so paths are hardly longer than in the checkout (a deep repo passes Windows' 260
+            // characters under a long folder), and long paths on for the checkout of its files
+            run.Worktree = Path.Combine(Path.GetDirectoryName(run.Repo)!, $"{Path.GetFileName(run.Repo)}-{run.Id[..4]}");
+            Enter(run, FactoryStage.Worktree, $"New worktree {run.Worktree} on branch {run.Branch}, from {run.BaseBranch}.");
+            string[] add = branchExists
+                ? ["-c", "core.longpaths=true", "worktree", "add", run.Worktree, run.Branch]
+                : ["-c", "core.longpaths=true", "worktree", "add", run.Worktree, "-b", run.Branch, run.BaseCommit];
+            (exit, output) = await GitSpanAsync(run, run.Repo, add);
+            if (exit != 0) return Wait(run, "Could not create the worktree: " + Tail(output.Trim(), 1500));
+            return true;
+        }
+        Enter(run, FactoryStage.Worktree, $"Working in your checkout {run.Repo}, on a new branch {run.Branch} from {run.BaseBranch}.");
+        if (await CheckoutProblemAsync(run, "start") is { } problem) return Wait(run, problem);
+        run.ReturnTo = await HeadAsync(run.Repo);
+        (exit, output) = branchExists
+            ? await GitSpanAsync(run, run.Repo, "switch", run.Branch)
+            : await GitSpanAsync(run, run.Repo, "switch", "-c", run.Branch, run.BaseCommit);
+        if (exit != 0) return Wait(run, $"Could not switch your checkout to {run.Branch}: {Tail(output.Trim(), 800)}");
+        run.InCheckout = true;
+        run.Worktree = run.Repo;
+        Log(run, $"Your checkout is on {run.Branch}; it goes back to {run.ReturnTo} when the run is done.");
         return true;
+    }
+
+    // why the developer's checkout cannot be used now - another run in it, or uncommitted changes (untracked files
+    // too: the PR step commits everything) - as a question; null when it can
+    private static async Task<string?> CheckoutProblemAsync(FactoryRun run, string what)
+    {
+        if (Runs.FirstOrDefault(r => r != run && r.Working && r.InCheckout && r.Repo.Equals(run.Repo, StringComparison.OrdinalIgnoreCase)) is { } other)
+        {
+            return $"Another run (\"{other.Title}\") is working in your checkout {run.Repo}. Wait for it and press Continue - " +
+                "or press Use a separate worktree to run this one beside it.";
+        }
+        (int code, string status) = await GitAsync(run.Repo, "status", "--porcelain");
+        int changes = code == 0 ? status.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length : 0;
+        if (code != 0) return $"git cannot read your checkout {run.Repo}: {status.Trim()}";
+        if (changes == 0) return null;
+        return $"Your checkout {run.Repo} has {changes} uncommitted change{(changes == 1 ? "" : "s")}, so the run cannot {what} there. " +
+            "Commit or stash them and press Continue - or press Use a separate worktree to leave your checkout as it is.";
+    }
+
+    // the branch the checkout is on, or its commit when it is detached
+    private static async Task<string> HeadAsync(string repo)
+    {
+        (_, string head) = await GitAsync(repo, "rev-parse", "--abbrev-ref", "HEAD");
+        return head.Trim() != "HEAD" ? head.Trim() : (await GitAsync(repo, "rev-parse", "HEAD")).Output.Trim();
+    }
+
+    // a run in the developer's checkout goes on (continue, feedback, PR anyway) on its own branch: the checkout is
+    // switched there when it is clean; the run asks when it is not
+    private static async Task<bool> OnRunBranchAsync(FactoryRun run)
+    {
+        if (!run.InCheckout || await HeadAsync(run.Repo) == run.Branch) return true;
+        if (await CheckoutProblemAsync(run, "switch to its branch " + run.Branch) is { } problem) return Wait(run, problem);
+        run.ReturnTo = await HeadAsync(run.Repo);
+        (int exit, string output) = await GitSpanAsync(run, run.Repo, "switch", run.Branch);
+        if (exit != 0) return Wait(run, $"Could not switch your checkout to {run.Branch}: {Tail(output.Trim(), 800)}");
+        Log(run, $"Your checkout is on {run.Branch} again; it goes back to {run.ReturnTo} when this is done.");
+        return true;
+    }
+
+    // a run in the developer's checkout is done for now: back to their branch when its work is committed; otherwise
+    // the checkout stays on the run's branch, and the run says so
+    private static async Task LeaveCheckoutAsync(FactoryRun run)
+    {
+        if (!run.InCheckout || run.ReturnTo.Length == 0 || await HeadAsync(run.Repo) != run.Branch) return;
+        (int code, string status) = await GitAsync(run.Repo, "status", "--porcelain");
+        if (code != 0 || status.Trim().Length > 0)
+        {
+            string stay = $"Your checkout stays on {run.Branch}: the run's changes are not committed. Continue the run - or commit or stash them yourself to switch back.";
+            run.Note = (run.Note.Length > 0 ? run.Note + "\n" : "") + stay;
+            Log(run, stay, ok: false);
+            return;
+        }
+        (int exit, string output) = await GitSpanAsync(run, run.Repo, "switch", run.ReturnTo.Length == 40 ? "--detach" : "--no-guess", run.ReturnTo);
+        Log(run, exit == 0 ? $"Your checkout is back on {run.ReturnTo}." : $"Could not switch your checkout back to {run.ReturnTo}: {output.Trim()}", ok: exit == 0);
+    }
+
+    /// <summary>The developer's checkout could not be used: this run goes on in a separate worktree beside the repo.</summary>
+    public static Task UseWorktreeAsync(FactoryRun run)
+    {
+        if (run.Working || run.InCheckout) return Task.CompletedTask;
+        run.UseWorktree = true;
+        Save();
+        return ContinueAsync(run);
     }
 
     private static async Task<bool> PlanAsync(FactoryRun run, CancellationToken cancel)
@@ -416,7 +681,7 @@ public static class Factory
               runs its tests - the proof the change works>.
               """;
         string prompt = $"""
-            You are working in a fresh git worktree of {run.Repo}, on branch {run.Branch} (from {run.BaseBranch}).
+            You are working in {(run.InCheckout ? "the developer's own checkout of " + run.Repo : "a separate git worktree of " + run.Repo)}, on a new branch {run.Branch} (from {run.BaseBranch}).
             {task}
 
             First, understand the mission and plan - do not change any file yet. Use the skills, MCP servers and tools on
@@ -452,7 +717,9 @@ public static class Factory
     {
         Enter(run, FactoryStage.Build, "Claude implements the plan.");
         (string answer, string? error) = await TurnAsync(run, isNew: false, """
-            Now implement the plan in this worktree. Change only what the task needs, and add or update tests for it.
+            Now implement the plan in this folder. Change only what the task needs, and add or update tests for it.
+            Keep it fast: run only the tests for what you changed - Dev break runs the full verify command right after -
+            and do not reinstall dependencies that are already installed.
             Do not commit, push or open a pull request - that comes after the checks. Reply with a short summary of
             what you changed.
             """, "Build", cancel);
@@ -531,7 +798,7 @@ public static class Factory
             (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
                 Now prove the change works, the way a careful developer would before opening a PR. Start what it needs -
                 the app and the services it depends on - with the skills, MCP servers and tools on this machine, from
-                this worktree, exercise exactly what the task changed, and stop what you started when you are done.
+                this folder, exercise exactly what the task changed, and stop what you started when you are done.
 
                 The proof this feature needs, from your plan: {planned}
                 How to produce each kind:
@@ -739,6 +1006,12 @@ public static class Factory
 
                 LESSONS THE DEVELOPER TURNED DOWN FOR THIS REPO (do not suggest anything like them):
                 {(rejected.Length > 0 ? rejected : "(none)")}
+
+                WHAT WAS SLOW (the developer wants every run faster - steps and single tool calls, slowest first):
+                {SpeedSummary(run)}
+                For what was slow and avoidable here, add a lesson that makes the next run faster: e.g. dependencies are
+                already installed (do not reinstall), run only the tests for the change, a faster command for the same
+                check, a step that waited for something it did not need.
 
                 Lessons can be:
                 - memory: a fact about this repo the run had to discover (a build or test quirk, a command, where things
@@ -984,6 +1257,70 @@ public static class Factory
         return answer;
     }
 
+    // --- speed ---
+
+    /// <summary>A step or one tool call running longer than this is slow: the developer is told, and the run learns from it.</summary>
+    public static readonly TimeSpan SlowLimit =
+        // DEVBREAK_SLOW_SECONDS sets another limit (for tests and demos); a minute otherwise
+        int.TryParse(Environment.GetEnvironmentVariable("DEVBREAK_SLOW_SECONDS"), out int seconds) && seconds > 0
+            ? TimeSpan.FromSeconds(seconds) : TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// The watchdog, called every few seconds while runs work: a step, or one tool call in it, that has just passed the
+    /// slow limit is marked slow and logged; returns what to tell the developer (each only once).
+    /// </summary>
+    public static List<(FactoryRun Run, string Text)> CheckSlow()
+    {
+        var alerts = new List<(FactoryRun, string)>();
+        DateTime now = DateTime.Now;
+        foreach (FactoryRun run in Runs.Where(r => r.Working))
+        {
+            if (run.Trace.LastOrDefault(s => s.Ended == null) is not { } span) continue;
+            if (span.Tools.LastOrDefault(t => t.Ended == null && t.Result == "running" && !t.Slow && now - t.At > SlowLimit) is { } tool)
+            {
+                tool.Slow = true;
+                string text = $"{span.Title}: {tool.Name} {Short(tool.Detail, 80)} has run over {LimitText}.";
+                Log(run, "Slow - " + text);
+                alerts.Add((run, text));
+            }
+            if (!span.Slow && now - span.Started > SlowLimit)
+            {
+                span.Slow = true;
+                FactoryToolCall? longest = span.Tools.Where(t => t.Ended != null).MaxBy(t => t.Ended!.Value - t.At);
+                string text = $"{span.Title} has run over {LimitText}" +
+                    (longest != null ? $" - longest so far: {longest.Name} {Short(longest.Detail, 60)} ({(int)(longest.Ended!.Value - longest.At).TotalSeconds} s)." : ".");
+                Log(run, "Slow - " + text);
+                alerts.Add((run, text));
+            }
+        }
+        return alerts;
+    }
+
+    // the slow steps and tool calls of a run, slowest first - what the Learn step turns into speed lessons
+    private static string LimitText => SlowLimit.TotalSeconds < 60 ? $"{SlowLimit.TotalSeconds:0} s" : SlowLimit.TotalMinutes == 1 ? "a minute" : $"{SlowLimit.TotalMinutes:0} minutes";
+
+    private static string SpeedSummary(FactoryRun run)
+    {
+        var lines = new List<(double Seconds, string Text)>();
+        foreach (FactorySpan s in run.Trace.Where(s => s.Ended != null))
+        {
+            double seconds = (s.Ended!.Value - s.Started).TotalSeconds;
+            if (seconds >= 30) lines.Add((seconds, $"step {s.Title}: {seconds:0} s, {s.Tools.Count} tool calls, {s.InputTokens:N0} tokens read"));
+            foreach (FactoryToolCall t in s.Tools.Where(t => t.Ended != null))
+            {
+                double toolSeconds = (t.Ended!.Value - t.At).TotalSeconds;
+                if (toolSeconds >= 15) lines.Add((toolSeconds, $"  tool in {s.Title}: {t.Name} {Short(t.Detail, 120)}: {toolSeconds:0} s"));
+            }
+        }
+        return lines.Count == 0 ? "(nothing slow)" : string.Join("\n", lines.OrderByDescending(l => l.Seconds).Take(12).Select(l => l.Text));
+    }
+
+    private static string Short(string text, int max)
+    {
+        string line = text.Replace("\r", "").Replace('\n', ' ');
+        return line.Length <= max ? line : line[..(max - 1)] + "…";
+    }
+
     // --- the trace ---
 
     private static FactorySpan Begin(FactoryRun run, string kind, string title, string prompt)
@@ -1037,6 +1374,7 @@ public static class Factory
                 bool error = block.TryGetProperty("is_error", out JsonElement e) && e.ValueKind == JsonValueKind.True;
                 string content = block.TryGetProperty("content", out JsonElement body) ? body.ToString() : "";
                 tool.Result = !error ? "ok" : content.Contains("denied", StringComparison.OrdinalIgnoreCase) ? "denied" : "error";
+                tool.Ended = DateTime.Now;
             }
             Notify(run);
         }
