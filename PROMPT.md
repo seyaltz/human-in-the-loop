@@ -314,9 +314,11 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   (a folder picker, `OpenFolderDialog`; the new session gets a fresh id and stays at the top of the list), **Refresh**,
   and the list (title, folder name · "N min/h/d ago", the folder as tooltip). Right: the title, "<folder> · session
   <id>", **Copy resume command** (`cd "<folder>"; claude --resume <id>`) and **Open folder**; the transcript as in
-  every chat (`Turns`): one CLAUDE label per turn with its text under it, tool steps in a row folded into one
-  `Expander` line "⚙ N steps · last: <tool> <detail>" that opens to list them (mono, tool name in violet), the done
-  line, errors in coral. While a turn runs on screen the view goes to the start of the reply once and stays; a
+  every chat (`Turns`): one CLAUDE label per turn with **only the turn's answer** under it - the `result` text of the
+  stream (for a saved session, each turn's last text); the work on the way - tool steps and the notes Claude wrote
+  while working - folded into one `Expander` line per turn, "⚙ N steps · M notes · last: <tool> <detail>", that opens
+  to list it all in order (steps in mono with the tool name in violet, notes rendered small and faded with a left
+  rule; the last note equal to the answer is dropped from the fold); the done line; errors in coral. While a turn runs on screen the view goes to the start of the reply once and stays; a
   session opens at the start of its latest reply; the input (Enter sends), Send, Stop, "Claude is working... (N steps)" and the note "Claude
   may edit files and run commands in this folder.". Every opened session keeps its transcript, and a running turn
   keeps going while another session is on screen. After a new session's first turn the list refreshes.

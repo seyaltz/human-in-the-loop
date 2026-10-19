@@ -226,19 +226,24 @@ public partial class SessionsView : UserControl
                 open.Group = null;
                 if (scroll) Transcript.ScrollToEnd();
                 return;
-            case SessionEntryKind.Claude:
-                StartReply(open, scroll);
-                CodeRenderer.Append(document, entry.Text);
-                open.Group = null;
-                return;
+            case SessionEntryKind.Note:
             case SessionEntryKind.Tool:
+                // the work on the way - steps and notes - folds into one line per turn
                 StartReply(open, scroll);
                 if (open.Group == null)
                 {
-                    open.Group = new StepGroup(Res("VioletBrush"), Res("InkSoftBrush"), (FontFamily)FindResource("MonoFont"));
+                    open.Group = new StepGroup(Res("VioletBrush"), Res("InkSoftBrush"), (FontFamily)FindResource("MonoFont"), this);
                     document.Blocks.Add(open.Group.Block);
                 }
-                open.Group.Add(entry.Text);
+                if (entry.Kind == SessionEntryKind.Tool) open.Group.AddStep(entry.Text);
+                else open.Group.AddNote(entry.Text);
+                return;
+            case SessionEntryKind.Answer:
+                // only the answer is shown in full; the last streamed note is the same text, so it leaves the fold
+                StartReply(open, scroll);
+                open.Group?.DropNote(entry.Text);
+                CodeRenderer.Append(document, entry.Text);
+                open.Group = null;
                 return;
             case SessionEntryKind.Done:
                 open.Group = null;
@@ -265,28 +270,35 @@ public partial class SessionsView : UserControl
         if (scroll) Turns.ScrollToStart(Transcript, open.ReplyStart);
     }
 
-    /// <summary>Tool steps in a row, folded into one line ("⚙ 3 steps · last: ...") that opens to list them.</summary>
+    /// <summary>
+    /// The work of a turn - tool steps and the notes Claude wrote on the way - folded into one line
+    /// ("⚙ 3 steps · 2 notes · last: ...") that opens to list it all in order.
+    /// </summary>
     private sealed class StepGroup
     {
-        private readonly StackPanel _steps = new() { Margin = new Thickness(20, 4, 0, 2) };
+        private readonly StackPanel _items = new() { Margin = new Thickness(20, 4, 0, 2) };
         private readonly TextBlock _header;
         private readonly Brush _accent, _soft;
         private readonly FontFamily _mono;
-        private int _count;
+        private readonly FrameworkElement _resources;
+        private readonly List<(string Text, UIElement Element)> _notes = [];
+        private int _steps;
+        private string _last = "";
 
         public BlockUIContainer Block { get; }
 
-        public StepGroup(Brush accent, Brush soft, FontFamily mono)
+        public StepGroup(Brush accent, Brush soft, FontFamily mono, FrameworkElement resources)
         {
             _accent = accent;
             _soft = soft;
             _mono = mono;
+            _resources = resources;
             _header = new TextBlock { FontFamily = mono, FontSize = 12, Foreground = soft, TextTrimming = TextTrimming.CharacterEllipsis };
-            var expander = new Expander { Header = _header, Content = _steps, IsExpanded = false };
+            var expander = new Expander { Header = _header, Content = _items, IsExpanded = false };
             Block = new BlockUIContainer(expander) { Margin = new Thickness(0, 2, 0, 8) };
         }
 
-        public void Add(string step)
+        public void AddStep(string step)
         {
             int space = step.IndexOf("  ", StringComparison.Ordinal);
             string tool = space > 0 ? step[..space] : step;
@@ -294,11 +306,52 @@ public partial class SessionsView : UserControl
             var line = new TextBlock { FontFamily = _mono, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 1) };
             line.Inlines.Add(new Run(tool) { FontWeight = FontWeights.Bold, Foreground = _accent });
             if (detail.Length > 0) line.Inlines.Add(new Run("  " + detail) { Foreground = _soft });
-            _steps.Children.Add(line);
-            _count++;
+            _items.Children.Add(line);
+            _steps++;
+            _last = tool + (detail.Length > 0 ? " " + detail : "");
+            Update();
+        }
+
+        // a note Claude wrote while working: shown in the fold, rendered like the answer but quieter
+        public void AddNote(string text)
+        {
+            var viewer = new FlowDocumentScrollViewer
+            {
+                Document = CodeRenderer.Render(text), VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, IsToolBarVisible = false, Opacity = 0.75,
+                FontSize = 13, Margin = new Thickness(0, 2, 0, 4), Focusable = false,
+            };
+            viewer.Document.FontSize = 13;
+            viewer.Document.Foreground = (Brush)_resources.FindResource("InkBrush");
+            var element = new Border
+            {
+                BorderBrush = (Brush)_resources.FindResource("LineBrush"), BorderThickness = new Thickness(2, 0, 0, 0),
+                Padding = new Thickness(10, 0, 0, 0), Margin = new Thickness(0, 3, 0, 3), Child = viewer,
+            };
+            _items.Children.Add(element);
+            _notes.Add((text, element));
+            Update();
+        }
+
+        // the answer was also streamed as the last note: keep it once, as the answer
+        public void DropNote(string text)
+        {
+            int i = _notes.FindLastIndex(n => n.Text.Trim() == text.Trim());
+            if (i < 0) return;
+            _items.Children.Remove(_notes[i].Element);
+            _notes.RemoveAt(i);
+            Update();
+        }
+
+        private void Update()
+        {
             _header.Inlines.Clear();
-            _header.Inlines.Add(new Run($"⚙ {_count} step{(_count == 1 ? "" : "s")}") { FontWeight = FontWeights.Bold, Foreground = _accent });
-            _header.Inlines.Add(new Run($"  ·  last: {tool}{(detail.Length > 0 ? " " + detail : "")}"));
+            var parts = new List<string>();
+            if (_steps > 0) parts.Add($"{_steps} step{(_steps == 1 ? "" : "s")}");
+            if (_notes.Count > 0) parts.Add($"{_notes.Count} note{(_notes.Count == 1 ? "" : "s")}");
+            _header.Inlines.Add(new Run("⚙ " + (parts.Count > 0 ? string.Join(" · ", parts) : "working")) { FontWeight = FontWeights.Bold, Foreground = _accent });
+            if (_steps > 0 && _last.Length > 0) _header.Inlines.Add(new Run($"  ·  last: {_last}"));
+            Block.Child.Visibility = _steps == 0 && _notes.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         }
     }
 }
