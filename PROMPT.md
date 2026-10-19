@@ -332,6 +332,10 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   `FlowDocument` can belong to one `RichTextBox`). Turning Split on widens the window to the work area. Each pane has a
   close button (split only): one pane again, keeping the other pane's session. Turning Split off keeps the active
   pane's session.
+- **By folder** (a pill toggle before Split): the list grouped by folder - a header per folder (its name, bold, and
+  "· N" sessions; the full path as tooltip; not selectable), the folder with the newest session first, and its
+  sessions under it, newest first, indented, showing only "N min/h/d ago". Off: the flat list. Toggling rebuilds the
+  rows from the last listing (no re-read); sessions started here and not yet listed stay at the top either way.
 - State (`SessionState`): per session - transcript document, running turn, steps, failed, reply start, step group, the
   pane showing it - with a `Changed` event the panes and the list lights follow.
 

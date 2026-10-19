@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Shapes;
 
@@ -19,6 +20,7 @@ public partial class SessionsView : UserControl
 {
     private readonly Dictionary<string, SessionState> _sessions = [];
     private readonly Dictionary<string, Ellipse> _lights = [];
+    private IReadOnlyList<SessionInfo> _listed = [];
     private SessionPane _active;
     private bool _split;
     private bool _started;
@@ -50,9 +52,8 @@ public partial class SessionsView : UserControl
         PaneA.SetActive(pane == PaneA, _split);
         PaneB.SetActive(pane == PaneB, _split);
         // the list follows the active pane
-        string? id = pane.State?.Info.Id;
         SessionList.SelectionChanged -= SessionList_SelectionChanged;
-        SessionList.SelectedItem = SessionList.Items.Cast<ListBoxItem>().FirstOrDefault(i => ((SessionInfo)i.Tag).Id == id);
+        SessionList.SelectedItem = RowOf(pane.State?.Info.Id);
         SessionList.SelectionChanged += SessionList_SelectionChanged;
     }
 
@@ -111,25 +112,54 @@ public partial class SessionsView : UserControl
     private async void RefreshList()
     {
         RefreshListButton.IsEnabled = false;
-        IReadOnlyList<SessionInfo> sessions = await Task.Run(ClaudeSessions.List);
+        _listed = await Task.Run(ClaudeSessions.List);
+        // a fresh title for an open session (a new session gets its title from its first turn)
+        foreach (SessionInfo session in _listed)
+            if (_sessions.TryGetValue(session.Id, out SessionState? state)) state.Info = session;
+        FillList();
+        RefreshListButton.IsEnabled = true;
+    }
+
+    private void Group_Changed(object sender, RoutedEventArgs e) => FillList();
+
+    // the rows of the last listing: newest first, or under a header per folder (the folder with the newest session first)
+    private void FillList()
+    {
         SessionList.SelectionChanged -= SessionList_SelectionChanged;
         SessionList.Items.Clear();
         _lights.Clear();
         // sessions started here that the list does not show (no file yet, or a folder it skips) stay at the top
-        foreach (SessionState state in _sessions.Values.Where(s => s.StartedHere && sessions.All(i => i.Id != s.Info.Id))) SessionList.Items.Add(Row(state.Info));
-        foreach (SessionInfo session in sessions)
+        foreach (SessionState state in _sessions.Values.Where(s => s.StartedHere && _listed.All(i => i.Id != s.Info.Id))) SessionList.Items.Add(Row(state.Info));
+        if (GroupButton.IsChecked == true)
         {
-            // a fresh title for an open session (a new session gets its title from its first turn)
-            if (_sessions.TryGetValue(session.Id, out SessionState? state)) state.Info = session;
-            SessionList.Items.Add(Row(session));
+            foreach (IGrouping<string, SessionInfo> folder in _listed.GroupBy(s => s.Folder.TrimEnd('\\'), StringComparer.OrdinalIgnoreCase))
+            {
+                SessionList.Items.Add(FolderHeader(folder.Key, folder.Count()));
+                foreach (SessionInfo session in folder) SessionList.Items.Add(Row(session, inFolder: true));
+            }
+        }
+        else
+        {
+            foreach (SessionInfo session in _listed) SessionList.Items.Add(Row(session));
         }
         string? id = _active.State?.Info.Id;
-        SessionList.SelectedItem = SessionList.Items.Cast<ListBoxItem>().FirstOrDefault(i => ((SessionInfo)i.Tag).Id == id);
+        SessionList.SelectedItem = RowOf(id);
         SessionList.SelectionChanged += SessionList_SelectionChanged;
-        RefreshListButton.IsEnabled = true;
     }
 
-    private ListBoxItem Row(SessionInfo session)
+    private ListBoxItem? RowOf(string? id) =>
+        SessionList.Items.Cast<ListBoxItem>().FirstOrDefault(i => i.Tag is SessionInfo s && s.Id == id);
+
+    // a folder's name and how many sessions it has; not selectable
+    private ListBoxItem FolderHeader(string folder, int count)
+    {
+        var text = new TextBlock { Margin = new Thickness(2, 12, 4, 2), TextTrimming = TextTrimming.CharacterEllipsis };
+        text.Inlines.Add(new Run(System.IO.Path.GetFileName(folder)) { FontWeight = FontWeights.Bold, FontSize = 13 });
+        text.Inlines.Add(new Run($"  ·  {count}") { FontSize = 11.5, Foreground = (Brush)FindResource("InkSoftBrush") });
+        return new ListBoxItem { Content = text, ToolTip = folder, Focusable = false, IsHitTestVisible = false };
+    }
+
+    private ListBoxItem Row(SessionInfo session, bool inFolder = false)
     {
         var light = new Ellipse { Width = 9, Height = 9, Margin = new Thickness(0, 5, 8, 0), VerticalAlignment = VerticalAlignment.Top };
         _lights[session.Id] = light;
@@ -138,10 +168,11 @@ public partial class SessionsView : UserControl
         text.Children.Add(new TextBlock { Text = session.Title, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, FontSize = 13.5 });
         text.Children.Add(new TextBlock
         {
-            Text = $"{System.IO.Path.GetFileName(session.Folder.TrimEnd('\\'))} · {Ago(session.LastActive)}",
+            // under its folder's header the row needs only the time
+            Text = inFolder ? Ago(session.LastActive) : $"{System.IO.Path.GetFileName(session.Folder.TrimEnd('\\'))} · {Ago(session.LastActive)}",
             FontSize = 11.5, Foreground = (Brush)FindResource("InkSoftBrush"), TextTrimming = TextTrimming.CharacterEllipsis,
         });
-        var row = new DockPanel { Margin = new Thickness(2, 6, 4, 6) };
+        var row = new DockPanel { Margin = new Thickness(inFolder ? 12 : 2, 6, 4, 6) };
         DockPanel.SetDock(light, Dock.Left);
         row.Children.Add(light);
         row.Children.Add(text);
