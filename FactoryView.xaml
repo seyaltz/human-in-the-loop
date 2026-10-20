@@ -27,8 +27,11 @@
                 <StackPanel Margin="0,0,6,8">
                     <TextBlock Text="Department" Style="{StaticResource Caption}" Margin="2,0,0,4" />
                     <WrapPanel Margin="0,0,0,10">
-                        <RadioButton x:Name="DevelopmentDept" Content="Development" GroupName="Department" Style="{StaticResource PillRadio}"
+                        <RadioButton x:Name="AutoDept" Content="Auto" GroupName="Department" Style="{StaticResource PillRadio}"
                                      IsChecked="True" Checked="Department_Checked"
+                                     ToolTip="A gate reads the task when the run starts and chooses the department" />
+                        <RadioButton x:Name="DevelopmentDept" Content="Development" GroupName="Department" Style="{StaticResource PillRadio}"
+                                     Margin="6,0,0,0" Checked="Department_Checked"
                                      ToolTip="Build a change: plan, build, verify, prove, review, draft PR" />
                         <RadioButton x:Name="TroubleshootingDept" Content="Troubleshooting" GroupName="Department" Style="{StaticResource PillRadio}"
                                      Margin="6,0,0,0" Checked="Department_Checked"
@@ -36,6 +39,9 @@
                         <RadioButton x:Name="ResearchDept" Content="Research" GroupName="Department" Style="{StaticResource PillRadio}"
                                      Margin="6,0,0,0" Checked="Department_Checked"
                                      ToolTip="A question about the system: a checked answer and a report - no code" />
+                        <RadioButton x:Name="ManagementDept" Content="Management" GroupName="Department" Style="{StaticResource PillRadio}"
+                                     Margin="6,0,0,0" Checked="Department_Checked"
+                                     ToolTip="A vision, an idea or a company-wide matter: a decision brief - options, value, effort, risk, a recommendation, first steps by department - no code" />
                     </WrapPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                         <RadioButton x:Name="TypedSource" Content="Typed" GroupName="Source" Style="{StaticResource PillRadio}"

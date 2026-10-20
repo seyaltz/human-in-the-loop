@@ -74,6 +74,8 @@ public partial class FactoryView : UserControl
         ReportBox.IsChecked = AppSettings.Get("factoryReport") == "1";
         if (AppSettings.Get("factoryDepartment") is "Troubleshooting") TroubleshootingDept.IsChecked = true;
         else if (AppSettings.Get("factoryDepartment") is "Research") ResearchDept.IsChecked = true;
+        else if (AppSettings.Get("factoryDepartment") is "Development") DevelopmentDept.IsChecked = true;
+        else if (AppSettings.Get("factoryDepartment") is "Management") ManagementDept.IsChecked = true;
         IReadOnlyList<string> repos = await Task.Run(ClaudeProjects.GitRepos);
         foreach (string repo in repos.OrderBy(r => r, StringComparer.OrdinalIgnoreCase)) RepoBox.Items.Add(repo);
         if (AppSettings.Get("factoryRepo") is { Length: > 0 } last) RepoBox.Text = last;
@@ -82,14 +84,17 @@ public partial class FactoryView : UserControl
 
     // --- the form ---
 
-    private FactoryDepartment Department => TroubleshootingDept.IsChecked == true ? FactoryDepartment.Troubleshooting
-        : ResearchDept.IsChecked == true ? FactoryDepartment.Research : FactoryDepartment.Development;
+    // null: Auto - the gate chooses when the run starts
+    private FactoryDepartment? Department => AutoDept.IsChecked == true ? null
+        : TroubleshootingDept.IsChecked == true ? FactoryDepartment.Troubleshooting
+        : ResearchDept.IsChecked == true ? FactoryDepartment.Research
+        : ManagementDept.IsChecked == true ? FactoryDepartment.Management : FactoryDepartment.Development;
 
     // troubleshooting and research change no code: no verify command, and they always end in a report
     private void Department_Checked(object sender, RoutedEventArgs e)
     {
         if (ReportBox == null || VerifyBox == null) return;
-        bool dev = Department == FactoryDepartment.Development;
+        bool dev = Department is null or FactoryDepartment.Development;
         VerifyBox.IsEnabled = dev;
         ReportBox.IsEnabled = dev;
         if (!dev) ReportBox.IsChecked = true;
@@ -106,6 +111,8 @@ public partial class FactoryView : UserControl
             {
                 FactoryDepartment.Troubleshooting => "The case: what the customer or site has, where (site, URL, steps)",
                 FactoryDepartment.Research => "The question",
+                FactoryDepartment.Management => "The vision, idea or company-wide matter to think through",
+                null => "The task, case or question - the gate chooses the department",
                 _ => "What to build or fix",
             };
         BrowseSpecButton.Visibility = SpecSource.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
@@ -169,10 +176,10 @@ public partial class FactoryView : UserControl
         bool autonomous = AutonomousBox.IsChecked == true;
         AppSettings.Set("factoryAutonomous", autonomous ? "1" : "0");
         bool report = ReportBox.IsChecked == true;
-        FactoryDepartment department = Department;
-        if (department == FactoryDepartment.Development) AppSettings.Set("factoryReport", report ? "1" : "0");
-        AppSettings.Set("factoryDepartment", department.ToString());
-        FactoryRun run = Factory.Create(source, task, repo, baseBranch, department == FactoryDepartment.Development ? VerifyBox.Text : "", autonomous, report, department);
+        FactoryDepartment? department = Department;
+        if (department is null or FactoryDepartment.Development) AppSettings.Set("factoryReport", report ? "1" : "0");
+        AppSettings.Set("factoryDepartment", department?.ToString() ?? "Auto");
+        FactoryRun run = Factory.Create(source, task, repo, baseBranch, department is null or FactoryDepartment.Development ? VerifyBox.Text : "", autonomous, report, department);
         RunList.Items.Insert(0, Row(run));
         RunList.SelectedIndex = 0;
         RunsTab.IsChecked = true;
