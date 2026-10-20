@@ -71,6 +71,10 @@
                               ToolTip="No human in the loop: the plan's questions take the suggested answers, the run fixes what it needs outside the repo (backed up and listed), learned rules apply at once, and it stops only for what no tool can do - a login">
                         <TextBlock TextWrapping="Wrap" FontSize="13"><Run FontWeight="SemiBold" Text="Autonomous" /><Run Text=" - no stops; it decides, fixes and learns on its own" /></TextBlock>
                     </CheckBox>
+                    <CheckBox x:Name="ReportBox" Margin="2,6,0,0" AutomationProperties.Name="Designed report"
+                              ToolTip="When the run is done, Claude turns its result into one readable HTML page - summary first, sections, tables, diagrams, decisions, what is not verified, the evidence">
+                        <TextBlock TextWrapping="Wrap" FontSize="13"><Run FontWeight="SemiBold" Text="Designed report" /><Run Text=" - a readable page of the result when it is done" /></TextBlock>
+                    </CheckBox>
                     <TextBlock x:Name="FormError" Foreground="{StaticResource CoralInkBrush}" TextWrapping="Wrap" Margin="2,8,0,0"
                                Visibility="Collapsed" />
                     <Button x:Name="StartButton" Content="Start run" Style="{StaticResource PrimaryButton}" Margin="0,12,0,0"
@@ -113,6 +117,8 @@
                             <Button x:Name="OpenPrButton" Content="Open PR" Style="{StaticResource PrimaryButton}" Margin="0,0,8,6" Click="OpenPr_Click" />
                             <Button x:Name="SessionButton" Content="Open in Sessions" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6"
                                     Click="Session_Click" ToolTip="Continue this run's Claude Code session yourself" />
+                            <Button x:Name="ReportButton" Content="Open report" Style="{StaticResource PrimaryButton}" Margin="0,0,8,6"
+                                    Click="Report_Click" ToolTip="The designed report of this run, in your browser" />
                             <Button x:Name="ProofButton" Content="Open evidence" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6"
                                     Click="Proof_Click" ToolTip="Screenshots, responses and logs from running the app with the change" />
                             <Button x:Name="FolderButton" Content="Open folder" Style="{StaticResource SecondaryButton}" Margin="0,0,0,6"
