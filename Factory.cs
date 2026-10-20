@@ -1252,8 +1252,12 @@ public static class Factory
         run.RemoteKnown = true;
     }
 
-    // the remote's branches and tags (a tag push gets past a check of branches only)
-    private static Task<(int Exit, string Output)> RemoteRefsAsync(string folder) => GitAsync(folder, "ls-remote", "origin", "refs/heads/*", "refs/tags/*");
+    // every ref of the remote (a push to refs/tags/ or any other namespace gets past a check of branches only)
+    private static Task<(int Exit, string Output)> RemoteRefsAsync(string folder) => GitAsync(folder, "ls-remote", "origin");
+
+    // refs the git host makes itself for pull requests, read-only to a push: they point at the run's own PR commits
+    private static bool HostRef(string name) => name == "HEAD" || name.StartsWith("refs/pull/", StringComparison.Ordinal)
+        || name.StartsWith("refs/pull-requests/", StringComparison.Ordinal) || name.StartsWith("refs/merge-requests/", StringComparison.Ordinal);
 
     private static async Task<string> RemoteConfigAsync(string folder)
     {
@@ -2066,12 +2070,14 @@ public static class Factory
             var moved = new List<string>();
             foreach ((string name, string sha) in Refs(nowRefs))
             {
-                if (start.TryGetValue(name, out string? was) && was == sha) continue;
+                if (HostRef(name) || start.TryGetValue(name, out string? was) && was == sha) continue;
                 if (name == "refs/heads/" + run.Branch && sha == run.PushedCommit) continue;
                 bool here = (await GitAsync(run.Worktree, "cat-file", "-e", sha + "^{commit}")).Exit == 0;
                 if (here && sha != run.BaseCommit && (await GitAsync(run.Worktree, "merge-base", "--is-ancestor", run.BaseCommit, sha)).Exit == 0)
                 {
-                    moved.Add($"{(name.StartsWith("refs/tags/", StringComparison.Ordinal) ? "tag " + name[10..].Replace("^{}", "") : name.Replace("refs/heads/", ""))} at {sha[..Math.Min(12, sha.Length)]}");
+                    string shown = name.StartsWith("refs/heads/", StringComparison.Ordinal) ? name[11..]
+                        : name.StartsWith("refs/tags/", StringComparison.Ordinal) ? "tag " + name[10..].Replace("^{}", "") : name;
+                    moved.Add($"{shown} at {sha[..Math.Min(12, sha.Length)]}");
                 }
             }
             if (moved.Count > 0)
