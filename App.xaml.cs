@@ -130,6 +130,8 @@ public partial class App : Application
     {
         if (_open != null)
         {
+            // back on top for the question (opening a report in the browser lets it drop behind)
+            _open.Topmost = true;
             _open.Activate();
             return;
         }
