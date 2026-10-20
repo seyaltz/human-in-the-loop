@@ -532,6 +532,30 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   - Learned rules (rule lines, skills, hooks) are applied at once, each with **Undo** (the appended text taken
     out, the skill's folder deleted, the settings restored from the backup made before).
   Not autonomous: the questions stop the run, outside changes are forbidden (`NEEDS_YOU`), rules wait for Apply.
+- **Departments** (`FactoryDepartment`, pills at the top of New task, remembered as `factoryDepartment`; shown in
+  the History row when not Development): **Development** - the pipeline above. **Troubleshooting** and **Research**
+  change no code: no verify command (the box is disabled), the report always on (ticked and disabled), and the plan
+  step is an investigation (`InvestigateAsync`, span "Diagnose" / "Research") that always sets `NoChange` and goes to
+  the checked answer. Troubleshooting is told: reproduce it as reported and say what the customer sees; find a
+  control that works and compare; find the root cause (file:line, data row or setting), proven apart from
+  suspected; say the fix, where, and who makes it. Its check reproduces again live and shows the control working,
+  and its `RESULT:` is in the call-center order (what the customer sees, why in plain words, what to tell them and a
+  workaround, the root cause, the fix and who, not verified); its report opens with a plain "For the call center"
+  part, then "Technical". **Fix it (Development)** on a done troubleshooting run creates a Development run in the same
+  repo and base whose task is the diagnosis (`HandOff`). Research is told to answer from the code, the running app
+  and the data, each claim backed by a file:line, a call or a row.
+- **The department manager** (`ManageAsync`, autonomous runs only): when a drive ends at Needs you, before Learn, a
+  `claude -p` with the developer's setup and bypass (publishing denied, the factory's knowledge in) in the run's
+  folder gets the task, why it stopped and the last 14 log entries, and ends with `DECISION: RESUME <what it did>` -
+  allowed at most twice per run (`ManagerResumes`); the run is continued from where it stopped after the drive ends
+  - or `DECISION: ESCALATE <what the human must do>`: `ManagerCase` (what to do, why it stopped, proposed factory
+  changes) is shown in a coral **"Needs a human"** box on the run, the note becomes "Needs a human: ...", and the
+  Windows notification is titled "Dev break factory - needs a human". `RULE:` lines are applied like Learn's rules
+  (autonomous: at once, with Undo), `FACTORY_FIX:` lines are kept in `FactoryFixes` for a human to approve (never
+  applied), `OUTSIDE:` lines are listed. No decision counts as escalate. A resumed run learns when it ends.
+- Files under `.claude/` in the developer's local changes (Claude tooling state - a hook's edit log grows with every
+  edit) never stop a run when they change (seen: `.claude/session-changes.log` stopped a run that never touched it);
+  they stay in the local-changes set, so the commit check still keeps them out of every commit.
 - **Delete…** (a run's header, not while it works): deletes one run for good, after a diagnosis.
   - The diagnosis: the run's lessons still kept (saved, applied, pending) are listed first as Insights items; then a
     `claude -p` without tools reads the task, result, log and lessons against the repo's `MEMORY.md`, the global

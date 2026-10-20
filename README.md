@@ -113,6 +113,21 @@ updates the draft PR; **rate the run** good or bad with a note; say **why** when
 it goes into what the factory learns. Every run has a **Trace** - each step with its time, cost, tokens, every tool
 call and the exact prompt and answer - and **Export trace** saves it as JSON and Markdown.
 
+**Departments** - pick one per task:
+- **Development**: build a change, as above, to a draft PR.
+- **Troubleshooting** (for the call center): a customer's or a site's problem. Claude reproduces it as reported,
+  finds a control that works (another site, page or server) and compares, and finds the root cause - changing no
+  code. The report opens with a plain **"For the call center"** part (what the customer sees, why, what to tell them,
+  a workaround, who fixes it), then the technical part. **Fix it (Development)** hands the diagnosis to a new
+  Development run.
+- **Research**: a question about the system, answered from the code, the running app and its data, and checked.
+
+**The department manager**: when an autonomous run stops, a manager looks first. It finds out why; when it can
+remove the cause (a false alarm, a passing error, something it can fix on this machine) it resumes the run - at most
+twice - and may leave a rule so later runs do not stop that way. When it cannot - a login, an access grant, a
+decision, a fix it cannot make - it raises a **"Needs a human"** case on the run with a Windows notification: what is
+blocked, what it tried, exactly what you need to do, and any change to the factory itself it proposes for you to approve.
+
 **Autonomous** (on by default): no human in the loop. The run takes the plan's open decisions itself (and lists them
 in the PR), fixes what it needs on your machine outside the repo (backed up, listed), applies what it learns at once
 (with Undo), and when its checks keep failing it makes one fresh attempt; it stops - with a Windows notification - only
