@@ -424,10 +424,16 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      starting the app or calling it - Prove runs the app once (seen in a real run: Build restarted the service, 41 s,
      and Prove restarted it again, 40 s).
      The session's turns share **one open claude process** (`claude -p --input-format stream-json`, each turn one
-     user message, it ends at the turn's `result` line) while the folder, session id and arguments stay the same -
-     the PR turn, which may push, gets its own. A new process starts the developer's whole setup each time:
-     measured 11.7-13.7 s for a one-line answer, against 2.9-3.0 s for a later turn of an open process. A stopped or
-     failed turn ends the process, and so does the end of the run's drive; the next turn resumes the session.
+     user message, ending at the turn's `result` line) while the folder, session id and arguments stay the same; a
+     turn that needs other arguments (the PR turn, which may push) gets a new one and the old one is ended first.
+     A new process starts the developer's whole setup each time: measured 11.7-13.7 s for a one-line answer, against
+     2.9-3.0 s for a later turn of an open process. **The handshake, as the Agent SDK does it**: claude reads stdin
+     only once it is initialized, so the first thing written is `{"type":"control_request","request_id":...,
+     "request":{"subtype":"initialize"}}`, and the message goes in only after its `control_response` (60 s at most,
+     else the turn fails "did not answer its initialize request"). Without it, a message bigger than the pipe's buffer
+     blocks the writer and the run hangs before its first tool (seen twice; in a test 6,000- and 20,000-character
+     messages blocked without it and 6,000/20,000/50,000 went through with it; the 3,207-character task that hung ran
+     to the end with it). A stopped or failed turn ends the process, and so does the end of the run's drive.
   4. **Verify**: Dev break runs the verify command itself (a fresh PowerShell in the run's folder with the machine's
      default environment, both streams, 30 min max - so the plan's command must carry what its own commands needed,
      e.g. `$env:JAVA_HOME=...`). It is done when the command's own process exits (the `Exited` event), not when every
@@ -505,6 +511,14 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   - Learned rules (rule lines, skills, hooks) are applied at once, each with **Undo** (the appended text taken
     out, the skill's folder deleted, the settings restored from the backup made before).
   Not autonomous: the questions stop the run, outside changes are forbidden (`NEEDS_YOU`), rules wait for Apply.
+- **Designed report** (a checkbox under Autonomous, off by default, remembered as `factoryReport`): a run that ends
+  Done (answered, or a draft PR) gets one more `claude -p` without tools (`--tools "" --strict-mcp-config
+  --setting-sources ""`, like Learn, before Learn) that turns the task, the note, the result, the plan, the decisions
+  and the evidence list into one self-contained HTML page - the direct answer first in a summary box, sections,
+  tables for tabular facts, `<pre>` for code and curls, a Mermaid diagram where a flow helps (mermaid@10.9.1 from
+  jsDelivr with its sha384 integrity hash), "Decisions taken", "Not verified" and "Evidence" (file:/// links); only
+  the run's facts, nothing added. Saved as `traces\<id>-report.html` (`ReportFile`); **Open report** (shown once
+  it exists) opens it in the browser; a reply with no HTML page logs "Could not write the report".
 - **No change needed** (the plan says `CHANGE: none` - the task asks for an answer, like a curl or an explanation): no
   build, verify, review or PR; an "Answer" turn checks the answer against the running app (evidence and manifest as
   in Prove, up to 2 attempts) and gives it after `RESULT:`; the run ends Done ("Answered - no change was needed, so no

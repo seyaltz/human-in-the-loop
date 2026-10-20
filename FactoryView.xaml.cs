@@ -70,6 +70,7 @@ public partial class FactoryView : UserControl
         foreach (FactoryRun run in Factory.Runs) RunList.Items.Add(Row(run));
         UpdateRunsSummary();
         AutonomousBox.IsChecked = AppSettings.Get("factoryAutonomous") != "0";
+        ReportBox.IsChecked = AppSettings.Get("factoryReport") == "1";
         IReadOnlyList<string> repos = await Task.Run(ClaudeProjects.GitRepos);
         foreach (string repo in repos.OrderBy(r => r, StringComparer.OrdinalIgnoreCase)) RepoBox.Items.Add(repo);
         if (AppSettings.Get("factoryRepo") is { Length: > 0 } last) RepoBox.Text = last;
@@ -143,7 +144,9 @@ public partial class FactoryView : UserControl
         if (IsRepo(repo) && VerifyBox.Text.Trim().Length > 0) AppSettings.Set("factoryVerify:" + repo.ToLowerInvariant(), VerifyBox.Text.Trim());
         bool autonomous = AutonomousBox.IsChecked == true;
         AppSettings.Set("factoryAutonomous", autonomous ? "1" : "0");
-        FactoryRun run = Factory.Create(source, task, repo, baseBranch, VerifyBox.Text, autonomous);
+        bool report = ReportBox.IsChecked == true;
+        AppSettings.Set("factoryReport", report ? "1" : "0");
+        FactoryRun run = Factory.Create(source, task, repo, baseBranch, VerifyBox.Text, autonomous, report);
         RunList.Items.Insert(0, Row(run));
         RunList.SelectedIndex = 0;
         RunsTab.IsChecked = true;
@@ -361,6 +364,7 @@ public partial class FactoryView : UserControl
             ? Visibility.Visible : Visibility.Collapsed;
         OpenPrButton.Visibility = run.PrUrl.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         SessionButton.Visibility = FolderButton.Visibility = Directory.Exists(run.Worktree) ? Visibility.Visible : Visibility.Collapsed;
+        ReportButton.Visibility = run.ReportFile.Length > 0 && File.Exists(run.ReportFile) ? Visibility.Visible : Visibility.Collapsed;
         string proof = Factory.ProofDir(run);
         ProofButton.Visibility = Directory.Exists(proof) && Directory.EnumerateFiles(proof, "*", SearchOption.AllDirectories).Any()
             ? Visibility.Visible : Visibility.Collapsed;
@@ -745,6 +749,11 @@ public partial class FactoryView : UserControl
     private void Proof_Click(object sender, RoutedEventArgs e)
     {
         if (_shown != null && Directory.Exists(Factory.ProofDir(_shown))) Process.Start(new ProcessStartInfo(Factory.ProofDir(_shown)) { UseShellExecute = true });
+    }
+
+    private void Report_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown != null && File.Exists(_shown.ReportFile)) Process.Start(new ProcessStartInfo(_shown.ReportFile) { UseShellExecute = true });
     }
 
     private void Folder_Click(object sender, RoutedEventArgs e)

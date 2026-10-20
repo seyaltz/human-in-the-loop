@@ -279,6 +279,37 @@ public static class ClaudeSessions
         public static string KeyOf(string folder, string id, IEnumerable<string>? extraArgs) =>
             folder + "|" + id + "|" + string.Join(" ", extraArgs ?? []);
 
+        // claude reads stdin only once it is initialized: written before, a message bigger than the pipe's buffer
+        // blocks the writer and the turn never starts (two factory runs hung so; in a test 6,000- and 20,000-character
+        // messages blocked without this and went through with it). So, like the Agent SDK, the first thing written is
+        // an initialize request, and the turn waits for its answer - at most InitTimeout.
+        private static readonly TimeSpan InitTimeout = TimeSpan.FromSeconds(60);
+        private bool _initialized;
+
+        private async Task InitializeAsync(CancellationToken cancel)
+        {
+            await _process.StandardInput.WriteLineAsync("""{"type":"control_request","request_id":"devbreak_init","request":{"subtype":"initialize"}}""");
+            await _process.StandardInput.FlushAsync();
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+            limit.CancelAfter(InitTimeout);
+            try
+            {
+                while (await _process.StandardOutput.ReadLineAsync(limit.Token) is { } line)
+                {
+                    if (line.StartsWith('{') && line.Contains("\"control_response\"", StringComparison.Ordinal))
+                    {
+                        _initialized = true;
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
+            {
+                throw new TimeoutException($"claude did not answer its initialize request in {InitTimeout.TotalSeconds:0} s");
+            }
+            throw new IOException("claude exited before it was initialized");
+        }
+
         /// <summary>One turn: the prompt goes in as the next user message; it ends at the turn's result line.</summary>
         public async Task TurnAsync(string prompt, Action<SessionEntry> onEntry, CancellationToken cancel, Action<JsonElement>? onLine = null)
         {
@@ -287,6 +318,7 @@ public static class ClaudeSessions
             {
                 try
                 {
+                    if (!_initialized) await InitializeAsync(cancel);
                     string message = JsonSerializer.Serialize(new
                     {
                         type = "user",
@@ -306,6 +338,12 @@ public static class ClaudeSessions
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
                 {
                     // the process went away under the read (stopped, or it died): reported below
+                }
+                catch (TimeoutException ex)
+                {
+                    Dispose();
+                    onEntry(new SessionEntry(SessionEntryKind.Error, ex.Message));
+                    return;
                 }
             }
             if (cancel.IsCancellationRequested)

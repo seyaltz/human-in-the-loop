@@ -140,6 +140,10 @@ public sealed class FactoryRun
     /// its folder (backed up, listed), learned rules apply at once, and it stops only when nothing else is left.
     /// </summary>
     public bool Autonomous { get; set; }
+    /// <summary>The developer asked for a designed report: a readable HTML page of the result once the run is done.</summary>
+    public bool Report { get; set; }
+    /// <summary>The designed report, once written.</summary>
+    public string ReportFile { get; set; } = "";
     /// <summary>The run already had its fresh second attempt after getting stuck.</summary>
     public bool Retried { get; set; }
     /// <summary>Files the run changed outside its folder, as it reported them: path - what - backup.</summary>
@@ -271,7 +275,8 @@ public static class Factory
         }
     }
 
-    public static FactoryRun Create(FactorySource source, string task, string folder, string baseBranch, string verify, bool autonomous = false)
+    public static FactoryRun Create(FactorySource source, string task, string folder, string baseBranch, string verify, bool autonomous = false,
+        bool report = false)
     {
         string id = Guid.NewGuid().ToString("N")[..8];
         string first = task.Trim().Split('\n')[0].Trim();
@@ -285,6 +290,7 @@ public static class Factory
         {
             Id = id, Title = title, Source = source, Task = task.Trim(), Folder = folder.TrimEnd('\\'), BaseBranch = baseBranch.Trim(),
             Verify = verify.Trim(), SessionId = Guid.NewGuid().ToString(), Created = DateTime.Now, Autonomous = autonomous,
+            Report = report,
         };
         Runs.Insert(0, run);
         Save();
@@ -619,7 +625,11 @@ public static class Factory
         {
             CloseLive(run);
             if (cancel.IsCancellationRequested) End(run, FactoryStage.Stopped, "Stopped.");
-            else if (learn) await LearnAsync(run);
+            else
+            {
+                if (run.Report && run.Stage == FactoryStage.Done && run.ReportFile.Length == 0) await ReportAsync(run);
+                if (learn) await LearnAsync(run);
+            }
             try
             {
                 await LeaveCheckoutAsync(run);
@@ -1254,6 +1264,63 @@ public static class Factory
         return true;
     }
 
+    private const string MermaidInit = "mermaid.initialize({startOnLoad:true})";
+
+    // the designed report the developer asked for: the run's result as one readable HTML page, from its own facts only
+    private static async Task ReportAsync(FactoryRun run)
+    {
+        Log(run, "Claude writes the designed report.");
+        try
+        {
+            string prompt = $"""
+                Turn the result of a coding agent's run into a report a developer enjoys reading. Use ONLY the facts
+                below - add nothing, guess nothing; keep every file:line, command, number and "not verified" as it is.
+
+                Reply with one complete, self-contained HTML document and nothing else (no code fence):
+                - a clear title and, first, a short summary box with the direct answer or outcome;
+                - sections with headings for the main points; tables where the facts are tabular (steps, calls and
+                  results, what is where); code, commands and curls in <pre> blocks;
+                - a diagram where a flow or structure is easier to see than to read: Mermaid in a <pre class="mermaid">,
+                  with exactly <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"
+                  integrity="sha384-WmdflGW9aGfoBdHc4rRyWzYuAjEmDwMdGdiPNacbwfGKxBW/SO6guzuQ76qjnSlr"
+                  crossorigin="anonymous"></script> and {MermaidInit};
+                - "Decisions taken", "Not verified" and "Evidence" sections when the run has them; evidence files as
+                  file:/// links;
+                - clean inline CSS: readable sans-serif, max-width about 920px, generous spacing, light background,
+                  subtle borders; no other external files.
+
+                THE TASK: {run.Task}
+                HOW IT ENDED: {run.Note}
+                THE RESULT:
+                {Tail(run.Result, 20000)}
+                THE PLAN:
+                {Tail(run.Plan, 8000)}
+                DECISIONS TAKEN ON ITS OWN:
+                {(run.Decisions.Length > 0 ? run.Decisions : "(none)")}
+                THE EVIDENCE ({ProofDir(run)}):
+                {EvidenceSummary(run)}
+                {(run.PrUrl.Length > 0 ? "THE DRAFT PR: " + run.PrUrl : "")}
+                """;
+            string answer = await ClaudeOnceAsync(run, Path.GetTempPath(), prompt,
+                ["--tools", "", "--strict-mcp-config", "--setting-sources", ""], "Report", CancellationToken.None);
+            int start = answer.IndexOf("<!DOCTYPE", StringComparison.OrdinalIgnoreCase);
+            if (start < 0) start = answer.IndexOf("<html", StringComparison.OrdinalIgnoreCase);
+            int end = answer.LastIndexOf("</html>", StringComparison.OrdinalIgnoreCase);
+            if (start < 0 || end < start) throw new InvalidOperationException("Claude did not reply with an HTML page");
+            string file = Path.Combine(AppContext.BaseDirectory, "traces", run.Id + "-report.html");
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllText(file, answer[start..(end + "</html>".Length)]);
+            run.ReportFile = file;
+            Log(run, "Report: " + file);
+        }
+        catch (Exception ex)
+        {
+            Log(run, "Could not write the report: " + ex.Message, ok: false);
+        }
+        Save();
+        Notify(run);
+    }
+
     // what the run taught about this repo: memory notes are saved at once; rules wait for the developer's OK
     private static async Task LearnAsync(FactoryRun run)
     {
@@ -1555,18 +1622,7 @@ public static class Factory
                         break;
                 }
             };
-            if (publish)
-            {
-                // the turn that may push runs on its own, as a one-off claude, like before the open process: a second
-                // open process for it hung before reading its message (round 4, cause not found yet). The open one is
-                // closed first - it would not know this turn, and the next turn resumes the session from its file.
-                CloseLive(run);
-                await ClaudeSessions.RunTurnAsync(run.Worktree, run.SessionId, isNew, prompt, onEntry, cancel, args, root => Observe(run, span, root));
-            }
-            else
-            {
-                await LiveFor(run, isNew, args).TurnAsync(prompt, onEntry, cancel, root => Observe(run, span, root));
-            }
+            await LiveFor(run, isNew, args).TurnAsync(prompt, onEntry, cancel, root => Observe(run, span, root));
         }
         finally
         {
@@ -1622,8 +1678,9 @@ public static class Factory
         return args;
     }
 
-    // the run's open claude process when it fits this turn (same folder, session and arguments), else a new one
-    private static ClaudeSessions.LiveSession LiveFor(FactoryRun run, bool isNew, string[]? args)
+    // the run's open claude process when it fits this turn (same folder, session and arguments), else a new one -
+    // the one it replaces is ended first, so two processes never hold the same session
+    private static ClaudeSessions.LiveSession LiveFor(FactoryRun run, bool isNew, string[] args)
     {
         lock (Live)
         {

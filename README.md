@@ -125,8 +125,12 @@ stops and asks. What you asked to get back - a curl, an answer, a link - is show
 
 Every step is timed: a step or tool call that runs **over a minute** turns amber and you get a Windows notification;
 what was slow goes into what the factory learns, so the next run in that repo is faster. A run keeps **one Claude
-process open** for its steps (plan, build, fixes, prove) instead of starting Claude - with your whole setup - for each
-one, and Build leaves running the app to Prove, so the app is started once.
+process open** for its steps instead of starting Claude - with your whole setup - for each one, and Build leaves
+running the app to Prove, so the app is started once.
+
+**Designed report** (a checkbox under Autonomous, remembered): when the run is done, Claude turns its result into
+one readable page - the answer first, sections, tables, a diagram where a flow helps, the decisions it took, what is
+not verified and the evidence - from the run's own facts only. **Open report** shows it in your browser.
 
 The **History** tab lists every run so far: **Continue** one that stopped or needs you, from where it stopped. **Clean
 up** deletes what a run left on disk - its worktree (if it had one) and that worktree's session files, its evidence,
