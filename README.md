@@ -108,6 +108,15 @@ Rules, skills and hooks wait for your **Apply** and are kept by the factory **ou
 prompt, the skills as a plugin, the hooks as settings), and your checkout never gets a file it did not ask for. The
 next run starts smarter.
 
+**Review and revise**: when a run is done, a card on it asks you to review that revision - the decisions it took on
+its own are listed as ticked boxes; untick one and say how it should be. **Accept** closes it; **Request changes**
+sends it back to the factory as the next **revision** (pick what kind: wrong behaviour, missing, change design, bug).
+The run first says in a line what "done" now means and which earlier decision your request overturns, then changes
+it, checks it again and updates the same draft PR (an answer is reworked and checked, with a new report). A part
+that belongs in another repo under your folder starts a linked Development run there. Not autonomous, it stops after
+saying what it understood and builds on your "ok". History shows the revision; a notification says when one is
+ready; and after changes, Accept teaches the factory what you meant.
+
 Tell it what you think: **send feedback to the run** ("also handle underscores") and it applies it, checks again and
 updates the draft PR; **rate the run** good or bad with a note; say **why** when you undo or dismiss a lesson. All of
 it goes into what the factory learns. Every run has a **Trace** - each step with its time, cost, tokens, every tool
