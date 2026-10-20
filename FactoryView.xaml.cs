@@ -848,7 +848,10 @@ public partial class FactoryView : UserControl
 
     private void Report_Click(object sender, RoutedEventArgs e)
     {
-        if (_shown != null && File.Exists(_shown.ReportFile)) Process.Start(new ProcessStartInfo(_shown.ReportFile) { UseShellExecute = true });
+        if (_shown == null || !File.Exists(_shown.ReportFile)) return;
+        // the window stays on top for the hourly question: the browser would open behind it, unseen
+        if (Window.GetWindow(this) is { } window) window.Topmost = false;
+        Process.Start(new ProcessStartInfo(_shown.ReportFile) { UseShellExecute = true });
     }
 
     private void Folder_Click(object sender, RoutedEventArgs e)
