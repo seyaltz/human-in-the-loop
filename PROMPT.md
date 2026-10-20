@@ -532,8 +532,13 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   - Learned rules (rule lines, skills, hooks) are applied at once, each with **Undo** (the appended text taken
     out, the skill's folder deleted, the settings restored from the backup made before).
   Not autonomous: the questions stop the run, outside changes are forbidden (`NEEDS_YOU`), rules wait for Apply.
-- **Departments** (`FactoryDepartment`, pills at the top of New task, remembered as `factoryDepartment`; shown in
-  the History row when not Development): **Development** - the pipeline above. **Troubleshooting** and **Research**
+- **Departments** (`FactoryDepartment`: Development, Troubleshooting, Research, Management; pills at the top of New
+  task, remembered as `factoryDepartment`; shown in the History row when not Development). **Auto** (the default) leaves
+  it to **the gate** (`RouteAsync`, the first step of the run): a `claude -p` (no tools for a typed task; for Jira or a
+  spec the machine's tools minus editing and publishing) reads the item against the four departments' descriptions
+  and replies `DEPARTMENT: <name> - <reason>`; logged "Gate: <name> - <reason>"; a problem with an unknown cause goes
+  to Troubleshooting, a known one to Development (tested: a support-worded case, a question, a feature and a strategy
+  item each went to the right one). **Development** - the pipeline above. **Troubleshooting** and **Research**
   change no code: no verify command (the box is disabled), the report always on (ticked and disabled), and the plan
   step is an investigation (`InvestigateAsync`, span "Diagnose" / "Research") that always sets `NoChange` and goes to
   the checked answer. Troubleshooting is told: reproduce it as reported and say what the customer sees; find a
@@ -543,7 +548,17 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   workaround, the root cause, the fix and who, not verified); its report opens with a plain "For the call center"
   part, then "Technical". **Fix it (Development)** on a done troubleshooting run creates a Development run in the same
   repo and base whose task is the diagnosis (`HandOff`). Research is told to answer from the code, the running app
-  and the data, each claim backed by a file:line, a call or a row.
+  and the data, each claim backed by a file:line, a call or a row. **Management** (step "Brief"): what is asked and why
+  it matters; where the company stands (sourced facts from the code, systems, data and documents, and the market from
+  the web, with links); 2-4 options with value, effort, risk and needs; a recommendation with first steps by
+  department and the open questions for management - estimates kept apart from facts. Its check re-checks each fact
+  against its source; its `RESULT:` is the brief in decision order; its report opens with an "Executive summary"
+  (the recommendation, the decision asked, value, cost, top risk), then the options as a table.
+  **Folder-wide**: when "Pick the repo" answers `REPO: NONE` for a department other than Development, the run works in
+  the folder itself (`FolderWide`, `Worktree = Folder`, no branch, no workspace step) and its knowledge and memory live
+  under the folder (`Home`). Turns of every department but Development also deny git's writing commands (commit, add,
+  reset, rebase, cherry-pick, merge, stash, checkout, switch, restore, rm, mv - the same prefix rules as the PR step,
+  with the same weakness against `git -c ...`).
 - **The department manager** (`ManageAsync`, autonomous runs only): when a drive ends at Needs you, before Learn, a
   `claude -p` with the developer's setup and bypass (publishing denied, the factory's knowledge in) in the run's
   folder gets the task, why it stopped and the last 14 log entries, and ends with `DECISION: RESUME <what it did>` -

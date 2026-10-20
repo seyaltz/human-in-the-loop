@@ -18,9 +18,10 @@ public enum FactorySource { Typed, Jira, Spec }
 /// <summary>
 /// Which department a run belongs to: Development builds a change to a draft PR; Troubleshooting diagnoses a
 /// customer's or a site's problem for the call center (reproduce, compare with what works, root cause - no code);
-/// Research answers a question about the system. The last two end in a checked answer and a designed report.
+/// Research answers a question about the system; Management thinks through a vision, an idea or a company-wide matter and
+/// ends in a decision brief. All but Development change no code and end in a checked answer and a designed report.
 /// </summary>
-public enum FactoryDepartment { Development, Troubleshooting, Research }
+public enum FactoryDepartment { Development, Troubleshooting, Research, Management }
 
 /// <summary>Where a factory run is.</summary>
 public enum FactoryStage { Queued, Worktree, Plan, Build, Verify, Review, PullRequest, Learn, Done, NeedsYou, Stopped, Locate, Prove }
@@ -129,6 +130,18 @@ public sealed class FactoryRun
     public string Title { get; set; } = "";
     public FactorySource Source { get; set; }
     public FactoryDepartment Department { get; set; }
+    /// <summary>
+    /// Where the run's knowledge lives: its repo - or, for a folder-wide run (troubleshooting, research or management
+    /// that belongs to no single repo), the folder it was given.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string Home => Repo.Length > 0 ? Repo : Folder;
+    /// <summary>A troubleshooting, research or management run that belongs to no single repo: it works in the folder.</summary>
+    public bool FolderWide { get; set; }
+    /// <summary>The gate chooses the department when the run starts (the developer chose Auto); false once it has.</summary>
+    public bool AutoDepartment { get; set; }
+    /// <summary>Why the gate sent it to its department, one line.</summary>
+    public string Routing { get; set; } = "";
     public string Task { get; set; } = "";
     /// <summary>The folder the developer pointed at: a repo, or a folder with repos somewhere in it.</summary>
     public string Folder { get; set; } = "";
@@ -311,7 +324,7 @@ public static class Factory
     }
 
     public static FactoryRun Create(FactorySource source, string task, string folder, string baseBranch, string verify, bool autonomous = false,
-        bool report = false, FactoryDepartment department = FactoryDepartment.Development)
+        bool report = false, FactoryDepartment? department = FactoryDepartment.Development)
     {
         string id = Guid.NewGuid().ToString("N")[..8];
         string first = task.Trim().Split('\n')[0].Trim();
@@ -326,7 +339,9 @@ public static class Factory
             Id = id, Title = title, Source = source, Task = task.Trim(), Folder = folder.TrimEnd('\\'), BaseBranch = baseBranch.Trim(),
             Verify = verify.Trim(), SessionId = Guid.NewGuid().ToString(), Created = DateTime.Now, Autonomous = autonomous,
             // troubleshooting and research end in a report: it is what they hand over
-            Report = report || department != FactoryDepartment.Development, Department = department,
+            // null: the gate decides when the run starts
+            Report = report || department is not (null or FactoryDepartment.Development),
+            Department = department ?? FactoryDepartment.Development, AutoDepartment = department == null,
         };
         Runs.Insert(0, run);
         Save();
@@ -363,8 +378,9 @@ public static class Factory
     /// <summary>Takes a run from its task to a draft PR, then learns from it. Ends at Done, NeedsYou or Stopped.</summary>
     public static Task RunAsync(FactoryRun run) => DriveAsync(run, learnAfter: false, async cancel =>
     {
+        if (run.AutoDepartment && !await RouteAsync(run, cancel)) return false;
         if (!await LocateAsync(run, cancel)) return false;
-        if (!await WorktreeAsync(run, cancel)) return false;
+        if (!run.FolderWide && !await WorktreeAsync(run, cancel)) return false;
         // from here on there is something to learn from
         if (!await PlanAsync(run, cancel)) return true;
         if (run.NoChange) return await AnswerAsync(run, cancel);
@@ -406,7 +422,7 @@ public static class Factory
         {
             Enter(run, FactoryStage.Prove, "No change needed: Claude checks the answer against the running app.");
             (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
-                {again}{(run.Department == FactoryDepartment.Troubleshooting ? TroubleshootingCheck : "The task needs no change to the repo - it asks for an answer. Check the answer works against the running app (start what it needs with the tools on this machine), exactly as the developer would use it.")} {NamedSources}
+                {again}{(run.Department == FactoryDepartment.Management ? ManagementCheck : run.Department == FactoryDepartment.Troubleshooting ? TroubleshootingCheck : "The task needs no change to the repo - it asks for an answer. Check the answer works against the running app (start what it needs with the tools on this machine), exactly as the developer would use it.")} {NamedSources}
                 Save the evidence (the call and its response, log lines) into {dir}, and write {Path.Combine(dir, ManifestName)}
                 as a JSON array of {"{"}"kind", "file", "proves", "result", "detail"{"}"}. Change no file in the repo.
                 Give the final, checked answer - ready to use - after a line RESULT:. Then end with exactly one line:
@@ -896,6 +912,15 @@ public static class Factory
             if (repos.Count == 0) return Wait(run, $"There is no git repository in {run.Folder} (3 levels down).");
             repo = repos.Count == 1 ? repos[0] : await PickRepoAsync(run, repos, cancel);
             if (repo == null) return false;
+            if (repo.Length == 0)
+            {
+                // troubleshooting, research or management about no single repo: it works in the folder itself - no
+                // branch, no checkout; every repo under it can be read
+                run.FolderWide = true;
+                run.Worktree = run.Folder;
+                Log(run, $"No single repo: it works across {run.Folder} - no branch, nothing is changed.");
+                return true;
+            }
         }
         run.Repo = repo;
         if (run.BaseBranch.Length == 0) run.BaseBranch = await CurrentBranchAsync(repo);
@@ -953,6 +978,8 @@ public static class Factory
         string value = pick.Length > 5 ? pick[5..].Trim() : "";
         Log(run, $"{repos.Count} repos in the folder; Claude picked: {value}");
         if (int.TryParse(value.Split(' ')[0], out int n) && n >= 1 && n <= repos.Count) return repos[n - 1];
+        // only Development has to change one repo; the others may work across the folder ("" - folder-wide)
+        if (value.StartsWith("NONE", StringComparison.OrdinalIgnoreCase) && run.Department != FactoryDepartment.Development) return "";
         Wait(run, value.StartsWith("NONE", StringComparison.OrdinalIgnoreCase)
             ? "Claude found no single repo for the task: " + value[4..].Trim()
             : "Claude did not name a repo:\n" + answer);
@@ -1149,7 +1176,9 @@ public static class Factory
               own commands needed, e.g. $env:JAVA_HOME='...'; before the build. Say in one line before it why these
               tests are the regression scope.{(run.VerifyHint.Length > 0 ? $"\nThis repo was verified before with: {run.VerifyHint}\nReuse its environment and flags; choose the tests for this change." : "")}
               """;
-        string where = $"You are working in {(run.InCheckout ? "the developer's own checkout of " + run.Repo : "a separate git worktree of " + run.Repo)}, on a new branch {run.Branch} (from {run.BaseBranch}).";
+        string where = run.FolderWide
+            ? $"You are working in the folder {run.Folder}: the item belongs to no single repo, so read across the repos and systems under it as needed. Change nothing."
+            : $"You are working in {(run.InCheckout ? "the developer's own checkout of " + run.Repo : "a separate git worktree of " + run.Repo)}, on a new branch {run.Branch} (from {run.BaseBranch}).";
         if (run.Department != FactoryDepartment.Development) return await InvestigateAsync(run, where, task, cancel);
         string prompt = $"""
             {where}
@@ -1205,11 +1234,60 @@ public static class Factory
         return true;
     }
 
+    // the gate: which department handles a new item - read from the task itself, before anything else runs
+    private static async Task<bool> RouteAsync(FactoryRun run, CancellationToken cancel)
+    {
+        Enter(run, FactoryStage.Locate, "The gate reads the task and chooses the department.");
+        string task = run.Source switch
+        {
+            FactorySource.Jira => $"The task is the Jira issue {run.Task}; read it with the tools you have on this machine.",
+            FactorySource.Spec => $"The task is the spec at {run.Task} (a file or a link); read it with the tools you have on this machine.",
+            _ => "The task:\n" + run.Task,
+        };
+        string prompt = $"""
+            A software factory has three departments. Decide which one handles this new item.
+            - Development: the item asks to change the code - build a feature, fix a known bug, refactor, add an endpoint,
+              change a page. It ends in a pull request.
+            - Troubleshooting: something is reported broken or wrong for a customer or a site - an error, a page that
+              loops or is blank, wrong data or prices, slowness - and the cause is not known yet. It is diagnosed for the
+              call center (reproduce, compare with what works, root cause); no code is changed.
+            - Research: a question about the system - how something works, where it lives, what it stores, give me a curl
+              or an example, suggest a design. It is answered and checked; no code is changed.
+            - Management: a vision, a new product or business idea, a strategy, a priority or a decision that matters company-wide
+              (what to build next, whether to adopt something, how to grow, cost or risk at company level). It is thought
+              through into a decision brief - options, value, effort, risk, a recommendation; no code is changed.
+            When the item both reports a problem and asks to fix it, choose Troubleshooting if the cause is not known,
+            Development if it is. Do not change anything.
+            {task}
+
+            Reply with exactly one line: DEPARTMENT: <Development|Troubleshooting|Research|Management> - <one-line reason>
+            """;
+        string[] tools = run.Source == FactorySource.Typed
+            ? ["--tools", "", "--strict-mcp-config", "--setting-sources", ""]
+            : ["--permission-mode", "bypassPermissions", "--disallowedTools", "Edit", "Write", "NotebookEdit", .. NoPublish[1..]];
+        string answer = await ClaudeOnceAsync(run, run.Folder, prompt, tools, "Gate", cancel);
+        string line = Line(answer, "DEPARTMENT:") ?? "";
+        string name = line.Split(' ', '-', ':')[0].Trim();
+        if (!Enum.TryParse(name, ignoreCase: true, out FactoryDepartment department))
+        {
+            return Wait(run, "The gate could not choose a department:\n" + answer);
+        }
+        int dash = line.IndexOf('-');
+        run.Department = department;
+        run.Routing = dash >= 0 ? line[(dash + 1)..].Trim() : "";
+        run.AutoDepartment = false;
+        // troubleshooting and research end in a report: it is what they hand over
+        if (department != FactoryDepartment.Development) run.Report = true;
+        Log(run, $"Gate: {department}" + (run.Routing.Length > 0 ? " - " + run.Routing : ""));
+        return true;
+    }
+
     // the plan of a troubleshooting or research run: an investigation, not a change - it always ends in the checked
     // answer of the no-change path (AnswerAsync) and its report
     private static async Task<bool> InvestigateAsync(FactoryRun run, string where, string task, CancellationToken cancel)
     {
-        string how = run.Department == FactoryDepartment.Troubleshooting
+        string how = run.Department == FactoryDepartment.Management ? ManagementBrief
+            : run.Department == FactoryDepartment.Troubleshooting
             ? """
               This is a TROUBLESHOOTING case for the call center: a customer or a site has a problem. Diagnose it - do not
               change any file. Use the skills, MCP servers and tools on this machine (a browser, the running services,
@@ -1238,14 +1316,15 @@ public static class Factory
             decide, add a line QUESTIONS: and the numbered questions, each with the answer you suggest. End with one
             line: EVIDENCE: <comma-separated kinds from: {string.Join(", ", EvidenceKinds)}>.
             """;
-        (string answer, string? error) = await TurnAsync(run, isNew: true, prompt, run.Department == FactoryDepartment.Troubleshooting ? "Diagnose" : "Research", cancel);
+        string step = run.Department switch { FactoryDepartment.Troubleshooting => "Diagnose", FactoryDepartment.Management => "Brief", _ => "Research" };
+        (string answer, string? error) = await TurnAsync(run, isNew: true, prompt, step, cancel);
         if (error != null) return Wait(run, "The investigation turn failed: " + error);
         if (Line(answer, "CANNOT_READ:") is { } why) return Wait(run, "Claude could not read the task: " + why);
         if (Line(answer, "TITLE:") is { Length: > 0 } title && run.Source != FactorySource.Typed) run.Title = title;
         run.Plan = answer;
         run.EvidencePlan = (Line(answer, "EVIDENCE:") ?? "").Split(',', ';').Select(k => k.Trim().Trim('`', '*', '.').ToLowerInvariant())
             .Where(k => EvidenceKinds.Contains(k)).Distinct().ToList();
-        Log(run, (run.Department == FactoryDepartment.Troubleshooting ? "Diagnosis" : "Research") + ":\n" + answer);
+        Log(run, step + ":\n" + answer);
         run.NoChange = true;
         string questions = Questions(answer);
         if (questions.Length > 0 && run.Autonomous)
@@ -1434,6 +1513,37 @@ public static class Factory
     }
 
     private const string ManifestName = "evidence.json";
+
+    // a management item: a vision, an idea or a company-wide matter, thought through into a decision brief
+    private const string ManagementBrief = """
+        This is a MANAGEMENT item: a vision, an idea, a strategy or a matter that is important company-wide. Think it
+        through as a trusted advisor to the company's management would - do not change any file:
+        1. What is being asked, and why it matters to the company (customers, revenue, cost, risk, speed).
+        2. Where the company stands on it today - from the code, the running systems, their data and documents on this
+           machine, with the skills, MCP servers and tools here. Facts only, each with its source (file:line, a call, a
+           row, a document); and what the market or the technology offers, from the web, with links.
+        3. Two to four options, each with its value, the effort (who, how long, roughly), the risks, and what it needs.
+        4. A recommendation and the first concrete steps - which department does what: Development (builds),
+           Troubleshooting (diagnoses), Research (answers) - and the open questions only management can decide.
+        Keep what you found apart from what you estimate, and say how sure each estimate is.
+        """;
+
+    // its check, and the shape of the brief
+    private const string ManagementCheck = """
+        This is a management item: check the brief's facts now - each one against its source with a fresh look (the code, a
+        call to the running system, a data row, a page) - and drop or mark what does not hold. Change no file in the
+        repo. After the line RESULT: give the decision brief in this order: the recommendation in one paragraph; why;
+        the options compared (value, effort, risk, needs); the risks of doing nothing; the first steps by department;
+        the open questions for management; what is estimated and not verified.
+        """;
+
+    // the top of a management report: what to decide, before the detail
+    private const string ExecutivePart = """
+        - FIRST an "Executive summary" in plain language, no jargon: the recommendation, the decision asked for, the
+          value and the cost in a line each, and the top risk. Then the options as a comparison table, the first steps
+          by department, and the open questions for management; the facts and sources after that.
+
+        """;
 
     // the top of a troubleshooting report: for the support agent on the phone, before any technical detail
     private const string CallCenterPart = """
@@ -1669,11 +1779,11 @@ public static class Factory
         try
         {
             string prompt = $"""
-                Turn the result of a coding agent's run into a report {(run.Department == FactoryDepartment.Troubleshooting ? "the call center and a developer can both act on" : "a developer enjoys reading")}. Use ONLY the facts
+                Turn the result of a coding agent's run into a report {(run.Department switch { FactoryDepartment.Troubleshooting => "the call center and a developer can both act on", FactoryDepartment.Management => "management decides from", _ => "a developer enjoys reading" })}. Use ONLY the facts
                 below - add nothing, guess nothing; keep every file:line, command, number and "not verified" as it is.
 
                 Reply with one complete, self-contained HTML document and nothing else (no code fence):
-                {(run.Department == FactoryDepartment.Troubleshooting ? CallCenterPart : "")}- a clear title and, first, a short summary box with the direct answer or outcome;
+                {(run.Department switch { FactoryDepartment.Troubleshooting => CallCenterPart, FactoryDepartment.Management => ExecutivePart, _ => "" })}- a clear title and, first, a short summary box with the direct answer or outcome;
                 - sections with headings for the main points; tables where the facts are tabular (steps, calls and
                   results, what is where); code, commands and curls in <pre> blocks;
                 - a diagram where a flow or structure is easier to see than to read: Mermaid source in a
@@ -1778,7 +1888,7 @@ public static class Factory
             run.Lessons.Add(lesson);
             try
             {
-                if (run.Repo.Length > 0) Apply(run, lesson);
+                if (run.Home.Length > 0) Apply(run, lesson);
             }
             catch (Exception ex)
             {
@@ -1819,8 +1929,8 @@ public static class Factory
         Enter(run, FactoryStage.Learn, "Claude looks back at the run for what to remember.");
         try
         {
-            if (run.Repo.Length == 0) throw new InvalidOperationException("the run never found its repo");
-            string? memoryDir = await CliSetup.MemoryDirAsync(run.Repo);
+            if (run.Repo.Length == 0 && !run.FolderWide) throw new InvalidOperationException("the run never found its repo");
+            string? memoryDir = await CliSetup.MemoryDirAsync(run.Home);
             string index = memoryDir != null && File.Exists(Path.Combine(memoryDir, "MEMORY.md")) ? File.ReadAllText(Path.Combine(memoryDir, "MEMORY.md")) : "";
             string log = string.Join("\n\n", run.Log.Select(s => $"[{s.Stage}{(s.Ok ? "" : ", FAILED")}] {Tail(s.Text, 1500)}"));
             // what the developer said: their feedback, their rating, and the lessons they turned down for this repo
@@ -1849,7 +1959,7 @@ public static class Factory
                 {(index.Length > 0 ? index : "(nothing yet)")}
 
                 THE FACTORY'S RULES AND SKILLS FOR THIS REPO ALREADY (do not repeat them):
-                {FactoryKnows(run.Repo)}
+                {FactoryKnows(run.Home)}
 
                 ALREADY LEARNED FROM THIS RUN (do not repeat it):
                 {(already.Length > 0 ? already : "(nothing yet)")}
@@ -2026,8 +2136,8 @@ public static class Factory
         switch (lesson.Kind)
         {
             case "claude-md":
-                Directory.CreateDirectory(KnowledgeDir(run.Repo));
-                file = Path.Combine(KnowledgeDir(run.Repo), "rules.md");
+                Directory.CreateDirectory(KnowledgeDir(run.Home));
+                file = Path.Combine(KnowledgeDir(run.Home), "rules.md");
                 string existing = File.Exists(file) ? File.ReadAllText(file) : "Rules the Dev break factory learned in this repo - follow them:\n";
                 string appended = (existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : "") + lesson.Content.Trim() + "\n";
                 if (!File.Exists(file)) File.WriteAllText(file, existing);
@@ -2036,7 +2146,7 @@ public static class Factory
                 break;
             case "skill":
                 // a skill of the factory's own plugin for this repo, loaded with --plugin-dir
-                string plugin = Path.Combine(KnowledgeDir(run.Repo), "plugin");
+                string plugin = Path.Combine(KnowledgeDir(run.Home), "plugin");
                 string manifest = Path.Combine(plugin, ".claude-plugin", "plugin.json");
                 if (!File.Exists(manifest))
                 {
@@ -2051,7 +2161,7 @@ public static class Factory
                 lesson.UndoData = file;
                 break;
             case "hook":
-                file = Path.Combine(KnowledgeDir(run.Repo), "settings.json");
+                file = Path.Combine(KnowledgeDir(run.Home), "settings.json");
                 // the settings as they were, for Undo ("new" when there was no file)
                 string backup = file + ".bak-devbreak-" + lesson.Name;
                 if (File.Exists(file)) File.Copy(file, backup, overwrite: true);
@@ -2101,7 +2211,9 @@ public static class Factory
         string? error = null;
         try
         {
-            string[] args = [.. publish ? Frozen : NoPublish, .. KnowledgeArgs(run)];
+            // troubleshooting, research and management change nothing: git's writing commands are denied too (they
+            // may work right in the developer's folder - a folder-wide run has no branch of its own)
+            string[] args = [.. publish ? Frozen : NoPublish, .. run.Department != FactoryDepartment.Development ? Frozen[1..] : [], .. KnowledgeArgs(run)];
             Action<SessionEntry> onEntry = entry =>
             {
                 switch (entry.Kind)
@@ -2162,8 +2274,8 @@ public static class Factory
     private static List<string> KnowledgeArgs(FactoryRun run)
     {
         var args = new List<string>();
-        if (run.Repo.Length == 0) return args;
-        string dir = KnowledgeDir(run.Repo);
+        if (run.Home.Length == 0) return args;
+        string dir = KnowledgeDir(run.Home);
         string rules = Path.Combine(dir, "rules.md");
         if (File.Exists(rules)) args.AddRange(["--append-system-prompt-file", rules]);
         string skills = Path.Combine(dir, "plugin", "skills");
