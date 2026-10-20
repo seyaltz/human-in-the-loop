@@ -72,6 +72,8 @@ public partial class FactoryView : UserControl
         UpdateRunsSummary();
         AutonomousBox.IsChecked = AppSettings.Get("factoryAutonomous") != "0";
         ReportBox.IsChecked = AppSettings.Get("factoryReport") == "1";
+        if (AppSettings.Get("factoryDepartment") is "Troubleshooting") TroubleshootingDept.IsChecked = true;
+        else if (AppSettings.Get("factoryDepartment") is "Research") ResearchDept.IsChecked = true;
         IReadOnlyList<string> repos = await Task.Run(ClaudeProjects.GitRepos);
         foreach (string repo in repos.OrderBy(r => r, StringComparer.OrdinalIgnoreCase)) RepoBox.Items.Add(repo);
         if (AppSettings.Get("factoryRepo") is { Length: > 0 } last) RepoBox.Text = last;
@@ -80,11 +82,32 @@ public partial class FactoryView : UserControl
 
     // --- the form ---
 
+    private FactoryDepartment Department => TroubleshootingDept.IsChecked == true ? FactoryDepartment.Troubleshooting
+        : ResearchDept.IsChecked == true ? FactoryDepartment.Research : FactoryDepartment.Development;
+
+    // troubleshooting and research change no code: no verify command, and they always end in a report
+    private void Department_Checked(object sender, RoutedEventArgs e)
+    {
+        if (ReportBox == null || VerifyBox == null) return;
+        bool dev = Department == FactoryDepartment.Development;
+        VerifyBox.IsEnabled = dev;
+        ReportBox.IsEnabled = dev;
+        if (!dev) ReportBox.IsChecked = true;
+        else ReportBox.IsChecked = AppSettings.Get("factoryReport") == "1";
+        Source_Checked(sender, e);
+    }
+
     private void Source_Checked(object sender, RoutedEventArgs e)
     {
         if (TaskLabel == null) return;
         TaskLabel.Text = JiraSource.IsChecked == true ? "Jira issue key (e.g. ABC-123)"
-            : SpecSource.IsChecked == true ? "The spec: a file path or a link" : "What to build or fix";
+            : SpecSource.IsChecked == true ? "The spec: a file path or a link"
+            : Department switch
+            {
+                FactoryDepartment.Troubleshooting => "The case: what the customer or site has, where (site, URL, steps)",
+                FactoryDepartment.Research => "The question",
+                _ => "What to build or fix",
+            };
         BrowseSpecButton.Visibility = SpecSource.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         TaskBox.Height = TypedSource.IsChecked == true ? 92 : 40;
     }
@@ -146,8 +169,10 @@ public partial class FactoryView : UserControl
         bool autonomous = AutonomousBox.IsChecked == true;
         AppSettings.Set("factoryAutonomous", autonomous ? "1" : "0");
         bool report = ReportBox.IsChecked == true;
-        AppSettings.Set("factoryReport", report ? "1" : "0");
-        FactoryRun run = Factory.Create(source, task, repo, baseBranch, VerifyBox.Text, autonomous, report);
+        FactoryDepartment department = Department;
+        if (department == FactoryDepartment.Development) AppSettings.Set("factoryReport", report ? "1" : "0");
+        AppSettings.Set("factoryDepartment", department.ToString());
+        FactoryRun run = Factory.Create(source, task, repo, baseBranch, department == FactoryDepartment.Development ? VerifyBox.Text : "", autonomous, report, department);
         RunList.Items.Insert(0, Row(run));
         RunList.SelectedIndex = 0;
         RunsTab.IsChecked = true;
@@ -179,7 +204,7 @@ public partial class FactoryView : UserControl
     {
         if (!_rows.TryGetValue(run.Id, out var row)) return;
         SetLight(row.Light, run);
-        row.Status.Text = $"{System.IO.Path.GetFileName(run.Repo.Length > 0 ? run.Repo : run.Folder)} · {StageName(run)}{(run.Cost > 0 ? $" · ${run.Cost:0.00}" : "")}";
+        row.Status.Text = $"{(run.Department != FactoryDepartment.Development ? run.Department + " · " : "")}{System.IO.Path.GetFileName(run.Repo.Length > 0 ? run.Repo : run.Folder)} · {StageName(run)}{(run.Cost > 0 ? $" · ${run.Cost:0.00}" : "")}";
         if (((row.Status.Parent as StackPanel)?.Children[0]) is TextBlock title) title.Text = run.Title;
     }
 
@@ -196,7 +221,9 @@ public partial class FactoryView : UserControl
         if (run.Working) _working.Add(run.Id);
         else if (_working.Remove(run.Id) && run.Stage == FactoryStage.NeedsYou)
         {
-            App.Alert("Dev break factory - needs you", $"{Short(run.Title, 60)}\n{Short(run.Note, 180)}");
+            // the manager escalated: a human has to act (or, not autonomous, the run asks as before)
+            App.Alert(run.ManagerCase.Length > 0 ? "Dev break factory - needs a human" : "Dev break factory - needs you",
+                $"{Short(run.Title, 60)}\n{Short(run.Note, 180)}");
         }
         UpdateRow(run);
         UpdateRunsSummary();
@@ -460,6 +487,11 @@ public partial class FactoryView : UserControl
         OpenPrButton.Visibility = run.PrUrl.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         SessionButton.Visibility = FolderButton.Visibility = Directory.Exists(run.Worktree) ? Visibility.Visible : Visibility.Collapsed;
         ReportButton.Visibility = run.ReportFile.Length > 0 && File.Exists(run.ReportFile) ? Visibility.Visible : Visibility.Collapsed;
+        bool human = !run.Working && run.Stage == FactoryStage.NeedsYou && run.ManagerCase.Length > 0;
+        ManagerBox.Visibility = human ? Visibility.Visible : Visibility.Collapsed;
+        if (human && ManagerText.Text != run.ManagerCase) ManagerText.Text = run.ManagerCase;
+        FixItButton.Visibility = run.Department == FactoryDepartment.Troubleshooting && !run.Working && run.Stage == FactoryStage.Done && run.Result.Length > 0
+            ? Visibility.Visible : Visibility.Collapsed;
         string proof = Factory.ProofDir(run);
         ProofButton.Visibility = Directory.Exists(proof) && Directory.EnumerateFiles(proof, "*", SearchOption.AllDirectories).Any()
             ? Visibility.Visible : Visibility.Collapsed;
@@ -852,6 +884,17 @@ public partial class FactoryView : UserControl
     private void Proof_Click(object sender, RoutedEventArgs e)
     {
         if (_shown != null && Directory.Exists(Factory.ProofDir(_shown))) Open(Factory.ProofDir(_shown));
+    }
+
+    // the diagnosis goes to Development as a new run, shown at once
+    private async void FixIt_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown is not { } diagnosed) return;
+        FactoryRun run = Factory.HandOff(diagnosed);
+        RunList.Items.Insert(0, Row(run));
+        RunList.SelectedIndex = 0;
+        UpdateRunsSummary();
+        await Factory.RunAsync(run);
     }
 
     private void Report_Click(object sender, RoutedEventArgs e)
