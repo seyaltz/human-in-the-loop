@@ -15,6 +15,13 @@ namespace DevBreak;
 /// <summary>Where a factory task comes from: typed in, a Jira issue, or a spec document (a file or a link).</summary>
 public enum FactorySource { Typed, Jira, Spec }
 
+/// <summary>
+/// Which department a run belongs to: Development builds a change to a draft PR; Troubleshooting diagnoses a
+/// customer's or a site's problem for the call center (reproduce, compare with what works, root cause - no code);
+/// Research answers a question about the system. The last two end in a checked answer and a designed report.
+/// </summary>
+public enum FactoryDepartment { Development, Troubleshooting, Research }
+
 /// <summary>Where a factory run is.</summary>
 public enum FactoryStage { Queued, Worktree, Plan, Build, Verify, Review, PullRequest, Learn, Done, NeedsYou, Stopped, Locate, Prove }
 
@@ -121,6 +128,7 @@ public sealed class FactoryRun
     public string Id { get; set; } = "";
     public string Title { get; set; } = "";
     public FactorySource Source { get; set; }
+    public FactoryDepartment Department { get; set; }
     public string Task { get; set; } = "";
     /// <summary>The folder the developer pointed at: a repo, or a folder with repos somewhere in it.</summary>
     public string Folder { get; set; } = "";
@@ -159,6 +167,12 @@ public sealed class FactoryRun
     public string ReportFile { get; set; } = "";
     /// <summary>The run already had its fresh second attempt after getting stuck.</summary>
     public bool Retried { get; set; }
+    /// <summary>How often the department manager resumed the run after it stopped (at most MaxManagerResumes).</summary>
+    public int ManagerResumes { get; set; }
+    /// <summary>The manager's case for a human: what is blocked, what it tried, what it needs. Empty when none.</summary>
+    public string ManagerCase { get; set; } = "";
+    /// <summary>Changes to the factory itself the manager proposes, for a human to approve.</summary>
+    public List<string> FactoryFixes { get; set; } = [];
     /// <summary>Files the run changed outside its folder, as it reported them: path - what - backup.</summary>
     public List<string> OutsideChanges { get; set; } = [];
     /// <summary>Decisions the run took on its own (the plan's questions, answered with its suggestions).</summary>
@@ -297,7 +311,7 @@ public static class Factory
     }
 
     public static FactoryRun Create(FactorySource source, string task, string folder, string baseBranch, string verify, bool autonomous = false,
-        bool report = false)
+        bool report = false, FactoryDepartment department = FactoryDepartment.Development)
     {
         string id = Guid.NewGuid().ToString("N")[..8];
         string first = task.Trim().Split('\n')[0].Trim();
@@ -311,11 +325,32 @@ public static class Factory
         {
             Id = id, Title = title, Source = source, Task = task.Trim(), Folder = folder.TrimEnd('\\'), BaseBranch = baseBranch.Trim(),
             Verify = verify.Trim(), SessionId = Guid.NewGuid().ToString(), Created = DateTime.Now, Autonomous = autonomous,
-            Report = report,
+            // troubleshooting and research end in a report: it is what they hand over
+            Report = report || department != FactoryDepartment.Development, Department = department,
         };
         Runs.Insert(0, run);
         Save();
         return run;
+    }
+
+    /// <summary>
+    /// A troubleshooting run's diagnosis handed to Development: a new run in the same repo and base whose task is the
+    /// diagnosis - the root cause and the fix it named. Its proof of the fix is the problem gone where it was reproduced.
+    /// </summary>
+    public static FactoryRun HandOff(FactoryRun diagnosed)
+    {
+        string task = $"""
+            Fix the problem diagnosed by the troubleshooting run "{diagnosed.Title}" ({diagnosed.Id}).
+            The case as reported: {diagnosed.Task}
+
+            THE DIAGNOSIS (checked against the running system):
+            {diagnosed.Result}
+
+            Make the fix it names in this repo; prove it where the problem was reproduced - the problem is gone there,
+            and the control still works.
+            """;
+        return Create(FactorySource.Typed, task, diagnosed.Repo.Length > 0 ? diagnosed.Repo : diagnosed.Folder, diagnosed.BaseBranch, "",
+            diagnosed.Autonomous, diagnosed.Report, FactoryDepartment.Development);
     }
 
     /// <summary>The branch a repo has checked out now: the default base for a run.</summary>
@@ -371,8 +406,7 @@ public static class Factory
         {
             Enter(run, FactoryStage.Prove, "No change needed: Claude checks the answer against the running app.");
             (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
-                {again}The task needs no change to the repo - it asks for an answer. Check the answer works against the running
-                app (start what it needs with the tools on this machine), exactly as the developer would use it. {NamedSources}
+                {again}{(run.Department == FactoryDepartment.Troubleshooting ? TroubleshootingCheck : "The task needs no change to the repo - it asks for an answer. Check the answer works against the running app (start what it needs with the tools on this machine), exactly as the developer would use it.")} {NamedSources}
                 Save the evidence (the call and its response, log lines) into {dir}, and write {Path.Combine(dir, ManifestName)}
                 as a JSON array of {"{"}"kind", "file", "proves", "result", "detail"{"}"}. Change no file in the repo.
                 Give the final, checked answer - ready to use - after a line RESULT:. Then end with exactly one line:
@@ -799,6 +833,7 @@ public static class Factory
         run.Running = new CancellationTokenSource();
         CancellationToken cancel = run.Running.Token;
         bool learn = learnAfter;
+        bool resume = false;
         try
         {
             learn |= await body(cancel);
@@ -823,7 +858,10 @@ public static class Factory
             else
             {
                 if (run.Report && run.Stage == FactoryStage.Done && run.ReportFile.Length == 0) await ReportAsync(run);
-                if (learn) await LearnAsync(run);
+                // an autonomous run that stopped goes to the department manager first: it resumes it or calls a human
+                if (run.Autonomous && run.Stage == FactoryStage.NeedsYou) resume = await ManageAsync(run);
+                // a resumed run learns when it ends
+                if (learn && !resume) await LearnAsync(run);
             }
             try
             {
@@ -837,6 +875,8 @@ public static class Factory
             run.Running = null;
             Notify(run);
         }
+        // the manager removed the cause: the run goes on from where it stopped
+        if (resume) await ContinueAsync(run);
     }
 
     public static void Stop(FactoryRun run) => run.Running?.Cancel();
@@ -1021,7 +1061,11 @@ public static class Factory
     // stops the run when its change touched the developer's own local changes - they decide what happens to them
     private static bool LocalChangesTouched(FactoryRun run)
     {
-        List<string> touched = TouchedLocalChanges(run);
+        // files under .claude/ are Claude's own tooling state - a hook's log grows with every edit any session makes
+        // (seen: .claude/session-changes.log stopped a run that never touched it). They still never get committed
+        // (they stay in LocalChanges for the commit check); they just do not stop the run.
+        List<string> touched = TouchedLocalChanges(run)
+            .Where(p => !p.Replace('\\', '/').StartsWith(".claude/", StringComparison.OrdinalIgnoreCase)).ToList();
         if (touched.Count == 0) return false;
         Wait(run, $"The change touched {(touched.Count == 1 ? "a file that holds" : "files that hold")} your own local changes: {string.Join(", ", touched)}. " +
             "The run does not commit your changes, so decide: undo the run's edits there and press Continue - or commit or " +
@@ -1105,8 +1149,10 @@ public static class Factory
               own commands needed, e.g. $env:JAVA_HOME='...'; before the build. Say in one line before it why these
               tests are the regression scope.{(run.VerifyHint.Length > 0 ? $"\nThis repo was verified before with: {run.VerifyHint}\nReuse its environment and flags; choose the tests for this change." : "")}
               """;
+        string where = $"You are working in {(run.InCheckout ? "the developer's own checkout of " + run.Repo : "a separate git worktree of " + run.Repo)}, on a new branch {run.Branch} (from {run.BaseBranch}).";
+        if (run.Department != FactoryDepartment.Development) return await InvestigateAsync(run, where, task, cancel);
         string prompt = $"""
-            You are working in {(run.InCheckout ? "the developer's own checkout of " + run.Repo : "a separate git worktree of " + run.Repo)}, on a new branch {run.Branch} (from {run.BaseBranch}).
+            {where}
             {task}
 
             First, understand the mission and plan - do not change any file yet. Use the skills, MCP servers and tools on
@@ -1154,6 +1200,62 @@ public static class Factory
         else if (questions.Length > 0)
         {
             throw new NeedsYouException("The plan has questions for you. Answer them in the box below and press Send to the run - " +
+                "the ones you skip take the suggested answer (or press Continue to take all the suggestions):\n" + questions);
+        }
+        return true;
+    }
+
+    // the plan of a troubleshooting or research run: an investigation, not a change - it always ends in the checked
+    // answer of the no-change path (AnswerAsync) and its report
+    private static async Task<bool> InvestigateAsync(FactoryRun run, string where, string task, CancellationToken cancel)
+    {
+        string how = run.Department == FactoryDepartment.Troubleshooting
+            ? """
+              This is a TROUBLESHOOTING case for the call center: a customer or a site has a problem. Diagnose it - do not
+              change any file. Use the skills, MCP servers and tools on this machine (a browser, the running services,
+              their logs, the data stores, the git host, the cloud tools):
+              1. Reproduce it exactly as reported - the site, the URL, the page, the user's steps. Say what the customer sees.
+              2. Find a control that works - another site, another page, another environment or server, an earlier state -
+                 and compare the two: what differs (which server answers, config, data, code path, version).
+              3. Find the root cause: the file:line, the data row or the setting, and how it leads to what the customer
+                 sees. Keep apart what you proved and what you only suspect; check a suspicion rather than report it.
+              4. Say what fixes it, and where - the change, or the setting or data to correct - and who would make it.
+              """
+            : """
+              This is a RESEARCH question about the system. Answer it - do not change any file. Use the code, the running
+              app and its data with the skills, MCP servers and tools on this machine, and check what you find rather than
+              reason it out: each claim backed by a file:line, a call and its response, or a data row.
+              """;
+        string prompt = $"""
+            {where}
+            {task}
+
+            {how}
+            A memory note marked "Checked on <date> - re-check" tells a state that can change: when the answer depends on
+            it, re-check it with one quick call instead of trusting it. If you cannot read the task, reply with one line:
+            CANNOT_READ: <why>. Otherwise reply with a short title on the first line (TITLE: <title>), then what you found
+            so far and how the next step will check it against the running system. If something is the developer's to
+            decide, add a line QUESTIONS: and the numbered questions, each with the answer you suggest. End with one
+            line: EVIDENCE: <comma-separated kinds from: {string.Join(", ", EvidenceKinds)}>.
+            """;
+        (string answer, string? error) = await TurnAsync(run, isNew: true, prompt, run.Department == FactoryDepartment.Troubleshooting ? "Diagnose" : "Research", cancel);
+        if (error != null) return Wait(run, "The investigation turn failed: " + error);
+        if (Line(answer, "CANNOT_READ:") is { } why) return Wait(run, "Claude could not read the task: " + why);
+        if (Line(answer, "TITLE:") is { Length: > 0 } title && run.Source != FactorySource.Typed) run.Title = title;
+        run.Plan = answer;
+        run.EvidencePlan = (Line(answer, "EVIDENCE:") ?? "").Split(',', ';').Select(k => k.Trim().Trim('`', '*', '.').ToLowerInvariant())
+            .Where(k => EvidenceKinds.Contains(k)).Distinct().ToList();
+        Log(run, (run.Department == FactoryDepartment.Troubleshooting ? "Diagnosis" : "Research") + ":\n" + answer);
+        run.NoChange = true;
+        string questions = Questions(answer);
+        if (questions.Length > 0 && run.Autonomous)
+        {
+            run.Decisions = questions;
+            Log(run, "Decisions taken on my own (the suggested answers):\n" + questions);
+        }
+        else if (questions.Length > 0)
+        {
+            throw new NeedsYouException("The investigation has questions for you. Answer them in the box below and press Send to the run - " +
                 "the ones you skip take the suggested answer (or press Continue to take all the suggestions):\n" + questions);
         }
         return true;
@@ -1332,6 +1434,25 @@ public static class Factory
     }
 
     private const string ManifestName = "evidence.json";
+
+    // the top of a troubleshooting report: for the support agent on the phone, before any technical detail
+    private const string CallCenterPart = """
+        - FIRST a "For the call center" part in plain language, no code and no jargon, each as a short heading and one
+          or two sentences: what the customer sees; why it happens; what to tell the customer now; a workaround, if
+          there is one; who fixes it and how urgent it looks. Then a clearly separated "Technical" part for the
+          developer with everything below.
+
+        """;
+
+    // the check of a troubleshooting diagnosis, and the shape of its answer: the call center reads it first
+    private const string TroubleshootingCheck = """
+        This is a troubleshooting case: check the diagnosis against the running system now - reproduce the problem
+        again as the customer meets it, and show the control working - with fresh evidence (screenshots, the HTTP
+        calls and their status, console and server log lines, the data rows). Change no file in the repo. After the
+        line RESULT: give the diagnosis in this order: what the customer sees; why, in two plain sentences; what to
+        tell the customer now, and a workaround if there is one; the root cause (file:line, the data or the setting)
+        and how it leads to what the customer sees; the fix - what, where, and who makes it; what is not verified.
+        """;
 
     // a check uses what the task offered to check with - a run once skipped a bucket and a client the task named
     private const string NamedSources = """
@@ -1548,11 +1669,11 @@ public static class Factory
         try
         {
             string prompt = $"""
-                Turn the result of a coding agent's run into a report a developer enjoys reading. Use ONLY the facts
+                Turn the result of a coding agent's run into a report {(run.Department == FactoryDepartment.Troubleshooting ? "the call center and a developer can both act on" : "a developer enjoys reading")}. Use ONLY the facts
                 below - add nothing, guess nothing; keep every file:line, command, number and "not verified" as it is.
 
                 Reply with one complete, self-contained HTML document and nothing else (no code fence):
-                - a clear title and, first, a short summary box with the direct answer or outcome;
+                {(run.Department == FactoryDepartment.Troubleshooting ? CallCenterPart : "")}- a clear title and, first, a short summary box with the direct answer or outcome;
                 - sections with headings for the main points; tables where the facts are tabular (steps, calls and
                   results, what is where); code, commands and curls in <pre> blocks;
                 - a diagram where a flow or structure is easier to see than to read: Mermaid source in a
@@ -1593,6 +1714,101 @@ public static class Factory
         }
         Save();
         Notify(run);
+    }
+
+    private const int MaxManagerResumes = 2;
+
+    /// <summary>
+    /// The department manager: an autonomous run stopped. It finds out why - the log, the run's folder, the machine -
+    /// and either removes the cause and resumes the run (at most MaxManagerResumes times), or escalates to a human with
+    /// the case: what is blocked, what it tried, exactly what it needs. It may also leave a rule for later runs, and
+    /// propose changes to the factory itself, which only a human applies. True when the run is to be resumed.
+    /// </summary>
+    private static async Task<bool> ManageAsync(FactoryRun run)
+    {
+        string stopped = run.Note;
+        Log(run, "The department manager looks at why the run stopped.");
+        string log = string.Join("\n\n", run.Log.TakeLast(14).Select(s => $"[{s.Stage}{(s.Ok ? "" : ", FAILED")}] {Tail(s.Text, 1500)}"));
+        string folder = Directory.Exists(run.Worktree) ? run.Worktree : run.Repo.Length > 0 && Directory.Exists(run.Repo) ? run.Repo : run.Folder;
+        bool mayResume = run.ManagerResumes < MaxManagerResumes;
+        string prompt = $"""
+            You are the manager of a software-factory department ({run.Department}). One of its runs - an AI agent working
+            on a task with no human in the loop - has stopped. Find out why, and decide whether the AI can get it going
+            again or a human has to act. You are in the run's folder ({folder}); look at it, at this machine and at the
+            running services with the tools here. Do not commit, push or open pull requests.
+
+            THE TASK: {run.Task}
+            WHY IT STOPPED: {stopped}
+            THE LAST STEPS OF THE RUN:
+            {Tail(log, 16000)}
+
+            {(mayResume ? """
+            RESUME when the cause is gone or you removed it: a false alarm, a passing error (a service that was down and is
+            up now, a timeout, a lock), something you fixed in the run's folder or on this machine, or a wrong turn the run
+            will not take again because of a RULE you add. Resuming continues the run from where it stopped - it hits the
+            same stop again unless the cause is really gone, so check that it is.
+            """ : $"The run was already resumed {run.ManagerResumes} times - do not resume it again; escalate.")}
+            ESCALATE when it needs what no tool can do - a login, a credential, an access grant, a business decision - or
+            a fix you could not make or could not verify. Say exactly what the human must do.
+            When the cause is the factory's own behaviour (a step or a check that misjudged), describe the change to the
+            factory that would have prevented it, for the people who build it to approve.
+
+            Reply with what you found and did, then, each only when it applies:
+            RULE: <one imperative line every later run in this repo gets, so it does not stop this way again>
+            FACTORY_FIX: <a change to the factory itself - what and why>
+            OUTSIDE: <a file you changed outside the run's folder> - <what> - <its backup>
+            End with exactly one line:
+            DECISION: RESUME <what you did and why the run can go on now>
+            DECISION: ESCALATE <exactly what the human must do, in one or two sentences>
+            """;
+        string answer;
+        try
+        {
+            answer = await ClaudeOnceAsync(run, folder, prompt, ["--permission-mode", "bypassPermissions", .. NoPublish, .. KnowledgeArgs(run)],
+                "Manager", CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            answer = "DECISION: ESCALATE The manager could not look at the run (" + ex.Message + "). " + stopped;
+        }
+        string[] lines = answer.Replace("\r", "").Split('\n').Select(l => l.Trim().TrimStart('*', '-', ' ')).ToArray();
+        foreach (string rule in lines.Where(l => l.StartsWith("RULE:", StringComparison.OrdinalIgnoreCase)).Select(l => l[5..].Trim()).Where(r => r.Length > 0))
+        {
+            var lesson = new FactoryLesson { Kind = "claude-md", Name = Slug("manager " + rule), Description = rule, Content = rule };
+            run.Lessons.Add(lesson);
+            try
+            {
+                if (run.Repo.Length > 0) Apply(run, lesson);
+            }
+            catch (Exception ex)
+            {
+                Log(run, $"Could not apply the manager's rule: {ex.Message}", ok: false);
+            }
+        }
+        foreach (string fix in lines.Where(l => l.StartsWith("FACTORY_FIX:", StringComparison.OrdinalIgnoreCase)).Select(l => l[12..].Trim()).Where(f => f.Length > 0))
+        {
+            if (!run.FactoryFixes.Contains(fix)) run.FactoryFixes.Add(fix);
+        }
+        foreach (string outside in lines.Where(l => l.StartsWith("OUTSIDE:", StringComparison.OrdinalIgnoreCase)).Select(l => l[8..].Trim()))
+        {
+            if (!run.OutsideChanges.Contains(outside)) run.OutsideChanges.Add(outside);
+        }
+        string decision = lines.LastOrDefault(l => l.StartsWith("DECISION:", StringComparison.OrdinalIgnoreCase)) ?? "";
+        string what = decision.Length > 9 ? decision[9..].Trim() : "";
+        if (mayResume && what.StartsWith("RESUME", StringComparison.OrdinalIgnoreCase))
+        {
+            run.ManagerResumes++;
+            run.ManagerCase = "";
+            Log(run, $"Manager: resumes the run ({run.ManagerResumes} of {MaxManagerResumes}) - {what[6..].Trim()}\n\n{answer}");
+            return true;
+        }
+        string need = what.StartsWith("ESCALATE", StringComparison.OrdinalIgnoreCase) ? what[8..].Trim()
+            : "The manager gave no decision. The run stopped with: " + stopped;
+        run.ManagerCase = $"{need}\n\nWhy it stopped: {stopped.Split('\n')[0]}" +
+            (run.FactoryFixes.Count > 0 ? "\n\nProposed changes to the factory (for you to approve):\n" + string.Join("\n", run.FactoryFixes.Select(f => "- " + f)) : "");
+        Log(run, "Manager: needs a human - " + need + "\n\n" + answer, ok: false);
+        Wait(run, "Needs a human: " + need);
+        return false;
     }
 
     // what the run taught about this repo: memory notes are saved at once; rules wait for the developer's OK
