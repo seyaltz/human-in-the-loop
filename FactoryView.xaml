@@ -110,6 +110,8 @@
                                     ToolTip="Pick up where the run stopped: finish what is missing, then verify, prove, review and the draft PR" />
                             <Button x:Name="WorktreeButton" Content="Use a separate worktree" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6"
                                     Click="Worktree_Click" ToolTip="Leave your checkout as it is: this run goes on in its own worktree beside the repo" />
+                            <Button x:Name="DeleteButton" Content="Delete…" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6" Click="Delete_Click"
+                                    ToolTip="Delete this run for good - first Claude checks what is worth keeping (repo memory, global memory, Insights)" />
                             <Button x:Name="CleanButton" Content="Clean up" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6" Click="Clean_Click"
                                     ToolTip="Delete this run's worktree, evidence and session files - the record stays" />
                             <Button x:Name="AnywayButton" Content="Draft PR anyway" Style="{StaticResource SecondaryButton}" Margin="0,0,8,6"
@@ -160,6 +162,22 @@
                             </StackPanel>
                             <TextBlock x:Name="ConfirmText" TextWrapping="Wrap" FontSize="13" VerticalAlignment="Center" />
                         </DockPanel>
+                    </Border>
+                    <!-- deleting a run: what the diagnosis suggests keeping (ticked to keep), then everything goes -->
+                    <Border x:Name="DeletePanel" DockPanel.Dock="Top" Visibility="Collapsed" BorderBrush="{StaticResource CoralInkBrush}"
+                            BorderThickness="1.5" CornerRadius="12" Padding="12,10" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock x:Name="DeleteText" TextWrapping="Wrap" FontSize="13" />
+                            <StackPanel x:Name="KeepList" Margin="0,8,0,0" />
+                            <CheckBox x:Name="RemoteBox" Margin="0,8,0,0" AutomationProperties.Name="Also remote">
+                                <TextBlock x:Name="RemoteText" TextWrapping="Wrap" FontSize="13" />
+                            </CheckBox>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button x:Name="DeleteConfirmButton" Content="Keep the ticked and delete the run" Style="{StaticResource PrimaryButton}"
+                                        Height="34" Padding="14,0" Margin="0,0,8,0" Click="DeleteConfirm_Click" />
+                                <Button Content="Cancel" Style="{StaticResource SecondaryButton}" Height="34" Padding="12,0" Click="DeleteCancel_Click" />
+                            </StackPanel>
+                        </StackPanel>
                     </Border>
                     <!-- the pipeline: each stage done, now, or to come -->
                     <WrapPanel x:Name="Pipeline" DockPanel.Dock="Top" Margin="0,0,0,10" />

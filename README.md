@@ -132,6 +132,12 @@ running the app to Prove, so the app is started once.
 one readable page - the answer first, sections, tables, a diagram where a flow helps, the decisions it took, what is
 not verified and the evidence - from the run's own facts only. **Open report** shows it in your browser.
 
+**Delete…** removes one run for good - but first Claude checks what is worth keeping from it: the run's lessons (so the
+Insights tab keeps them), facts for the repo's Claude memory, and - only when it is true in every repo - a line for
+your global `CLAUDE.md`. You tick what to keep; then its record, trace, evidence, report, worktree and local branch
+go. It warns when commits on no remote would be lost, and offers to decline the PR and delete the remote branch too,
+unticked. Your checkout and its files are never touched.
+
 The **History** tab lists every run so far: **Continue** one that stopped or needs you, from where it stopped. **Clean
 up** deletes what a run left on disk - its worktree (if it had one) and that worktree's session files, its evidence,
 and its local branch once that is pushed - after showing what goes and warning about any work that would be lost (an
