@@ -21,9 +21,6 @@ namespace DevBreak;
 /// </summary>
 public partial class FactoryView : UserControl
 {
-    private static readonly FactoryStage[] Stages =
-        [FactoryStage.Locate, FactoryStage.Worktree, FactoryStage.Plan, FactoryStage.Build, FactoryStage.Verify, FactoryStage.Prove, FactoryStage.Review, FactoryStage.PullRequest, FactoryStage.Learn];
-
     private readonly Dictionary<string, (Ellipse Light, TextBlock Status)> _rows = [];
     private FactoryRun? _shown;
     private int _shownLog = -1;
@@ -44,6 +41,7 @@ public partial class FactoryView : UserControl
     public FactoryView()
     {
         InitializeComponent();
+        FloorHowText.Text = RunHowText.Text = FactoryLine.HowItWorks;
         Factory.Changed += run => Dispatcher.BeginInvoke(() => Update(run));
         // a linked run the factory started for another repo: it shows up in History at once
         Factory.RunCreated += run => Dispatcher.BeginInvoke(() =>
@@ -54,6 +52,9 @@ public partial class FactoryView : UserControl
         });
         _watchdog.Tick += (_, _) =>
         {
+            // the times on the line move while a station works
+            if (_shown is { Working: true } shown) ShowPipeline(shown);
+            if (FloorArea.Visibility == Visibility.Visible) ShowFloor();
             foreach ((FactoryRun run, string text) in Factory.CheckSlow())
             {
                 App.Alert("Dev break factory - slow step", $"{Short(run.Title, 60)}\n{text}");
@@ -224,6 +225,8 @@ public partial class FactoryView : UserControl
 
     private void RunList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        // a run picked on the floor's list opens its page
+        if (FloorTab.IsChecked == true && RunList.SelectedItem != null && RunList.IsKeyboardFocusWithin) RunsTab.IsChecked = true;
         if (RunList.SelectedItem is ListBoxItem { Tag: FactoryRun run }) Show(run);
     }
 
@@ -247,13 +250,56 @@ public partial class FactoryView : UserControl
         UpdateRow(run);
         UpdateRunsSummary();
         if (run == _shown) Show(run);
+        if (FloorArea.Visibility == Visibility.Visible) ShowFloor();
     }
 
     private void LeftTab_Checked(object sender, RoutedEventArgs e)
     {
         if (FormArea == null || RunsArea == null) return;
         FormArea.Visibility = NewTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
-        RunsArea.Visibility = RunsTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        // the floor keeps the list of runs on the left, and takes the place of the run page on the right
+        RunsArea.Visibility = RunsTab.IsChecked == true || FloorTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        bool floor = FloorTab.IsChecked == true;
+        FloorArea.Visibility = floor ? Visibility.Visible : Visibility.Collapsed;
+        RunPage.Visibility = floor ? Visibility.Collapsed : Visibility.Visible;
+        if (floor) ShowFloor();
+    }
+
+    // every department's line with the items standing on it now, and what the department managers are doing
+    private void ShowFloor()
+    {
+        List<FactoryRun> runs = Factory.Runs;
+        FloorLines.Children.Clear();
+        (FactoryDepartment Department, string Name)[] departments =
+        [
+            (FactoryDepartment.Development, "Development - a change, from the task to a draft PR"),
+            (FactoryDepartment.Troubleshooting, "Troubleshooting - a customer's or a site's problem, for the call center"),
+            (FactoryDepartment.Research, "Research - a question about the system"),
+            (FactoryDepartment.Management, "Management - a vision, an idea or a company-wide matter"),
+        ];
+        foreach ((FactoryDepartment department, string name) in departments)
+        {
+            List<FactoryRun> mine = runs.Where(r => r.Department == department).ToList();
+            List<FactoryRun> onLine = mine.Where(r => r.Working || r.Stage == FactoryStage.NeedsYou && !r.CleanedUp).ToList();
+            int done = mine.Count(r => !r.Working && r.Stage == FactoryStage.Done);
+            string counts = $"   {onLine.Count(r => r.Working)} working · {onLine.Count(r => !r.Working)} waiting · {done} done";
+            FloorLines.Children.Add(FactoryLine.Floor(name + counts, FactoryLine.LineOf(department), onLine, k => (Brush)FindResource(k), OpenFromFloor));
+        }
+        int working = runs.Count(r => r.Working), waiting = runs.Count(r => !r.Working && r.Stage == FactoryStage.NeedsYou && !r.CleanedUp);
+        FloorSummary.Text = $"{working} item{(working == 1 ? "" : "s")} on the lines, {waiting} waiting, {runs.Count(r => r.PrUrl.Length > 0)} shipped as a draft PR. " +
+            "Hover a station for what it does, the check it runs and why; click an item to open it.";
+        List<FactoryRun> human = runs.Where(r => !r.Working && r.Stage == FactoryStage.NeedsYou && r.ManagerCase.Length > 0 && !r.CleanedUp).ToList();
+        int resumed = runs.Sum(r => r.ManagerResumes);
+        FloorManager.Text = "Department managers: " + (human.Count == 0 ? "no item needs a human." : $"{human.Count} item{(human.Count == 1 ? " needs" : "s need")} a human - " +
+            string.Join("; ", human.Take(3).Select(r => Short(r.Title, 40)))) + $" They restarted stopped items {resumed} time{(resumed == 1 ? "" : "s")} so far.";
+    }
+
+    private void OpenFromFloor(FactoryRun run)
+    {
+        RunsTab.IsChecked = true;
+        ListBoxItem? item = RunList.Items.OfType<ListBoxItem>().FirstOrDefault(i => i.Tag == run);
+        if (item != null) RunList.SelectedItem = item;
+        Show(run);
     }
 
     private void UpdateRunsSummary()
@@ -530,35 +576,10 @@ public partial class FactoryView : UserControl
         }
     }
 
-    // a chip per stage: done (✓), now (violet), where it stopped (coral), to come (faded)
+    // the item's production line: each station passed (with its time), working, stopped, or to come
     private void ShowPipeline(FactoryRun run)
     {
-        Pipeline.Children.Clear();
-        HashSet<FactoryStage> seen = run.Log.Select(s => s.Stage).ToHashSet();
-        FactoryStage? failedAt = run.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped
-            ? run.Log.LastOrDefault(s => s.Stage is not (FactoryStage.NeedsYou or FactoryStage.Stopped or FactoryStage.Learn))?.Stage : null;
-        foreach (FactoryStage stage in Stages)
-        {
-            bool now = run.Working && run.Stage == stage;
-            bool failed = !run.Working && failedAt == stage;
-            bool done = seen.Contains(stage) && !now && !failed;
-            // the step working now turns amber once it is slow
-            bool slow = now && run.Trace.LastOrDefault(s => s.Ended == null) is { Slow: true };
-            var chip = new Border
-            {
-                CornerRadius = new CornerRadius(12), Padding = new Thickness(10, 3, 10, 3), Margin = new Thickness(0, 0, 6, 4),
-                BorderThickness = new Thickness(1.5), BorderBrush = (Brush)FindResource("InkBrush"),
-                ToolTip = slow ? "Slow: over a minute" : null,
-                Background = slow ? Amber : now ? (Brush)FindResource("VioletBrush") : failed ? (Brush)FindResource("CoralBrush") : Brushes.Transparent,
-                Opacity = done || now || failed ? 1 : 0.4,
-                Child = new TextBlock
-                {
-                    Text = (done ? "✓ " : "") + StageName(stage), FontSize = 12, FontWeight = FontWeights.SemiBold,
-                    Foreground = now ? Brushes.White : (Brush)FindResource("InkBrush"),
-                },
-            };
-            Pipeline.Children.Add(chip);
-        }
+        LineHost.Content = FactoryLine.Build(run, k => (Brush)FindResource(k));
     }
 
     // the log as one markdown document, so plans, answers and verify output render like the chats

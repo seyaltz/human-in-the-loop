@@ -20,6 +20,8 @@
                                      Checked="LeftTab_Checked" />
                         <RadioButton x:Name="RunsTab" Content="History" GroupName="LeftTab" Style="{StaticResource PillRadio}" Margin="6,0,0,0"
                                      Checked="LeftTab_Checked" />
+                        <RadioButton x:Name="FloorTab" Content="Floor" GroupName="LeftTab" Style="{StaticResource PillRadio}" Margin="6,0,0,0"
+                                     Checked="LeftTab_Checked" ToolTip="The whole factory at once: every department's line and the items on it now" />
                     </StackPanel>
                 </StackPanel>
                 <Grid>
@@ -117,6 +119,22 @@
         <!-- the selected run -->
         <ContentControl Grid.Column="1" Style="{StaticResource ShadowCard}" Padding="20,16,16,14">
             <Grid>
+                <!-- the factory floor: every department's line, the items on it now, and how the factory works -->
+                <ScrollViewer x:Name="FloorArea" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                    <StackPanel Margin="0,0,8,0">
+                        <TextBlock Text="the factory floor" Style="{StaticResource HandNote}" FontSize="19" />
+                        <TextBlock Text="Production lines" Style="{StaticResource Heading}" FontSize="22" Margin="0,2,0,4" />
+                        <TextBlock x:Name="FloorSummary" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,10" />
+                        <Expander x:Name="FloorHow" Header="How the factory works" IsExpanded="True" Margin="0,0,0,14" FontWeight="SemiBold">
+                            <TextBlock x:Name="FloorHowText" TextWrapping="Wrap" FontSize="13" FontWeight="Normal" Margin="0,6,0,0" LineHeight="19" />
+                        </Expander>
+                        <StackPanel x:Name="FloorLines" />
+                        <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1.5,0,0" Padding="0,10,0,0">
+                            <TextBlock x:Name="FloorManager" TextWrapping="Wrap" FontSize="13" />
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+                <Grid x:Name="RunPage">
                 <TextBlock x:Name="EmptyText" Style="{StaticResource Caption}" TextWrapping="Wrap" FontSize="14" Margin="4"
                            Text="Give the factory a task - typed, a Jira issue or a spec - and a repository. Each run works in your checkout on a new branch: Claude plans, builds and fixes until the verify command passes, proves it in the running app, a read-only reviewer checks the diff, and then Claude opens a draft PR. Facts it learned go into the repo's Claude memory; rules, skills and hooks are kept by the factory outside the repo, for its next runs there." />
                 <DockPanel x:Name="RunArea" Visibility="Collapsed">
@@ -224,8 +242,14 @@
                             </StackPanel>
                         </StackPanel>
                     </Border>
-                    <!-- the pipeline: each stage done, now, or to come -->
-                    <WrapPanel x:Name="Pipeline" DockPanel.Dock="Top" Margin="0,0,0,10" />
+                    <!-- the item's production line: the stations (hover one for what it does and why), the item on the belt -->
+                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                        <ContentControl x:Name="LineHost" AutomationProperties.Name="Production line" />
+                        <Expander x:Name="RunHow" Header="How the factory works" Margin="0,6,0,0" FontSize="12.5">
+                            <TextBlock x:Name="RunHowText" TextWrapping="Wrap" FontSize="13" Margin="0,6,0,0" LineHeight="19" MaxWidth="900"
+                                       HorizontalAlignment="Left" />
+                        </Expander>
+                    </StackPanel>
                     <!-- your feedback: rate the run, or send it what to change -->
                     <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1.5,0,0" Padding="0,10,0,0" Margin="0,10,0,0">
                         <StackPanel>
@@ -280,6 +304,7 @@
                         </ScrollViewer>
                     </Grid>
                 </DockPanel>
+                </Grid>
             </Grid>
         </ContentControl>
     </Grid>

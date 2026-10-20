@@ -198,6 +198,9 @@ public sealed class FactoryRun
     public List<string> LinkedRuns { get; set; } = [];
     /// <summary>The secret-scan findings the run stopped on, and the ones the developer said are not secrets (Continue).</summary>
     public string SecretsFound { get; set; } = "";
+    // the commit the factory itself last asked to push: any other commit on the run's remote branch came from elsewhere
+    public string PushedCommit { get; set; } = "";
+    public string ForeignCommit { get; set; } = "";
     public string SecretsAccepted { get; set; } = "";
     /// <summary>The manager's case for a human: what is blocked, what it tried, what it needs. Empty when none.</summary>
     public string ManagerCase { get; set; } = "";
@@ -489,7 +492,9 @@ public static class Factory
         if (run.CleanedUp) return Wait(run, "This run was cleaned up - start a new run for the task.");
         // Continue on a secret-scan stop: the developer says those findings are not secrets (only those). Only the
         // developer's own Continue counts - the manager resuming an autonomous run never accepts a finding.
-        if (byDeveloper && run.Note.StartsWith("The commit looks like it holds a secret", StringComparison.Ordinal)) run.SecretsAccepted = run.SecretsFound;
+        if (byDeveloper && run.Note.StartsWith(SecretStop, StringComparison.Ordinal)) run.SecretsAccepted = run.SecretsFound;
+        // ... and on an unexpected-push stop, that the commit on the remote branch is theirs and fine
+        if (byDeveloper && run.Note.StartsWith(UnexpectedPush, StringComparison.Ordinal)) run.PushedCommit = run.ForeignCommit;
         FactoryStage stoppedAt = run.Log.LastOrDefault(s => s.Stage is not (FactoryStage.NeedsYou or FactoryStage.Stopped or FactoryStage.Learn))?.Stage ?? FactoryStage.Queued;
         string why = run.Note;
         if (run.Repo.Length == 0 && !await LocateAsync(run, cancel)) return false;
@@ -2000,11 +2005,23 @@ public static class Factory
         else if (secrets.Count > 0)
         {
             run.SecretsFound = secretsKey;
-            return Wait(run, "The commit looks like it holds a secret - nothing was pushed:\n" + string.Join("\n", secrets.Take(5).Select(s => "- " + s)) +
+            return Wait(run, SecretStop + " - nothing was pushed:\n" + string.Join("\n", secrets.Take(5).Select(s => "- " + s)) +
                 $"\nTake it out of the commit (git reset --soft {run.BaseCommit[..Math.Min(12, run.BaseCommit.Length)]}), or Continue if it is not a secret.");
         }
         string head = (await GitAsync(run.Worktree, "rev-parse", "HEAD")).Output.Trim();
         Log(run, $"Checked the commit {head[..Math.Min(12, head.Length)]}: {inCommit.Count} file{(inCommit.Count == 1 ? "" : "s")} of the change, none of your local files.");
+        // nothing reached the remote behind the factory's back: the run's branch is absent, or at what the factory pushed
+        (int beforeCode, string before) = await GitAsync(run.Worktree, "ls-remote", "origin", "refs/heads/" + run.Branch);
+        string already = beforeCode == 0 && before.Trim().Length > 0 ? before.Trim().Split('\t')[0] : "";
+        if (beforeCode != 0) return Wait(run, $"Could not read the remote branch {run.Branch} before the push - nothing was pushed: " + before.Trim());
+        if (already.Length > 0 && already != run.PushedCommit)
+        {
+            run.ForeignCommit = already;
+            return Wait(run, $"{UnexpectedPush} the remote branch {run.Branch} is at {already[..Math.Min(12, already.Length)]}, a commit Dev break did not push - nothing more was pushed. " +
+                "Look at what is on that branch (it skipped the local-file and secret checks): delete the remote branch if it should not be there, or if the commit is yours and right, Continue.");
+        }
+        run.PushedCommit = head;
+        Save();
         // 3. Claude pushes exactly that and opens the PR - it can no longer change what is committed
         string todo = update
             ? $"""
@@ -2047,6 +2064,10 @@ public static class Factory
         End(run, FactoryStage.Done, (update ? "Draft PR updated" : "Draft PR opened") + (anyway ? " - with failed checks." : "."));
         return true;
     }
+
+    // the stops only the developer clears - the department manager never resumes them
+    private const string SecretStop = "The commit looks like it holds a secret";
+    private const string UnexpectedPush = "Something other than Dev break pushed:";
 
     private const string MermaidInit = "mermaid.initialize({startOnLoad:true});";
 
@@ -2144,6 +2165,14 @@ public static class Factory
     private static async Task<bool> ManageAsync(FactoryRun run)
     {
         string stopped = run.Note;
+        // a safety check's stop is never resumed by AI: it goes straight to the human, with the run's note kept so
+        // the developer's Continue still means "I checked it"
+        if (stopped.StartsWith(SecretStop, StringComparison.Ordinal) || stopped.StartsWith(UnexpectedPush, StringComparison.Ordinal))
+        {
+            run.ManagerCase = "A safety check stopped the run - only you can clear it.\n\nWhy it stopped: " + stopped;
+            Log(run, "Manager: a safety check stopped the run - a human decides, the AI does not resume it.", ok: false);
+            return false;
+        }
         Log(run, "The department manager looks at why the run stopped.");
         string log = string.Join("\n\n", run.Log.TakeLast(14).Select(s => $"[{s.Stage}{(s.Ok ? "" : ", FAILED")}] {Tail(s.Text, 1500)}"));
         string folder = Directory.Exists(run.Worktree) ? run.Worktree : run.Repo.Length > 0 && Directory.Exists(run.Repo) ? run.Repo : run.Folder;
@@ -2736,6 +2765,16 @@ public static class Factory
                 ["command"] = $"powershell -NoProfile -ExecutionPolicy Bypass -File \"{script}\" -Mode {guard}",
             }),
         });
+        // the guard reads command text, which an alias or an include in .git/config can hide; in a step that may
+        // not push, git itself is told so: every push URL is rewritten to a scheme git has no helper for, so any
+        // push fails before it reaches a remote (fetch is untouched)
+        if (guard != "frozen")
+        {
+            if (settings["env"] is not JsonObject env) settings["env"] = env = [];
+            env["GIT_CONFIG_COUNT"] = "1";
+            env["GIT_CONFIG_KEY_0"] = "url.devbreak-push-blocked://.pushInsteadOf";
+            env["GIT_CONFIG_VALUE_0"] = "";
+        }
         string file = Path.Combine(home, $"settings-{guard}-{Math.Abs(learned.GetHashCode()):x}.json");
         File.WriteAllText(file, settings.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         return file;

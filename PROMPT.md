@@ -607,6 +607,18 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   - **Proof scripts kept**: each repo has `factory-knowledge\<repo>\proof-scripts`; prove and answer checks are told
     to reuse and adapt those and save new ones there, and to keep evidence to the manifest and about 15 files.
   - Troubleshooting, research and management never reach a build path from feedback; without an answer they ask.
+  - **Push safety - blocked and detected**: the guard reads command text, which an alias or an include in `.git/config`
+    can hide, so a step that may not push (guard modes nopublish and all) also gets, through the `env` of its settings
+    file, `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=url.devbreak-push-blocked://.pushInsteadOf`, `GIT_CONFIG_VALUE_0=` (empty):
+    every push URL is rewritten to a scheme git has no helper for, so any push fails before it reaches a remote; fetch
+    is untouched (tested with a real `claude`: a `git p` alias push was refused, the same call without the settings
+    pushed). Before its own push the PR step reads the run's remote branch (`ls-remote`): absent, or at `PushedCommit`
+    (the commit the factory last asked to push), is fine; anything else stops the run - "Something other than Dev
+    break pushed: ..." (`ForeignCommit` kept) - and nothing more is pushed. The developer's Continue on that stop means
+    the commit is theirs and fine.
+  - **Safety stops go to a human**: the secret stop and the unexpected-push stop are never resumed by the manager -
+    it marks the case "A safety check stopped the run - only you can clear it" without asking Claude, keeping the
+    run's note so the developer's Continue still accepts it; only Continue from the run page accepts (`byDeveloper`).
 - **Review and revise** (`Revision`, from 1; `Accepted`): a done run, not accepted, shows a violet card "Review revision
   N" (with "the draft PR is ready" or "the report is ready") listing the run's own decisions (`Decisions`, split on
   their numbers) as ticked boxes - unticking one opens "How should it be instead?". **Accept** (`AcceptAsync`) marks it
@@ -701,12 +713,23 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   feedback). Before deleting, a bar shows what goes and its size, and in coral what would be lost - uncommitted
   changes in the worktree, a branch never pushed - with **Delete it** / **Delete it anyway** and **Cancel**.
   **Clean up all** does it for every run that is not working, naming the runs whose work would be lost.
-- **View** (6th mode tab **Factory**): left two tabs - **New task** (the form, on the left, open by default) and
+- **View** (6th mode tab **Factory**): left three tabs - **New task** (the form, on the left, open by default),
+  **Floor** (the history list stays on the left; on the right the **factory floor**: "N items on the lines, N waiting,
+  N shipped", the open **How the factory works** panel, one line per department with "N working · N waiting · N done"
+  and under each station the items standing there now - working or waiting for a human, a station violet while one is
+  worked on and coral when they only wait; click an item to open its run - and the department managers' line: which
+  items need a human and how often they restarted stopped items; it refreshes every 5 seconds) and
   **History (N)** (on the right; opened after starting a run): "N working · N to continue · N with a PR", **Clean up all**, and the runs
   (light: green pulsing while working, red when it needs you or was stopped; repo · stage · cost). Right the run: title, repo · branch from base · steps · cost, the
   note; **Stop**, **Continue**, **Clean up**, **Draft PR anyway** (after failed checks - the description says what failed), **Open PR**, **Open in
-  Sessions** (continue the run's session yourself), **Open worktree**; the pipeline as chips (✓ done, violet now,
-  coral where it stopped, faded to come); tabs **Log** (rendered like the chats) · **Evidence (N)** (the proof
+  Sessions** (continue the run's session yourself), **Open worktree**; the item's **production line** (`FactoryLine`): a
+  card per station - Development: Gate, Workspace, Plan, Build, ◆ Verify, ◆ Review, ◆ Prove, ◆ Ship, Learn;
+  Troubleshooting, Research and Management: Gate, Workspace, Investigate, ◆ Check, Report, Learn (◆ = a quality gate,
+  square corners) - each with its state (● working with its time, violet; ✓ passed with the work time of its trace
+  spans; ✗ stopped, coral; – skipped; faded to come) and ↺N when a gate sent the item back N times; under the cards a
+  belt, and on it the item (▣ here now / needs a human / waits for you / shipped) under its station, pulsing while it
+  is worked on; hovering a station shows what it does, its check and why the line has it; a folded **How the factory
+  works** panel explains the whole factory in plain words with the legend; tabs **Log** (rendered like the chats) · **Evidence (N)** (the proof
   chosen and what was not produced; a card per piece: kind, ✓ pass / ✗ fail / – skipped, what it proves, its numbers,
   an image shown (click to open), **Open <file>** for a video, report or any file, a note when the file is missing) ·
   **Trace (N)** (a fold per span:
