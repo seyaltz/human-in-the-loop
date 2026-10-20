@@ -484,11 +484,12 @@ public static class Factory
     /// Picks up a run that stopped or waits for the developer where it left off: the steps already done (repo, worktree,
     /// plan) are not redone; Claude finishes what is missing, then verify, prove, review and the draft PR.
     /// </summary>
-    public static Task ContinueAsync(FactoryRun run) => DriveAsync(run, learnAfter: false, async cancel =>
+    public static Task ContinueAsync(FactoryRun run, bool byDeveloper = false) => DriveAsync(run, learnAfter: false, async cancel =>
     {
         if (run.CleanedUp) return Wait(run, "This run was cleaned up - start a new run for the task.");
-        // Continue on a secret-scan stop: the developer says those findings are not secrets (only those)
-        if (run.Note.StartsWith("The commit looks like it holds a secret", StringComparison.Ordinal)) run.SecretsAccepted = run.SecretsFound;
+        // Continue on a secret-scan stop: the developer says those findings are not secrets (only those). Only the
+        // developer's own Continue counts - the manager resuming an autonomous run never accepts a finding.
+        if (byDeveloper && run.Note.StartsWith("The commit looks like it holds a secret", StringComparison.Ordinal)) run.SecretsAccepted = run.SecretsFound;
         FactoryStage stoppedAt = run.Log.LastOrDefault(s => s.Stage is not (FactoryStage.NeedsYou or FactoryStage.Stopped or FactoryStage.Learn))?.Stage ?? FactoryStage.Queued;
         string why = run.Note;
         if (run.Repo.Length == 0 && !await LocateAsync(run, cancel)) return false;
@@ -2608,7 +2609,11 @@ public static class Factory
             {
                 foreach ((string what, Regex pattern) in SecretShapes)
                 {
-                    if (pattern.IsMatch(line)) found.Add($"{file}: {what}");
+                    // a short hash of the matched text, so accepting one finding does not let a new value of the same kind through
+                    if (pattern.Match(line) is { Success: true } hit)
+                    {
+                        found.Add($"{file}: {what} #{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(hit.Value)))[..8]}");
+                    }
                 }
             }
         }
@@ -2622,6 +2627,8 @@ public static class Factory
         var missing = Regex.Matches(text, @"`([^`\r\n]+\.[A-Za-z0-9]{1,6})`|([A-Za-z]:\\[^\s`'""*?<>|]+\.[A-Za-z0-9]{1,6})")
             .Select(m => (m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value).Trim().TrimEnd('.', ',', ')'))
             .Where(p => p.Contains('\\') || p.Contains('/'))
+            // never probe a network path: checking \\host\share would send this machine's Windows login to that host
+            .Where(p => !p.StartsWith(@"\\", StringComparison.Ordinal) && !p.StartsWith("//", StringComparison.Ordinal))
             .Distinct()
             .Where(p =>
             {
@@ -2692,7 +2699,12 @@ public static class Factory
         }
         if ($tool -notin 'Bash', 'PowerShell') { exit 0 }
         $cmd = [string]$j.tool_input.command
-        $flat = [regex]::Replace($cmd, '\bgit((\s+(-c\s+\S+|-C\s+("[^"]*"|''[^'']*''|\S+)|--[\w-]+(=\S+)?))+)', 'git')
+        # git.exe, "C:\...\git.exe" and /usr/bin/git all read as git; then the options before the subcommand go,
+        # including the ones whose value follows after a space
+        $flat = [regex]::Replace($cmd, '["'']?(?:[^\s"'']*[\\/])?\bgit(?:\.exe)?["'']?(?=\s)', 'git', 'IgnoreCase')
+        $flat = [regex]::Replace($flat, '\bgit((\s+(-[cC]\s+("[^"]*"|''[^'']*''|\S+)|--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)\s+("[^"]*"|''[^'']*''|\S+)|--?[\w-]+(=\S+)?))+)', 'git')
+        # an alias can hide any subcommand (git -c alias.p=push p), so a git alias is refused in every step
+        if ($cmd -match '\bgit(\.exe)?\b.*\balias\.') { [Console]::Error.WriteLine("Dev break factory: git aliases are not allowed in this step."); exit 2 }
         $publish = '\bgit\s+push\b|\bgh\s+pr\s+create\b'
         $write = '\bgit\s+(commit|add|reset|rebase|cherry-pick|merge|stash|checkout|switch|restore|rm|mv)\b'
         $deny = switch ($Mode) { 'nopublish' { $publish } 'frozen' { $write } default { "$publish|$write" } }
