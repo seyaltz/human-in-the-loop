@@ -616,11 +616,11 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
     a test); the guard refuses those tricks in steps that may not push (`GIT_CONFIG`, `pushurl`, `insteadOf`,
     `env -u`/`unset GIT`, `env:GIT_`, `.git/config` in a command; Edit/Write of `.git\config` or `.git\hooks\` in any
     step; 14 of 14 cases), and the check that holds is in Dev break, after the fact: when the workspace is ready the run
-    remembers the remote (`RemoteKnown`, `RemoteRefsAtStart` - its branches and tags, from `ls-remote origin refs/heads/*
-    refs/tags/*`, empty when it cannot be read, so then every branch and tag counts as changed - and `RemoteConfigAtStart`:
+    remembers the remote (`RemoteKnown`, `RemoteRefsAtStart` - every ref, from `ls-remote origin` (the host's own pull-request refs
+    `refs/pull/`, `refs/pull-requests/`, `refs/merge-requests/` and `HEAD` are skipped), empty when it cannot be read, so then every ref counts as changed - and `RemoteConfigAtStart`:
     every `remote.*`, `url.*`, `include*` setting with its scope, always compared). Before its own push the PR step stops the run, and
     nothing is pushed, when (1) those settings changed - "The repo's remote settings changed during the run:" with
-    before and now; (2) a branch or tag of the remote moved to a commit that is in this repo and comes after the base - made
+    before and now; (2) a ref of the remote (a branch, a tag, any namespace) moved to a commit that is in this repo and comes after the base - made
     on this machine during the run (other people's pushes are not in the repo, so they do not count) - "Something other
     than Dev break pushed: <branch> at <sha>"; (3) the run's own branch is at anything but `PushedCommit` (the commit
     the factory last asked to push). The developer's Continue on such a stop means it is theirs and fine (the new
