@@ -1246,10 +1246,14 @@ public static class Factory
     {
         if (run.RemoteKnown) return;
         run.RemoteConfigAtStart = await RemoteConfigAsync(run.Worktree);
-        (int code, string refs) = await GitAsync(run.Worktree, "ls-remote", "--heads", "origin");
+        // a remote that cannot be read now is remembered as empty: then every branch and tag counts as changed later
+        (int code, string refs) = await RemoteRefsAsync(run.Worktree);
         run.RemoteRefsAtStart = code == 0 ? refs.Trim() : "";
-        run.RemoteKnown = code == 0;
+        run.RemoteKnown = true;
     }
+
+    // the remote's branches and tags (a tag push gets past a check of branches only)
+    private static Task<(int Exit, string Output)> RemoteRefsAsync(string folder) => GitAsync(folder, "ls-remote", "origin", "refs/heads/*", "refs/tags/*");
 
     private static async Task<string> RemoteConfigAsync(string folder)
     {
@@ -2056,7 +2060,7 @@ public static class Factory
         // are not here, so they do not count)
         if (run.RemoteKnown)
         {
-            (int nowCode, string nowRefs) = await GitAsync(run.Worktree, "ls-remote", "--heads", "origin");
+            (int nowCode, string nowRefs) = await RemoteRefsAsync(run.Worktree);
             if (nowCode != 0) return Wait(run, "Could not read the remote's branches before the push - nothing was pushed: " + nowRefs.Trim());
             Dictionary<string, string> start = Refs(run.RemoteRefsAtStart);
             var moved = new List<string>();
@@ -2067,7 +2071,7 @@ public static class Factory
                 bool here = (await GitAsync(run.Worktree, "cat-file", "-e", sha + "^{commit}")).Exit == 0;
                 if (here && sha != run.BaseCommit && (await GitAsync(run.Worktree, "merge-base", "--is-ancestor", run.BaseCommit, sha)).Exit == 0)
                 {
-                    moved.Add($"{name.Replace("refs/heads/", "")} at {sha[..Math.Min(12, sha.Length)]}");
+                    moved.Add($"{(name.StartsWith("refs/tags/", StringComparison.Ordinal) ? "tag " + name[10..].Replace("^{}", "") : name.Replace("refs/heads/", ""))} at {sha[..Math.Min(12, sha.Length)]}");
                 }
             }
             if (moved.Count > 0)
