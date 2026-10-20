@@ -112,9 +112,10 @@ next run starts smarter.
 stopped and handed to the manager, which decides in five minutes; a stopped run continues with exactly what stopped
 it; nothing that looks like a secret is pushed; a guard refuses the git commands a step may not run, however they
 are written; runs in other repos go in dependency order; two Dev breaks never work in the same checkout at once;
-and proof scripts are kept per repo and reused. A step that may not push cannot - git itself is told to refuse -
-and before its own push the factory checks that nothing reached the remote behind its back; a safety stop (a secret,
-an unexpected push) always goes to you, never to the AI manager.
+and proof scripts are kept per repo and reused. A step that may not push is told so by git itself and by the guard,
+and - since anything inside Claude's shell can be undone by Claude - before its own push the factory checks, in its
+own code, that no branch of the remote got a commit made here during the run and that the remote settings are as the
+run found them; a safety stop (a secret, an unexpected push, a changed remote) always goes to you, never to the AI manager.
 
 **A real production line**: each run shows its line - Gate, Workspace, Plan, Build, then the quality gates (◆)
 Verify, Review, Prove and Ship, then Learn - with the item on a belt under the station working on it, the time each

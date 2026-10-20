@@ -201,6 +201,12 @@ public sealed class FactoryRun
     // the commit the factory itself last asked to push: any other commit on the run's remote branch came from elsewhere
     public string PushedCommit { get; set; } = "";
     public string ForeignCommit { get; set; } = "";
+    // the remote as the run found it (its branches, the settings that decide where a push goes), and what a stop saw
+    public bool RemoteKnown { get; set; }
+    public string RemoteRefsAtStart { get; set; } = "";
+    public string RemoteConfigAtStart { get; set; } = "";
+    public string ForeignRefs { get; set; } = "";
+    public string ForeignConfig { get; set; } = "";
     public string SecretsAccepted { get; set; } = "";
     /// <summary>The manager's case for a human: what is blocked, what it tried, what it needs. Empty when none.</summary>
     public string ManagerCase { get; set; } = "";
@@ -494,7 +500,13 @@ public static class Factory
         // developer's own Continue counts - the manager resuming an autonomous run never accepts a finding.
         if (byDeveloper && run.Note.StartsWith(SecretStop, StringComparison.Ordinal)) run.SecretsAccepted = run.SecretsFound;
         // ... and on an unexpected-push stop, that the commit on the remote branch is theirs and fine
-        if (byDeveloper && run.Note.StartsWith(UnexpectedPush, StringComparison.Ordinal)) run.PushedCommit = run.ForeignCommit;
+        if (byDeveloper && run.Note.StartsWith(UnexpectedPush, StringComparison.Ordinal))
+        {
+            if (run.ForeignCommit.Length > 0) run.PushedCommit = run.ForeignCommit;
+            if (run.ForeignRefs.Length > 0) run.RemoteRefsAtStart = run.ForeignRefs;
+        }
+        // ... and on a changed-remote stop, that the new remote settings are theirs
+        if (byDeveloper && run.Note.StartsWith(RemoteChanged, StringComparison.Ordinal)) run.RemoteConfigAtStart = run.ForeignConfig;
         FactoryStage stoppedAt = run.Log.LastOrDefault(s => s.Stage is not (FactoryStage.NeedsYou or FactoryStage.Stopped or FactoryStage.Learn))?.Stage ?? FactoryStage.Queued;
         string why = run.Note;
         if (run.Repo.Length == 0 && !await LocateAsync(run, cancel)) return false;
@@ -1193,6 +1205,7 @@ public static class Factory
                 : ["-c", "core.longpaths=true", "worktree", "add", run.Worktree, "-b", run.Branch, run.BaseCommit];
             (exit, output) = await GitSpanAsync(run, run.Repo, add);
             if (exit != 0) return Wait(run, "Could not create the worktree: " + Tail(output.Trim(), 1500));
+            await RememberRemoteAsync(run);
             return true;
         }
         Enter(run, FactoryStage.Worktree, $"Working in your checkout {run.Repo}, on a new branch {run.Branch} from {run.BaseBranch}.");
@@ -1221,9 +1234,31 @@ public static class Factory
         run.InCheckout = true;
         run.Worktree = run.Repo;
         TakeLock(run);
+        await RememberRemoteAsync(run);
         Log(run, $"Your checkout is on {run.Branch}; it goes back to {run.ReturnTo} when the run is done.");
         return true;
     }
+
+    // the remote as the run found it - its branches and the settings that decide where a push goes - so the PR step
+    // can tell what reached it during the run. A block inside Claude's shell can be undone by Claude (a pushurl, an
+    // `env -u`); this check runs in Dev break, after the fact, where Claude cannot reach.
+    private static async Task RememberRemoteAsync(FactoryRun run)
+    {
+        if (run.RemoteKnown) return;
+        run.RemoteConfigAtStart = await RemoteConfigAsync(run.Worktree);
+        (int code, string refs) = await GitAsync(run.Worktree, "ls-remote", "--heads", "origin");
+        run.RemoteRefsAtStart = code == 0 ? refs.Trim() : "";
+        run.RemoteKnown = code == 0;
+    }
+
+    private static async Task<string> RemoteConfigAsync(string folder)
+    {
+        (_, string config) = await GitAsync(folder, "config", "--show-scope", "--get-regexp", @"^(remote|url|include|includeif)\.");
+        return string.Join("\n", config.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()).Order(StringComparer.Ordinal));
+    }
+
+    private static Dictionary<string, string> Refs(string lsRemote) => lsRemote.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        .Select(l => l.Split('\t')).Where(p => p.Length == 2).GroupBy(p => p[1].Trim()).ToDictionary(g => g.Key, g => g.First()[0].Trim());
 
     // why the developer's checkout cannot be used now - another run working in it, or git cannot read it - as a
     // question; null when it can. The developer's own local changes do not block a run (they stay theirs).
@@ -2010,7 +2045,39 @@ public static class Factory
         }
         string head = (await GitAsync(run.Worktree, "rev-parse", "HEAD")).Output.Trim();
         Log(run, $"Checked the commit {head[..Math.Min(12, head.Length)]}: {inCommit.Count} file{(inCommit.Count == 1 ? "" : "s")} of the change, none of your local files.");
-        // nothing reached the remote behind the factory's back: the run's branch is absent, or at what the factory pushed
+        // nothing reached the remote behind the factory's back. First: where a push goes is as the run found it
+        if (run.RemoteKnown && await RemoteConfigAsync(run.Worktree) is { } config && config != run.RemoteConfigAtStart)
+        {
+            run.ForeignConfig = config;
+            return Wait(run, $"{RemoteChanged} where a push goes is not what it was when the run started - nothing was pushed.\nBefore:\n{run.RemoteConfigAtStart}\nNow:\n{config}\n" +
+                "Put the settings back if you did not change them, or if the change is yours and right, Continue.");
+        }
+        // then: no branch of the remote moved to a commit made on this machine during the run (other people's pushes
+        // are not here, so they do not count)
+        if (run.RemoteKnown)
+        {
+            (int nowCode, string nowRefs) = await GitAsync(run.Worktree, "ls-remote", "--heads", "origin");
+            if (nowCode != 0) return Wait(run, "Could not read the remote's branches before the push - nothing was pushed: " + nowRefs.Trim());
+            Dictionary<string, string> start = Refs(run.RemoteRefsAtStart);
+            var moved = new List<string>();
+            foreach ((string name, string sha) in Refs(nowRefs))
+            {
+                if (start.TryGetValue(name, out string? was) && was == sha) continue;
+                if (name == "refs/heads/" + run.Branch && sha == run.PushedCommit) continue;
+                bool here = (await GitAsync(run.Worktree, "cat-file", "-e", sha + "^{commit}")).Exit == 0;
+                if (here && sha != run.BaseCommit && (await GitAsync(run.Worktree, "merge-base", "--is-ancestor", run.BaseCommit, sha)).Exit == 0)
+                {
+                    moved.Add($"{name.Replace("refs/heads/", "")} at {sha[..Math.Min(12, sha.Length)]}");
+                }
+            }
+            if (moved.Count > 0)
+            {
+                run.ForeignRefs = nowRefs.Trim();
+                return Wait(run, $"{UnexpectedPush} {string.Join(", ", moved)} - commits made on this machine since the run started, not pushed by Dev break - nothing more was pushed. " +
+                    "Look at those branches (they skipped the local-file and secret checks): delete them on the remote if they should not be there, or if they are yours and right, Continue.");
+            }
+        }
+        // and the run's own branch: absent, or at what the factory pushed
         (int beforeCode, string before) = await GitAsync(run.Worktree, "ls-remote", "origin", "refs/heads/" + run.Branch);
         string already = beforeCode == 0 && before.Trim().Length > 0 ? before.Trim().Split('\t')[0] : "";
         if (beforeCode != 0) return Wait(run, $"Could not read the remote branch {run.Branch} before the push - nothing was pushed: " + before.Trim());
@@ -2068,6 +2135,7 @@ public static class Factory
     // the stops only the developer clears - the department manager never resumes them
     private const string SecretStop = "The commit looks like it holds a secret";
     private const string UnexpectedPush = "Something other than Dev break pushed:";
+    private const string RemoteChanged = "The repo's remote settings changed during the run:";
 
     private const string MermaidInit = "mermaid.initialize({startOnLoad:true});";
 
@@ -2167,7 +2235,8 @@ public static class Factory
         string stopped = run.Note;
         // a safety check's stop is never resumed by AI: it goes straight to the human, with the run's note kept so
         // the developer's Continue still means "I checked it"
-        if (stopped.StartsWith(SecretStop, StringComparison.Ordinal) || stopped.StartsWith(UnexpectedPush, StringComparison.Ordinal))
+        if (stopped.StartsWith(SecretStop, StringComparison.Ordinal) || stopped.StartsWith(UnexpectedPush, StringComparison.Ordinal)
+            || stopped.StartsWith(RemoteChanged, StringComparison.Ordinal))
         {
             run.ManagerCase = "A safety check stopped the run - only you can clear it.\n\nWhy it stopped: " + stopped;
             Log(run, "Manager: a safety check stopped the run - a human decides, the AI does not resume it.", ok: false);
@@ -2727,8 +2796,17 @@ public static class Factory
             if ($tool -match $mcpDeny) { [Console]::Error.WriteLine("Dev break factory: the tool $tool is not allowed in this step."); exit 2 }
             exit 0
         }
+        # git's own files decide where a push goes and what runs: no step edits them
+        if ($tool -in 'Edit', 'Write', 'MultiEdit', 'NotebookEdit') {
+            if ([string]$j.tool_input.file_path -match '(?i)[\\/]\.git[\\/](config|hooks[\\/])') { [Console]::Error.WriteLine("Dev break factory: git's own files are not edited in a factory step."); exit 2 }
+            exit 0
+        }
         if ($tool -notin 'Bash', 'PowerShell') { exit 0 }
         $cmd = [string]$j.tool_input.command
+        # a step that may not push may not undo the push block or point a push elsewhere either
+        if ($Mode -ne 'frozen' -and $cmd -match '(?i)GIT_CONFIG|\bpushurl\b|insteadof|\benv\s+(-u|--unset|-i)\b|\bunset\s+GIT|env:GIT_|\.git[\\/]config') {
+            [Console]::Error.WriteLine("Dev break factory: changing where or whether git pushes is not allowed in this step."); exit 2
+        }
         # git.exe, "C:\...\git.exe" and /usr/bin/git all read as git; then the options before the subcommand go,
         # including the ones whose value follows after a space
         $flat = [regex]::Replace($cmd, '["'']?(?:[^\s"'']*[\\/])?\bgit(?:\.exe)?["'']?(?=\s)', 'git', 'IgnoreCase')
@@ -2758,7 +2836,7 @@ public static class Factory
         if (hooks["PreToolUse"] is not JsonArray pre) hooks["PreToolUse"] = pre = [];
         pre.Add(new JsonObject
         {
-            ["matcher"] = "Bash|PowerShell|mcp__.*",
+            ["matcher"] = "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|mcp__.*",
             ["hooks"] = new JsonArray(new JsonObject
             {
                 ["type"] = "command",

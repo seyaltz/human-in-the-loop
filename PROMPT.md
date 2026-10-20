@@ -612,11 +612,19 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
     file, `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=url.devbreak-push-blocked://.pushInsteadOf`, `GIT_CONFIG_VALUE_0=` (empty):
     every push URL is rewritten to a scheme git has no helper for, so any push fails before it reaches a remote; fetch
     is untouched (tested with a real `claude`: a `git p` alias push was refused, the same call without the settings
-    pushed). Before its own push the PR step reads the run's remote branch (`ls-remote`): absent, or at `PushedCommit`
-    (the commit the factory last asked to push), is fine; anything else stops the run - "Something other than Dev
-    break pushed: ..." (`ForeignCommit` kept) - and nothing more is pushed. The developer's Continue on that stop means
-    the commit is theirs and fine.
-  - **Safety stops go to a human**: the secret stop and the unexpected-push stop are never resumed by the manager -
+    pushed). That block lives in Claude's shell, so Claude can undo it (a `remote.origin.pushurl` or `env -u` pushed in
+    a test); the guard refuses those tricks in steps that may not push (`GIT_CONFIG`, `pushurl`, `insteadOf`,
+    `env -u`/`unset GIT`, `env:GIT_`, `.git/config` in a command; Edit/Write of `.git\config` or `.git\hooks\` in any
+    step; 14 of 14 cases), and the check that holds is in Dev break, after the fact: when the workspace is ready the run
+    remembers the remote (`RemoteKnown`, `RemoteRefsAtStart` from `ls-remote --heads origin`, `RemoteConfigAtStart` -
+    every `remote.*`, `url.*`, `include*` setting with its scope). Before its own push the PR step stops the run, and
+    nothing is pushed, when (1) those settings changed - "The repo's remote settings changed during the run:" with
+    before and now; (2) a branch of the remote moved to a commit that is in this repo and comes after the base - made
+    on this machine during the run (other people's pushes are not in the repo, so they do not count) - "Something other
+    than Dev break pushed: <branch> at <sha>"; (3) the run's own branch is at anything but `PushedCommit` (the commit
+    the factory last asked to push). The developer's Continue on such a stop means it is theirs and fine (the new
+    settings, branches or commit become what is expected).
+  - **Safety stops go to a human**: the secret stop, the unexpected-push stop and the changed-remote stop are never resumed by the manager -
     it marks the case "A safety check stopped the run - only you can clear it" without asking Claude, keeping the
     run's note so the developer's Continue still accepts it; only Continue from the run page accepts (`byDeveloper`).
 - **Review and revise** (`Revision`, from 1; `Accepted`): a done run, not accepted, shows a violet card "Review revision
