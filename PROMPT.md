@@ -571,6 +571,42 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
 - Files under `.claude/` in the developer's local changes (Claude tooling state - a hook's edit log grows with every
   edit) never stop a run when they change (seen: `.claude/session-changes.log` stopped a run that never touched it);
   they stay in the local-changes set, so the commit check still keeps them out of every commit.
+- **Hardening (after a diagnosis of a day's runs and research into Devin, Factory, OpenHands, Copilot's agent, Jules,
+  Codex, Cursor and others):**
+  - **Prove once, after the review is clean** (as Devin records proof only after green): checks are verify, then
+    review (told the app check comes after it, so it judges the code, tests and verify output and does not count the
+    missing proof), fixes and re-review up to the cap; then the app check once. A fix the app check needed gets one
+    more review with the evidence. (Before: prove after every review fix - 47 minutes over 8 attempts in one run.)
+  - **Continue carries what stopped it**: the reviewer's open findings, the failing verify output or the last app
+    check go into the continue turn (a continue that saw only the one-line note changed nothing, and the same finding
+    came back).
+  - **Stuck detection** (OpenHands' thresholds): the same finished tool call 4 times in a row, or the same call failing
+    3 times in a row, cancels the turn ("The turn was stuck: ...") and the manager takes it.
+  - **The manager decides in 5 minutes** (`ManagerBudget`) and is told never to search whole drives, build caches or
+    node_modules; out of time, it escalates (one spent 12 minutes on a find over the Gradle and Ivy caches).
+  - **No false asks**: every file path a NEEDS_YOU names is checked on disk; missing ones are flagged in the message
+    (a run once asked the developer to paste a file it never wrote).
+  - **Edits the developer's tooling sees**: every turn is told to change files with Edit and Write, never scripts in
+    the shell (the developer's PR gate counts Edit/Write calls and blocked a run that edited through python).
+  - **Secret scan before the push** (as Copilot's agent): the lines the commit adds are matched against private keys,
+    AWS, Google, GitHub and Slack tokens and password/key/token literals; a hit stops the run before anything leaves
+    the machine; Continue on that stop accepts exactly those findings (`SecretsAccepted`). Tested: 4 of 4 caught, the
+    env-variable and `${...}` lines not.
+  - **The command guard**: a PreToolUse hook (`factory-guard\guard.ps1`, passed with the learned hooks in one
+    `--settings`) reads the whole command with options before the subcommand stripped, and the git tools of MCP
+    servers, and refuses by mode - nopublish (push, gh pr create, PR tools), frozen (git's writing commands), all
+    (both, for troubleshooting, research, management). It closes the `git -c ... commit` hole of the prefix rules
+    (tested: blocked, `git -C . status` allowed; 7 of 7 sample calls right).
+  - **Linked runs in order**: the run lists other repos in dependency order (a library before what uses it); they run
+    one after another and the parent waits for them before its own checks (before: in parallel - a proof passed before
+    its backend existed, and a run restarted a service another was proving against).
+  - **One run per checkout across Dev breaks**: a lock file `.git\devbreak-run.lock` (pid, app folder, run, title),
+    taken when a run works in the checkout and freed when its drive ends; a live lock of another run makes the
+    checkout busy (autonomous: a separate worktree); a dead holder is free. `Busy` is saved with the run while it is
+    driven (also during Learn and the manager), and a restart marks a busy run stopped.
+  - **Proof scripts kept**: each repo has `factory-knowledge\<repo>\proof-scripts`; prove and answer checks are told
+    to reuse and adapt those and save new ones there, and to keep evidence to the manifest and about 15 files.
+  - Troubleshooting, research and management never reach a build path from feedback; without an answer they ask.
 - **Review and revise** (`Revision`, from 1; `Accepted`): a done run, not accepted, shows a violet card "Review revision
   N" (with "the draft PR is ready" or "the report is ready") listing the run's own decisions (`Decisions`, split on
   their numbers) as ticked boxes - unticking one opens "How should it be instead?". **Accept** (`AcceptAsync`) marks it
