@@ -93,7 +93,7 @@ in **your own checkout**, on a new branch from the base - no copy, your dependen
 back to your branch when it is done. Your own local changes (temp files, local settings) don't stop it - they are
 never committed, and the run stops and asks only if the feature needs to touch one of them. When another run is
 already working in that checkout, it asks: wait and **Continue**, or **Use a separate worktree** beside the repo. The steps:
-**locate → plan → build → verify → prove → review → draft PR**. Claude understands the mission with your skills,
+**gate → workspace → plan → build → verify → review → prove → ship (draft PR) → learn**. Claude understands the mission with your skills,
 MCP servers and tools, plans and builds; Dev break runs your verify command (or one Claude proposes) and Claude
 fixes until it passes; then Claude **runs the app** with the change and proves it with the evidence the feature
 needs - screenshots, a video, tests that fail before and pass after, coverage of the changed lines, mutation testing,
@@ -112,7 +112,15 @@ next run starts smarter.
 stopped and handed to the manager, which decides in five minutes; a stopped run continues with exactly what stopped
 it; nothing that looks like a secret is pushed; a guard refuses the git commands a step may not run, however they
 are written; runs in other repos go in dependency order; two Dev breaks never work in the same checkout at once;
-and proof scripts are kept per repo and reused.
+and proof scripts are kept per repo and reused. A step that may not push cannot - git itself is told to refuse -
+and before its own push the factory checks that nothing reached the remote behind its back; a safety stop (a secret,
+an unexpected push) always goes to you, never to the AI manager.
+
+**A real production line**: each run shows its line - Gate, Workspace, Plan, Build, then the quality gates (◆)
+Verify, Review, Prove and Ship, then Learn - with the item on a belt under the station working on it, the time each
+station took, and ↺ where a gate sent it back. Hover a station for what it does, the check it runs and why. The
+**Floor** tab shows the whole factory: every department's line and the items on it now, and what the managers are
+doing; **How the factory works** explains it in plain words.
 
 **Review and revise**: when a run is done, a card on it asks you to review that revision - the decisions it took on
 its own are listed as ticked boxes; untick one and say how it should be. **Accept** closes it; **Request changes**
