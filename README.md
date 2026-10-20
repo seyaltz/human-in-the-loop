@@ -108,6 +108,12 @@ Rules, skills and hooks wait for your **Apply** and are kept by the factory **ou
 prompt, the skills as a plugin, the hooks as settings), and your checkout never gets a file it did not ask for. The
 next run starts smarter.
 
+**Built to hold up**: the app is proven once, after the tests pass and the review is clean; a step that loops is
+stopped and handed to the manager, which decides in five minutes; a stopped run continues with exactly what stopped
+it; nothing that looks like a secret is pushed; a guard refuses the git commands a step may not run, however they
+are written; runs in other repos go in dependency order; two Dev breaks never work in the same checkout at once;
+and proof scripts are kept per repo and reused.
+
 **Review and revise**: when a run is done, a card on it asks you to review that revision - the decisions it took on
 its own are listed as ticked boxes; untick one and say how it should be. **Accept** closes it; **Request changes**
 sends it back to the factory as the next **revision** (pick what kind: wrong behaviour, missing, change design, bug).

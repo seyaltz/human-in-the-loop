@@ -196,6 +196,9 @@ public sealed class FactoryRun
     public string PendingChange { get; set; } = "";
     /// <summary>Runs started for parts of a change that belong in another repo, by id.</summary>
     public List<string> LinkedRuns { get; set; } = [];
+    /// <summary>The secret-scan findings the run stopped on, and the ones the developer said are not secrets (Continue).</summary>
+    public string SecretsFound { get; set; } = "";
+    public string SecretsAccepted { get; set; } = "";
     /// <summary>The manager's case for a human: what is blocked, what it tried, what it needs. Empty when none.</summary>
     public string ManagerCase { get; set; } = "";
     /// <summary>Changes to the factory itself the manager proposes, for a human to approve.</summary>
@@ -236,6 +239,9 @@ public sealed class FactoryRun
 
     [System.Text.Json.Serialization.JsonIgnore] public CancellationTokenSource? Running { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public bool Working => Running != null;
+    /// <summary>Saved with the run: it is being driven right now (also while Learn or the manager runs) - for anything
+    /// outside this process that reads factory.json, and for a restart after Dev break closed mid-run.</summary>
+    public bool Busy { get; set; }
 }
 
 /// <summary>
@@ -281,6 +287,15 @@ public static class Factory
 
     // an autonomous run: it fixes what it needs outside its folder itself, backed up and reported; only what no tool
     // can do - a login, a credential, an access grant - stops it
+    // edits the developer's own tooling can see: hooks and PR gates count Edit and Write calls - a run that changed
+    // every file through python in Bash had its PR blocked ("0 Edit/Write calls")
+    private const string EditRule = """
+
+        Change files in the repo with the Edit and Write tools, never with scripts in the shell (python, sed, heredocs,
+        Set-Content): the developer's hooks and PR checks follow the Edit and Write calls. Shell commands are for
+        building, testing, running and reading.
+        """;
+
     private const string AutonomousRule = """
 
         You work with no human in the loop: solve problems yourself. When the work needs a change outside this folder
@@ -328,10 +343,11 @@ public static class Factory
                 _runs = [];
             }
             // a run that was working when Dev break closed has stopped
-            foreach (FactoryRun run in _runs.Where(r => r.Stage is not (FactoryStage.Done or FactoryStage.NeedsYou or FactoryStage.Stopped)))
+            foreach (FactoryRun run in _runs.Where(r => r.Busy || r.Stage is not (FactoryStage.Done or FactoryStage.NeedsYou or FactoryStage.Stopped)))
             {
                 run.Note = $"Dev break closed while this run was at {run.Stage}.";
                 run.Stage = FactoryStage.Stopped;
+                run.Busy = false;
             }
             return _runs;
         }
@@ -437,6 +453,7 @@ public static class Factory
             Enter(run, FactoryStage.Prove, "No change needed: Claude checks the answer against the running app.");
             (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
                 {again}{(run.Department == FactoryDepartment.Management ? ManagementCheck : run.Department == FactoryDepartment.Troubleshooting ? TroubleshootingCheck : "The task needs no change to the repo - it asks for an answer. Check the answer works against the running app (start what it needs with the tools on this machine), exactly as the developer would use it.")} {NamedSources}
+                {ProofReuse(run)}
                 Save the evidence (the call and its response, log lines) into {dir}, and write {Path.Combine(dir, ManifestName)}
                 as a JSON array of {"{"}"kind", "file", "proves", "result", "detail"{"}"}. Change no file in the repo.
                 Give the final, checked answer - ready to use - after a line RESULT:. Then end with exactly one line:
@@ -470,6 +487,8 @@ public static class Factory
     public static Task ContinueAsync(FactoryRun run) => DriveAsync(run, learnAfter: false, async cancel =>
     {
         if (run.CleanedUp) return Wait(run, "This run was cleaned up - start a new run for the task.");
+        // Continue on a secret-scan stop: the developer says those findings are not secrets (only those)
+        if (run.Note.StartsWith("The commit looks like it holds a secret", StringComparison.Ordinal)) run.SecretsAccepted = run.SecretsFound;
         FactoryStage stoppedAt = run.Log.LastOrDefault(s => s.Stage is not (FactoryStage.NeedsYou or FactoryStage.Stopped or FactoryStage.Learn))?.Stage ?? FactoryStage.Queued;
         string why = run.Note;
         if (run.Repo.Length == 0 && !await LocateAsync(run, cancel)) return false;
@@ -502,8 +521,18 @@ public static class Factory
         else
         {
             Enter(run, FactoryStage.Build, $"Claude continues where the run stopped ({stoppedAt}).");
+            // what stopped it, in full: a continue that sees only the one-line note judged the work done and changed
+            // nothing, and the reviewer found the same open finding again (seen: two missing tests, twice)
+            string open = stoppedAt switch
+            {
+                FactoryStage.Review when run.Review.Length > 0 => $"\nTHE REVIEWER'S OPEN FINDINGS - fix each one, or say why it is wrong:\n{Tail(run.Review, 6000)}",
+                FactoryStage.Verify when run.VerifyResult.Length > 0 => $"\nTHE FAILING VERIFY OUTPUT:\n{Tail(run.VerifyResult, 4000)}",
+                FactoryStage.Prove when run.Proof.Length > 0 => $"\nTHE LAST APP CHECK:\n{Tail(run.Proof, 4000)}",
+                _ => run.Review.Length > 0 && why.Contains("review", StringComparison.OrdinalIgnoreCase)
+                    ? $"\nTHE REVIEWER'S OPEN FINDINGS - fix each one, or say why it is wrong:\n{Tail(run.Review, 6000)}" : "",
+            };
             (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
-                The run stopped at its {stoppedAt} step: {why}
+                The run stopped at its {stoppedAt} step: {why}{open}
                 Continue the task from where this folder is now: finish what is missing, fix what stopped it.
                 Do not commit or push. Reply with what you changed.
                 """, "Continue", cancel);
@@ -838,6 +867,11 @@ public static class Factory
             Log(run, $"Revision {ask.Revision}:\n" + redo);
             return await AnswerAsync(run, cancel);
         }
+        // troubleshooting, research and management never build - one with no answer yet asks instead
+        if (run.Department != FactoryDepartment.Development || run.FolderWide)
+        {
+            return Wait(run, "This run has no answer yet to revise - press Continue to let it finish its answer first.");
+        }
         // nothing built yet: the feedback answers the plan's questions - the plan is updated, then built
         if (!run.Log.Any(s => s.Stage == FactoryStage.Build))
         {
@@ -884,7 +918,8 @@ public static class Factory
             First, in one or two lines, say what "done" now means for this change: a line UNDERSTOOD: <...>. If it
             overturns a decision you took earlier, say which, and follow the developer. If part of it needs a change in
             another repository than this one, keep to your part here and add one line per other repository:
-            OTHER_REPO: <its folder> - <what must change there, as a task>.
+            OTHER_REPO: <its folder> - <what must change there, as a task>. List them in the order they must be
+            done - a library before what uses it.
             {(firstUnderstand
                 ? "Then stop: do not change any file yet - the developer confirms your understanding first."
                 : "Then apply it in this folder. Do not commit or push. Reply with what you changed.")}
@@ -895,13 +930,26 @@ public static class Factory
         if (firstUnderstand)
         {
             run.PendingChange = ask.Understood.Length > 0 ? ask.Understood : answer;
+            // the other repos it would start runs in are part of what the developer approves
+            string others = string.Join("\n", answer.Replace("\r", "").Split('\n').Select(l => l.Trim().TrimStart('*', '-', ' '))
+                .Where(l => l.StartsWith("OTHER_REPO:", StringComparison.OrdinalIgnoreCase)).Select(l => "- " + l[11..].Trim()));
+            if (others.Length > 0) run.PendingChange += "\nIt would also start linked runs in:\n" + others;
             return Wait(run, $"Check what the run understood for revision {revision}: {run.PendingChange}\n" +
                 "Send \"ok\" to the run to build it, or send what is wrong with it.");
         }
         run.PendingChange = "";
         run.Revision = revision;
         Log(run, $"Revision {revision}:\n" + answer);
-        StartLinkedRuns(run, answer, revision);
+        // the other repos' parts first, one after another in the order given (a library before what uses it), so this
+        // run's checks see the whole change and no two runs restart the same services at once
+        List<FactoryRun> linked = StartLinkedRuns(run, answer, revision);
+        foreach (FactoryRun part in linked)
+        {
+            Log(run, $"Waits for the linked run in {(part.Repo.Length > 0 ? part.Repo : part.Folder)} ({part.Id}).");
+            await RunAsync(part);
+            cancel.ThrowIfCancellationRequested();
+            Log(run, $"Linked run {part.Id}: {part.Stage} - {part.Note.Split('\n')[0]}", ok: part.Stage == FactoryStage.Done);
+        }
         if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
         return true;
     }
@@ -909,8 +957,9 @@ public static class Factory
     /// <summary>Another repo has to change too: a linked Development run there, its task the part this one cannot do.</summary>
     public static event Action<FactoryRun>? RunCreated;
 
-    private static void StartLinkedRuns(FactoryRun run, string answer, int revision)
+    private static List<FactoryRun> StartLinkedRuns(FactoryRun run, string answer, int revision)
     {
+        var started = new List<FactoryRun>();
         foreach (string line in answer.Replace("\r", "").Split('\n').Select(l => l.Trim().TrimStart('*', '-', ' '))
                      .Where(l => l.StartsWith("OTHER_REPO:", StringComparison.OrdinalIgnoreCase)))
         {
@@ -944,8 +993,9 @@ public static class Factory
             run.LinkedRuns.Add(linked.Id);
             Log(run, $"Revision {revision}: started a linked run in {folder} for: {what}");
             RunCreated?.Invoke(linked);
-            _ = RunAsync(linked);
+            started.Add(linked);
         }
+        return started;
     }
 
     /// <summary>The developer accepts the run's work as it is; after rounds of changes, it learns what they meant.</summary>
@@ -972,6 +1022,8 @@ public static class Factory
     {
         if (run.Working) return;
         run.Running = new CancellationTokenSource();
+        run.Busy = true;
+        Save();
         CancellationToken cancel = run.Running.Token;
         bool learn = learnAfter;
         bool resume = false;
@@ -1012,8 +1064,11 @@ public static class Factory
             {
                 Log(run, "Could not switch your checkout back: " + ex.Message, ok: false);
             }
+            FreeLock(run);
             run.Running.Dispose();
             run.Running = null;
+            run.Busy = false;
+            Save();
             Notify(run);
         }
         // the manager removed the cause: the run goes on from where it stopped
@@ -1159,6 +1214,7 @@ public static class Factory
         if (exit != 0) return Wait(run, $"Could not switch your checkout to {run.Branch}: {Tail(output.Trim(), 800)}");
         run.InCheckout = true;
         run.Worktree = run.Repo;
+        TakeLock(run);
         Log(run, $"Your checkout is on {run.Branch}; it goes back to {run.ReturnTo} when the run is done.");
         return true;
     }
@@ -1172,8 +1228,75 @@ public static class Factory
             return $"Another run (\"{other.Title}\") is working in your checkout {run.Repo}, so this one cannot {what} there. " +
                 "Wait for it and press Continue - or press Use a separate worktree to run this one beside it.";
         }
+        // a run of another Dev break on this machine (each keeps its own list): its lock file in the repo's .git
+        if (LockHolder(run.Repo) is { } held && held.RunId != run.Id)
+        {
+            return $"Another run (\"{held.Title}\", in the Dev break at {held.App}) is working in your checkout {run.Repo}, so this one cannot {what} there. " +
+                "Wait for it and press Continue - or press Use a separate worktree to run this one beside it.";
+        }
         (int code, string status) = await GitAsync(run.Repo, "status", "--porcelain");
         return code == 0 ? null : $"git cannot read your checkout {run.Repo}: {status.Trim()}";
+    }
+
+    // --- the checkout lock: one run at a time in the developer's checkout, across every Dev break on the machine ---
+
+    private sealed record CheckoutLock(int Pid, string App, string RunId, string Title);
+
+    private static string LockPath(string repo) => Path.Combine(repo, ".git", "devbreak-run.lock");
+
+    // who holds the checkout now - null when nobody does, or the holder's process is gone (a stale lock)
+    private static CheckoutLock? LockHolder(string repo)
+    {
+        try
+        {
+            string file = LockPath(repo);
+            if (!File.Exists(file)) return null;
+            CheckoutLock? held = JsonSerializer.Deserialize<CheckoutLock>(File.ReadAllText(file));
+            if (held == null) return null;
+            try
+            {
+                using Process p = Process.GetProcessById(held.Pid);
+                if (p.HasExited) return null;
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+            return held;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static void TakeLock(FactoryRun run)
+    {
+        if (!run.InCheckout || !Directory.Exists(Path.Combine(run.Repo, ".git"))) return;
+        try
+        {
+            File.WriteAllText(LockPath(run.Repo), JsonSerializer.Serialize(new CheckoutLock(Environment.ProcessId, AppContext.BaseDirectory, run.Id, run.Title)));
+        }
+        catch (Exception)
+        {
+            // a lock we cannot write only means the other Dev break cannot see us
+        }
+    }
+
+    private static void FreeLock(FactoryRun run)
+    {
+        if (run.Repo.Length == 0) return;
+        if (LockHolder(run.Repo) is { } held && held.RunId == run.Id && held.Pid == Environment.ProcessId)
+        {
+            try
+            {
+                File.Delete(LockPath(run.Repo));
+            }
+            catch (Exception)
+            {
+                // gone already, or locked by a reader: the holder check treats a dead process as free anyway
+            }
+        }
     }
 
     // the files with uncommitted changes in a folder (modified, staged, new, deleted; the new name of a rename)
@@ -1236,11 +1359,18 @@ public static class Factory
     // switched there when it is clean; the run asks when it is not
     private static async Task<bool> OnRunBranchAsync(FactoryRun run)
     {
-        if (!run.InCheckout || await HeadAsync(run.Repo) == run.Branch) return true;
+        if (!run.InCheckout) return true;
+        if (await HeadAsync(run.Repo) == run.Branch)
+        {
+            if (LockHolder(run.Repo) is { } held && held.RunId != run.Id) return Wait(run, await CheckoutProblemAsync(run, "go on") ?? "Another run holds your checkout.");
+            TakeLock(run);
+            return true;
+        }
         if (await CheckoutProblemAsync(run, "switch to its branch " + run.Branch) is { } problem) return Wait(run, problem);
         run.ReturnTo = await HeadAsync(run.Repo);
         (int exit, string output) = await GitSpanAsync(run, run.Repo, "switch", run.Branch);
         if (exit != 0) return Wait(run, $"Could not switch your checkout to {run.Branch}: {Tail(output.Trim(), 800)}");
+        TakeLock(run);
         Log(run, $"Your checkout is on {run.Branch} again; it goes back to {run.ReturnTo} when this is done.");
         return true;
     }
@@ -1512,16 +1642,27 @@ public static class Factory
         return true;
     }
 
-    // verify, fixing up to MaxFixes times; prove it in the running app, fixing up to MaxFixes times; then review,
-    // fixing what the reviewer finds, up to MaxReviews rounds
+    // verify, fixing up to MaxFixes times; review the code, fixing what the reviewer finds, up to MaxReviews rounds;
+    // only then prove it in the running app - once, not after every review fix (proving was the costliest step:
+    // 47 minutes over 8 attempts in one run, re-proven after each fix). A fix the app check needed gets reviewed too.
     private static async Task<bool> CheckAsync(FactoryRun run, CancellationToken cancel)
+    {
+        if (!await ReviewLoopAsync(run, cancel, beforeProof: true)) return false;
+        int fixesBefore = run.Trace.Count(s => s.Title.StartsWith("Fix app check", StringComparison.Ordinal));
+        if (!await ProveAsync(run, cancel)) return false;
+        if (run.Trace.Count(s => s.Title.StartsWith("Fix app check", StringComparison.Ordinal)) == fixesBefore) return true;
+        Log(run, "The app check needed a fix: the reviewer looks at the change again, with the evidence.");
+        if (!await ReviewLoopAsync(run, cancel, beforeProof: false)) return false;
+        return true;
+    }
+
+    private static async Task<bool> ReviewLoopAsync(FactoryRun run, CancellationToken cancel, bool beforeProof)
     {
         for (int review = 1; ; review++)
         {
             if (!await VerifyAsync(run, cancel)) return false;
-            if (!await ProveAsync(run, cancel)) return false;
             Enter(run, FactoryStage.Review, $"A reviewer that can only read checks the change (round {review}).");
-            (bool pass, string findings) = await ReviewAsync(run, cancel);
+            (bool pass, string findings) = await ReviewAsync(run, cancel, beforeProof);
             run.Review = findings;
             Log(run, (pass ? "Review: PASS\n" : "Review: FIX\n") + findings, ok: pass);
             if (pass) return true;
@@ -1594,6 +1735,7 @@ public static class Factory
                 the app and the services it depends on - with the skills, MCP servers and tools on this machine, from
                 this folder, exercise exactly what the task changed, and stop what you started when you are done.
                 {NamedSources}
+                {ProofReuse(run)}
 
                 The proof this feature needs, from your plan: {planned}
                 How to produce each kind:
@@ -1689,6 +1831,20 @@ public static class Factory
         and how it leads to what the customer sees; the fix - what, where, and who makes it; what is not verified.
         """;
 
+    // proofs that last: the scripts a check writes are kept per repo and reused next time (one run rewrote its browser
+    // script 8 times, 47 minutes, outside any known place); and the evidence stays lean (one run kept 186 files)
+    private static string ProofReuse(FactoryRun run)
+    {
+        string dir = Path.Combine(KnowledgeDir(run.Home), "proof-scripts");
+        string[] kept = Directory.Exists(dir) ? Directory.GetFiles(dir).Select(Path.GetFileName).OfType<string>().ToArray() : [];
+        return $"""
+            Proof scripts kept from earlier runs in this repo are in {dir}{(kept.Length > 0 ? ": " + string.Join(", ", kept) : " (none yet)")}.
+            Reuse and adapt them before writing a new one; save a script you write there (parameterised - the site, the
+            URL, the ids as arguments), never elsewhere outside the repo. Keep the evidence lean: the manifest and at most
+            about 15 files that prove the change - no whole logs, no repeated screenshots.
+            """;
+    }
+
     // a check uses what the task offered to check with - a run once skipped a bucket and a client the task named
     private const string NamedSources = """
         When the task names sources to check with - a database, a bucket, a running client or site, a URL, an MCP
@@ -1731,7 +1887,7 @@ public static class Factory
         return list + (missing.Count > 0 ? "\nPlanned but not produced: " + string.Join(", ", missing) : "");
     }
 
-    private static async Task<(bool Pass, string Findings)> ReviewAsync(FactoryRun run, CancellationToken cancel)
+    private static async Task<(bool Pass, string Findings)> ReviewAsync(FactoryRun run, CancellationToken cancel, bool beforeProof = false)
     {
         // the change against the base - the run's files only: new files are marked "intent to add" so the diff shows
         // them, and the developer's local changes are left out (their files and their index are not touched)
@@ -1749,6 +1905,12 @@ public static class Factory
 
             THE PLAN:
             {run.Plan}
+            {(run.Feedback.Count > 0 ? $"""
+
+            WHAT THE DEVELOPER ASKED FOR SINCE (it overrides the plan and its decisions - judge the change against this,
+            and never flag as out of scope what the developer asked for):
+            {string.Join("\n", run.Feedback.Select(f => $"- {(f.Revision > 0 ? $"revision {f.Revision}" : "feedback")}{(f.Kind.Length > 0 ? $" ({f.Kind})" : "")}: {f.Text}" + (f.Understood.Length > 0 ? $" - understood as: {f.Understood}" : "")))}
+            """ : "")}
 
             THE DIFF (against {run.BaseBranch}):
             {(diff.Length > 60000 ? diff[..60000] + "\n... (cut)" : diff)}
@@ -1758,10 +1920,9 @@ public static class Factory
             The proof the plan asked for: {(run.EvidencePlan.Count > 0 ? string.Join(", ", run.EvidencePlan) : "(none chosen)")}
             The evidence produced (its manifest):
             {EvidenceSummary(run)}
-            The check in the running app, by the coding agent:
-            {(run.Proof.Length > 0 ? Tail(run.Proof, 4000) : "(none)")}
-            Weak or missing proof for what the task changes (a planned kind not produced, a mutation score that leaves
-            the changed logic untested, uncovered changed lines) is a real problem.
+            {(beforeProof
+                ? "The app check in the running app comes AFTER your review, so there is none yet - do not ask for it and do not count its absence. Judge the code, the tests and the verify output: tests missing for changed logic, or changed lines no test runs, are a real problem."
+                : $"The check in the running app, by the coding agent:\n{(run.Proof.Length > 0 ? Tail(run.Proof, 4000) : "(none)")}\nWeak or missing proof for what the task changes (a planned kind not produced, a mutation score that leaves the changed logic untested, uncovered changed lines) is a real problem.")}
 
             Judge the evidence; do not ask for a command to be run that was run above, and do not report something only
             because your read-only tools cannot see it (say "not verified" in a finding only when it really matters).
@@ -1827,6 +1988,20 @@ public static class Factory
                 $"Take {(leaked.Count == 1 ? "it" : "them")} out of the commit (git reset --soft {run.BaseCommit[..Math.Min(12, run.BaseCommit.Length)]} and commit only the change's files), then Continue.");
         }
         if (inCommit.Count == 0) return Wait(run, "The commit holds no files of the change - nothing was pushed.");
+        // no secret leaves the machine: the lines the commit adds are scanned before the push (as Copilot's agent does)
+        (_, string added) = await GitAsync(run.Worktree, "diff", "--unified=0", "--no-color", run.BaseCommit + "..HEAD");
+        List<string> secrets = SecretsIn(added);
+        string secretsKey = string.Join("|", secrets);
+        if (secrets.Count > 0 && secretsKey == run.SecretsAccepted)
+        {
+            Log(run, "The secret scan's findings were accepted by you as not secrets: " + string.Join("; ", secrets));
+        }
+        else if (secrets.Count > 0)
+        {
+            run.SecretsFound = secretsKey;
+            return Wait(run, "The commit looks like it holds a secret - nothing was pushed:\n" + string.Join("\n", secrets.Take(5).Select(s => "- " + s)) +
+                $"\nTake it out of the commit (git reset --soft {run.BaseCommit[..Math.Min(12, run.BaseCommit.Length)]}), or Continue if it is not a secret.");
+        }
         string head = (await GitAsync(run.Worktree, "rev-parse", "HEAD")).Output.Trim();
         Log(run, $"Checked the commit {head[..Math.Min(12, head.Length)]}: {inCommit.Count} file{(inCommit.Count == 1 ? "" : "s")} of the change, none of your local files.");
         // 3. Claude pushes exactly that and opens the PR - it can no longer change what is committed
@@ -1952,6 +2127,12 @@ public static class Factory
     }
 
     private const int MaxManagerResumes = 2;
+    private static readonly TimeSpan ManagerBudget = TimeSpan.FromMinutes(5);
+    private const string ManagerLimits = """
+
+        Decide within about five minutes. Look at the run's folder, its logs and the services it uses - never search
+        whole drives, the Gradle home, the Ivy or Maven caches or node_modules.
+        """;
 
     /// <summary>
     /// The department manager: an autonomous run stopped. It finds out why - the log, the run's folder, the machine -
@@ -1997,10 +2178,16 @@ public static class Factory
             DECISION: ESCALATE <exactly what the human must do, in one or two sentences>
             """;
         string answer;
+        // a manager decides in minutes or hands it on - one spent 12 minutes on a find over the whole build cache
+        using var budget = new CancellationTokenSource(ManagerBudget);
         try
         {
-            answer = await ClaudeOnceAsync(run, folder, prompt, ["--permission-mode", "bypassPermissions", .. NoPublish, .. KnowledgeArgs(run)],
-                "Manager", CancellationToken.None);
+            answer = await ClaudeOnceAsync(run, folder, prompt + ManagerLimits, ["--permission-mode", "bypassPermissions", .. NoPublish, .. KnowledgeArgs(run, "nopublish")],
+                "Manager", budget.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            answer = $"DECISION: ESCALATE The manager could not decide within {ManagerBudget.TotalMinutes:0} minutes. The run stopped with: {stopped}";
         }
         catch (Exception ex)
         {
@@ -2336,7 +2523,7 @@ public static class Factory
     private static async Task<(string Answer, string? Error)> TurnAsync(FactoryRun run, bool isNew, string prompt, string title,
         CancellationToken cancel, bool publish = false)
     {
-        prompt += run.Autonomous ? AutonomousRule : OutsideRule;
+        prompt += (run.Autonomous ? AutonomousRule : OutsideRule) + EditRule;
         FactorySpan span = Begin(run, "turn", title, prompt);
         string answer = "";
         string? error = null;
@@ -2344,7 +2531,9 @@ public static class Factory
         {
             // troubleshooting, research and management change nothing: git's writing commands are denied too (they
             // may work right in the developer's folder - a folder-wide run has no branch of its own)
-            string[] args = [.. publish ? Frozen : NoPublish, .. run.Department != FactoryDepartment.Development ? Frozen[1..] : [], .. KnowledgeArgs(run)];
+            bool investigation = run.Department != FactoryDepartment.Development;
+            string guard = investigation ? "all" : publish ? "frozen" : "nopublish";
+            string[] args = [.. publish ? Frozen : NoPublish, .. investigation ? Frozen[1..] : [], .. KnowledgeArgs(run, guard)];
             Action<SessionEntry> onEntry = entry =>
             {
                 switch (entry.Kind)
@@ -2360,7 +2549,19 @@ public static class Factory
                         break;
                 }
             };
-            await LiveFor(run, isNew, args).TurnAsync(prompt, onEntry, cancel, root => Observe(run, span, root));
+            // a turn going round in circles is stopped, not waited out (the manager takes it from there)
+            using var turn = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+            string? stuck = null;
+            await LiveFor(run, isNew, args).TurnAsync(prompt, onEntry, turn.Token, root =>
+            {
+                Observe(run, span, root);
+                if (stuck == null && Stuck(span) is { } why)
+                {
+                    stuck = why;
+                    turn.Cancel();
+                }
+            });
+            if (stuck != null && !cancel.IsCancellationRequested) error = "The turn was stuck: " + stuck;
         }
         finally
         {
@@ -2380,9 +2581,62 @@ public static class Factory
         if (error == null && Line(answer, "NEEDS_YOU:") is { Length: > 0 } need)
         {
             Log(run, $"{title}:\n{answer}");
-            throw new NeedsYouException("Claude needs you: " + need);
+            throw new NeedsYouException("Claude needs you: " + need + MissingFiles(need, run.Worktree));
         }
         return (answer, error);
+    }
+
+    // common secret shapes in the lines a diff adds: "file: what" for each, the value itself never repeated
+    private static readonly (string What, Regex Pattern)[] SecretShapes =
+    [
+        ("a private key", new Regex(@"-----BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY")),
+        ("an AWS access key", new Regex(@"\b(AKIA|ASIA)[0-9A-Z]{16}\b")),
+        ("a Google API key", new Regex(@"\bAIza[0-9A-Za-z_\-]{35}\b")),
+        ("a GitHub token", new Regex(@"\bgh[pousr]_[A-Za-z0-9]{36,}\b")),
+        ("a Slack token", new Regex(@"\bxox[abprs]-[A-Za-z0-9-]{10,}")),
+        ("a password, key or token set to a literal", new Regex(@"(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret)\b\s*[:=]\s*[""'][^""'\s$%{}<>]{8,}[""']")),
+    ];
+
+    private static List<string> SecretsIn(string diff)
+    {
+        var found = new List<string>();
+        string file = "";
+        foreach (string line in diff.Replace("\r", "").Split('\n'))
+        {
+            if (line.StartsWith("+++ b/", StringComparison.Ordinal)) file = line[6..];
+            else if (line.StartsWith('+') && !line.StartsWith("+++", StringComparison.Ordinal))
+            {
+                foreach ((string what, Regex pattern) in SecretShapes)
+                {
+                    if (pattern.IsMatch(line)) found.Add($"{file}: {what}");
+                }
+            }
+        }
+        return found.Distinct().ToList();
+    }
+
+    // the files a request to the developer names that are not there - a run once asked to paste a file it never
+    // wrote; checked in code, so the developer is told before acting on it
+    private static string MissingFiles(string text, string folder)
+    {
+        var missing = Regex.Matches(text, @"`([^`\r\n]+\.[A-Za-z0-9]{1,6})`|([A-Za-z]:\\[^\s`'""*?<>|]+\.[A-Za-z0-9]{1,6})")
+            .Select(m => (m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value).Trim().TrimEnd('.', ',', ')'))
+            .Where(p => p.Contains('\\') || p.Contains('/'))
+            .Distinct()
+            .Where(p =>
+            {
+                try
+                {
+                    string full = Path.IsPathRooted(p) ? p : Path.Combine(folder, p);
+                    return !File.Exists(full) && !Directory.Exists(full);
+                }
+                catch (Exception)
+                {
+                    return false;
+                }
+            })
+            .ToList();
+        return missing.Count > 0 ? $"\n(Not on disk - check before acting on it: {string.Join(", ", missing)})" : "";
     }
 
     // what the factory learned for a repo, next to the app and never in the repo (the checkout stays clean):
@@ -2402,18 +2656,88 @@ public static class Factory
     }
 
     // the claude arguments that bring that knowledge into a turn
-    private static List<string> KnowledgeArgs(FactoryRun run)
+    private static List<string> KnowledgeArgs(FactoryRun run, string guard = "")
     {
         var args = new List<string>();
-        if (run.Home.Length == 0) return args;
-        string dir = KnowledgeDir(run.Home);
-        string rules = Path.Combine(dir, "rules.md");
-        if (File.Exists(rules)) args.AddRange(["--append-system-prompt-file", rules]);
-        string skills = Path.Combine(dir, "plugin", "skills");
-        if (Directory.Exists(skills) && Directory.EnumerateDirectories(skills).Any()) args.AddRange(["--plugin-dir", Path.Combine(dir, "plugin")]);
-        string settings = Path.Combine(dir, "settings.json");
-        if (File.Exists(settings)) args.AddRange(["--settings", settings]);
+        string? dir = run.Home.Length > 0 ? KnowledgeDir(run.Home) : null;
+        if (dir != null)
+        {
+            string rules = Path.Combine(dir, "rules.md");
+            if (File.Exists(rules)) args.AddRange(["--append-system-prompt-file", rules]);
+            string skills = Path.Combine(dir, "plugin", "skills");
+            if (Directory.Exists(skills) && Directory.EnumerateDirectories(skills).Any()) args.AddRange(["--plugin-dir", Path.Combine(dir, "plugin")]);
+        }
+        // one --settings: the hooks the factory learned for the repo, plus the guard for this kind of turn
+        string learned = dir != null ? Path.Combine(dir, "settings.json") : "";
+        if (GuardSettings(learned, guard) is { } settings) args.AddRange(["--settings", settings]);
         return args;
+    }
+
+    // the command guard: --disallowedTools rules match only the start of a command, so `git -c user.name=x commit`
+    // got past "Bash(git commit:*)" in a test. This PreToolUse hook reads the whole command (options before the
+    // subcommand stripped) and refuses what the turn may not do. Modes: nopublish (push, gh pr create), frozen (git
+    // writing commands except push), all (both).
+    private const string GuardScript = """
+        param([string]$Mode)
+        $in = [Console]::In.ReadToEnd()
+        try { $j = $in | ConvertFrom-Json } catch { exit 0 }
+        $tool = [string]$j.tool_name
+        # git tools of MCP servers (e.g. a git_commit or git_push tool) never pass through the shell
+        if ($tool -like 'mcp__*') {
+            $mcpPublish = '(?i)(git_push|pull_request_create|create_pull_request|createPullRequest)'
+            $mcpWrite = '(?i)git_(commit|add|reset|rebase|cherry_pick|merge|stash|checkout|switch|restore|rm|mv)'
+            $mcpDeny = switch ($Mode) { 'nopublish' { $mcpPublish } 'frozen' { $mcpWrite } default { "$mcpPublish|$mcpWrite" } }
+            if ($tool -match $mcpDeny) { [Console]::Error.WriteLine("Dev break factory: the tool $tool is not allowed in this step."); exit 2 }
+            exit 0
+        }
+        if ($tool -notin 'Bash', 'PowerShell') { exit 0 }
+        $cmd = [string]$j.tool_input.command
+        $flat = [regex]::Replace($cmd, '\bgit((\s+(-c\s+\S+|-C\s+("[^"]*"|''[^'']*''|\S+)|--[\w-]+(=\S+)?))+)', 'git')
+        $publish = '\bgit\s+push\b|\bgh\s+pr\s+create\b'
+        $write = '\bgit\s+(commit|add|reset|rebase|cherry-pick|merge|stash|checkout|switch|restore|rm|mv)\b'
+        $deny = switch ($Mode) { 'nopublish' { $publish } 'frozen' { $write } default { "$publish|$write" } }
+        if ($flat -match $deny) {
+            [Console]::Error.WriteLine("Dev break factory: '$($Matches[0])' is not allowed in this step.")
+            exit 2
+        }
+        exit 0
+        """;
+
+    // a settings file for the turn: the learned hooks (if any) with the guard added; null when there is neither
+    private static string? GuardSettings(string learned, string guard)
+    {
+        if (guard.Length == 0) return learned.Length > 0 && File.Exists(learned) ? learned : null;
+        string home = Path.Combine(AppContext.BaseDirectory, "factory-guard");
+        Directory.CreateDirectory(home);
+        string script = Path.Combine(home, "guard.ps1");
+        if (!File.Exists(script) || File.ReadAllText(script) != GuardScript) File.WriteAllText(script, GuardScript);
+        JsonObject settings = learned.Length > 0 && File.Exists(learned) ? JsonNode.Parse(File.ReadAllText(learned))?.AsObject() ?? [] : [];
+        if (settings["hooks"] is not JsonObject hooks) settings["hooks"] = hooks = [];
+        if (hooks["PreToolUse"] is not JsonArray pre) hooks["PreToolUse"] = pre = [];
+        pre.Add(new JsonObject
+        {
+            ["matcher"] = "Bash|PowerShell|mcp__.*",
+            ["hooks"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "command",
+                ["command"] = $"powershell -NoProfile -ExecutionPolicy Bypass -File \"{script}\" -Mode {guard}",
+            }),
+        });
+        string file = Path.Combine(home, $"settings-{guard}-{Math.Abs(learned.GetHashCode()):x}.json");
+        File.WriteAllText(file, settings.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        return file;
+    }
+
+    // stuck detection, with OpenHands' thresholds and, like it, only for repeats in a row (a long turn may well run
+    // `git status` four times): the same finished call 4 times running, or the same call failing 3 times running
+    private static string? Stuck(FactorySpan span)
+    {
+        List<FactoryToolCall> done = span.Tools.Where(t => t.Result != "running" && t.Detail.Length > 0).ToList();
+        bool Same(int n, Func<FactoryToolCall, bool> also) => done.Count >= n &&
+            done.TakeLast(n).All(t => t.Name == done[^1].Name && t.Detail == done[^1].Detail && t.Result == done[^1].Result && also(t));
+        if (Same(3, t => t.Result == "error")) return $"the same {done[^1].Name} call failed 3 times in a row: {done[^1].Detail}";
+        if (Same(4, _ => true)) return $"it ran the same {done[^1].Name} call 4 times in a row: {done[^1].Detail}";
+        return null;
     }
 
     // the run's open claude process when it fits this turn (same folder, session and arguments), else a new one -
