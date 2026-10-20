@@ -816,9 +816,17 @@ public partial class FactoryView : UserControl
     private void MessageText(StackPanel body, string text) =>
         body.Children.Add(new TextBlock { Text = text, Foreground = (Brush)FindResource("CoralInkBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
 
-    private static void OpenFile(string? file)
+    private void OpenFile(string? file)
     {
-        if (file != null && File.Exists(file)) Process.Start(new ProcessStartInfo(file) { UseShellExecute = true });
+        if (file != null && File.Exists(file)) Open(file);
+    }
+
+    // a page, file or folder outside Dev break, in front: the window stays on top for the hourly question, so the
+    // browser or Explorer would open behind it, unseen - it lets go until the next question puts it back on top
+    private void Open(string target)
+    {
+        if (Window.GetWindow(this) is { } window) window.Topmost = false;
+        Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
     }
 
     private void Stop_Click(object sender, RoutedEventArgs e)
@@ -833,7 +841,7 @@ public partial class FactoryView : UserControl
 
     private void OpenPr_Click(object sender, RoutedEventArgs e)
     {
-        if (_shown?.PrUrl is { Length: > 0 } url) Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        if (_shown?.PrUrl is { Length: > 0 } url) Open(url);
     }
 
     private void Session_Click(object sender, RoutedEventArgs e)
@@ -843,20 +851,17 @@ public partial class FactoryView : UserControl
 
     private void Proof_Click(object sender, RoutedEventArgs e)
     {
-        if (_shown != null && Directory.Exists(Factory.ProofDir(_shown))) Process.Start(new ProcessStartInfo(Factory.ProofDir(_shown)) { UseShellExecute = true });
+        if (_shown != null && Directory.Exists(Factory.ProofDir(_shown))) Open(Factory.ProofDir(_shown));
     }
 
     private void Report_Click(object sender, RoutedEventArgs e)
     {
-        if (_shown == null || !File.Exists(_shown.ReportFile)) return;
-        // the window stays on top for the hourly question: the browser would open behind it, unseen
-        if (Window.GetWindow(this) is { } window) window.Topmost = false;
-        Process.Start(new ProcessStartInfo(_shown.ReportFile) { UseShellExecute = true });
+        if (_shown != null && File.Exists(_shown.ReportFile)) Open(_shown.ReportFile);
     }
 
     private void Folder_Click(object sender, RoutedEventArgs e)
     {
-        if (_shown != null && Directory.Exists(_shown.Worktree)) Process.Start(new ProcessStartInfo(_shown.Worktree) { UseShellExecute = true });
+        if (_shown != null && Directory.Exists(_shown.Worktree)) Open(_shown.Worktree);
     }
 
     // --- shared bits ---
