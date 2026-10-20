@@ -121,6 +121,12 @@ public sealed class FactoryFeedback
 {
     public DateTime At { get; set; }
     public string Text { get; set; } = "";
+    /// <summary>What kind of change it asks for: wrong behaviour, missing, change design, bug - or empty.</summary>
+    public string Kind { get; set; } = "";
+    /// <summary>The revision it asked for (2 is the first round of changes).</summary>
+    public int Revision { get; set; }
+    /// <summary>What the run understood it to mean, in its own words, before it built.</summary>
+    public string Understood { get; set; } = "";
 }
 
 /// <summary>A task taken from its source to a draft pull request, in its own worktree and branch.</summary>
@@ -182,6 +188,14 @@ public sealed class FactoryRun
     public bool Retried { get; set; }
     /// <summary>How often the department manager resumed the run after it stopped (at most MaxManagerResumes).</summary>
     public int ManagerResumes { get; set; }
+    /// <summary>Which version of the product this is: 1 the first, and one more for each round of requested changes.</summary>
+    public int Revision { get; set; } = 1;
+    /// <summary>The developer accepted the run's work as it is.</summary>
+    public bool Accepted { get; set; }
+    /// <summary>Not autonomous: what the run understood the requested changes to mean, waiting for the developer's OK.</summary>
+    public string PendingChange { get; set; } = "";
+    /// <summary>Runs started for parts of a change that belong in another repo, by id.</summary>
+    public List<string> LinkedRuns { get; set; } = [];
     /// <summary>The manager's case for a human: what is blocked, what it tried, what it needs. Empty when none.</summary>
     public string ManagerCase { get; set; } = "";
     /// <summary>Changes to the factory itself the manager proposes, for a human to approve.</summary>
@@ -791,11 +805,39 @@ public static class Factory
     /// The developer's feedback goes back to the run: Claude applies it in the run's session, verify and review run
     /// again, and the draft PR is updated (or opened); then the run learns again.
     /// </summary>
-    public static Task FeedbackAsync(FactoryRun run, string text) => DriveAsync(run, learnAfter: true, async cancel =>
+    public static Task FeedbackAsync(FactoryRun run, string text, string kind = "") => DriveAsync(run, learnAfter: true, async cancel =>
     {
-        run.Feedback.Add(new FactoryFeedback { At = DateTime.Now, Text = text.Trim() });
+        // not autonomous, and the run is waiting for an OK on what it understood: an OK builds that change
+        if (run.PendingChange.Length > 0 && IsOk(text)) return await ReviseAsync(run, cancel, confirmed: true);
+        run.Accepted = false;
+        run.PendingChange = "";
+        // the next revision gets its own report, written when it is done
+        run.ReportFile = "";
+        run.Feedback.Add(new FactoryFeedback { At = DateTime.Now, Text = text.Trim(), Kind = kind, Revision = run.Revision + 1 });
         if (!Directory.Exists(run.Worktree)) return Wait(run, "The run's worktree is gone, so the feedback has nowhere to go.");
-        if (!await OnRunBranchAsync(run)) return true;
+        if (!run.FolderWide && !await OnRunBranchAsync(run)) return true;
+        // an answered run (troubleshooting, research, management, or an answer with no change): the answer is revised
+        // and checked again as the next revision - nothing in the repo changes
+        if (run.NoChange && run.Result.Length > 0)
+        {
+            FactoryFeedback ask = run.Feedback[^1];
+            string asked = ask.Kind.Length > 0 ? $" ({ask.Kind})" : "";
+            Enter(run, FactoryStage.Plan, $"Revision {ask.Revision}{asked}: " + ask.Text);
+            (string redo, string? redoError) = await TurnAsync(run, isNew: false, $"""
+                The developer reviewed your answer (revision {run.Revision}) and asks for changes{asked}:
+                {ask.Text.Trim()}
+
+                First, in one or two lines, say what the answer must now cover: a line UNDERSTOOD: <...>. If it overturns a
+                decision you took earlier, say which, and follow the developer. Then work it out with the tools on this
+                machine - change no file in the repo.
+                """, $"Revision {ask.Revision}", cancel);
+            if (redoError != null) return Wait(run, $"The revision {ask.Revision} turn failed: " + redoError);
+            ask.Understood = Line(redo, "UNDERSTOOD:") ?? "";
+            if (ask.Understood.Length > 0) Log(run, $"Revision {ask.Revision} - understood: {ask.Understood}");
+            run.Revision = ask.Revision;
+            Log(run, $"Revision {ask.Revision}:\n" + redo);
+            return await AnswerAsync(run, cancel);
+        }
         // nothing built yet: the feedback answers the plan's questions - the plan is updated, then built
         if (!run.Log.Any(s => s.Stage == FactoryStage.Build))
         {
@@ -818,18 +860,101 @@ public static class Factory
             if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
             return true;
         }
-        Enter(run, FactoryStage.Build, "Your feedback: " + text.Trim());
-        (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
-            The developer looked at your change and says:
-            {text.Trim()}
+        return await ReviseAsync(run, cancel, confirmed: false);
+    });
 
-            Apply it in this folder (if part of it is wrong, say why instead of doing it). Do not commit or push.
-            Reply with what you changed.
-            """, "Your feedback", cancel);
-        if (error != null) return Wait(run, "The feedback turn failed: " + error);
-        Log(run, "Fix:\n" + answer);
+    private static bool IsOk(string text) =>
+        text.Trim().TrimEnd('.', '!').ToLowerInvariant() is "ok" or "yes" or "go" or "confirm" or "confirmed" or "build it" or "כן" or "אוקיי";
+
+    // a round of requested changes: the run says what "done" now means, flags a decision it overturns and parts that
+    // belong in another repo (those start linked runs there), then builds, checks and updates the draft PR as the
+    // next revision. Not autonomous, it first stops with what it understood and builds on the developer's OK.
+    private static async Task<bool> ReviseAsync(FactoryRun run, CancellationToken cancel, bool confirmed)
+    {
+        FactoryFeedback ask = run.Feedback[^1];
+        int revision = ask.Revision > 0 ? ask.Revision : run.Revision + 1;
+        string kind = ask.Kind.Length > 0 ? $" ({ask.Kind})" : "";
+        bool firstUnderstand = !run.Autonomous && !confirmed;
+        Enter(run, FactoryStage.Build, $"Revision {revision}{kind}: " + ask.Text);
+        string earlier = run.Decisions.Length > 0 ? $"\nThe decisions you took on your own earlier:\n{run.Decisions}\n" : "";
+        (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
+            The developer reviewed revision {run.Revision} of your work and asks for changes{kind}:
+            {ask.Text.Trim()}
+            {earlier}
+            First, in one or two lines, say what "done" now means for this change: a line UNDERSTOOD: <...>. If it
+            overturns a decision you took earlier, say which, and follow the developer. If part of it needs a change in
+            another repository than this one, keep to your part here and add one line per other repository:
+            OTHER_REPO: <its folder> - <what must change there, as a task>.
+            {(firstUnderstand
+                ? "Then stop: do not change any file yet - the developer confirms your understanding first."
+                : "Then apply it in this folder. Do not commit or push. Reply with what you changed.")}
+            """, $"Revision {revision}", cancel);
+        if (error != null) return Wait(run, $"The revision {revision} turn failed: " + error);
+        ask.Understood = Line(answer, "UNDERSTOOD:") ?? ask.Understood;
+        if (ask.Understood.Length > 0) Log(run, $"Revision {revision} - understood: {ask.Understood}");
+        if (firstUnderstand)
+        {
+            run.PendingChange = ask.Understood.Length > 0 ? ask.Understood : answer;
+            return Wait(run, $"Check what the run understood for revision {revision}: {run.PendingChange}\n" +
+                "Send \"ok\" to the run to build it, or send what is wrong with it.");
+        }
+        run.PendingChange = "";
+        run.Revision = revision;
+        Log(run, $"Revision {revision}:\n" + answer);
+        StartLinkedRuns(run, answer, revision);
         if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
         return true;
+    }
+
+    /// <summary>Another repo has to change too: a linked Development run there, its task the part this one cannot do.</summary>
+    public static event Action<FactoryRun>? RunCreated;
+
+    private static void StartLinkedRuns(FactoryRun run, string answer, int revision)
+    {
+        foreach (string line in answer.Replace("\r", "").Split('\n').Select(l => l.Trim().TrimStart('*', '-', ' '))
+                     .Where(l => l.StartsWith("OTHER_REPO:", StringComparison.OrdinalIgnoreCase)))
+        {
+            string rest = line[11..].Trim();
+            int dash = rest.IndexOf(" - ", StringComparison.Ordinal);
+            string folder = (dash > 0 ? rest[..dash] : rest).Trim().Trim('`', '"');
+            string what = dash > 0 ? rest[(dash + 3)..].Trim() : rest;
+            // only a git repo under the folder the developer gave the run - never a path the model made up
+            string full;
+            try
+            {
+                full = Path.GetFullPath(Path.IsPathRooted(folder) ? folder : Path.Combine(run.Folder, folder)).TrimEnd('\\', '/');
+            }
+            catch (Exception)
+            {
+                full = "";
+            }
+            string? known = ClaudeProjects.ReposUnder(run.Folder, 3).FirstOrDefault(r => Path.GetFullPath(r).TrimEnd('\\', '/').Equals(full, StringComparison.OrdinalIgnoreCase));
+            if (known == null || known.Equals(run.Repo, StringComparison.OrdinalIgnoreCase))
+            {
+                Log(run, $"Revision {revision} names another repo ({rest}), but it is not a git repo under {run.Folder} - nothing was started; do it there yourself.", ok: false);
+                continue;
+            }
+            folder = known;
+            FactoryRun linked = Create(FactorySource.Typed, $"""
+                {what}
+
+                This is the part of revision {revision} of the run "{run.Title}" ({run.Id}) that belongs in this repo.
+                {(run.PrUrl.Length > 0 ? "That run's draft PR: " + run.PrUrl + " - say in this PR's description that the two go together." : "")}
+                """, folder, "", "", run.Autonomous, run.Report, FactoryDepartment.Development);
+            run.LinkedRuns.Add(linked.Id);
+            Log(run, $"Revision {revision}: started a linked run in {folder} for: {what}");
+            RunCreated?.Invoke(linked);
+            _ = RunAsync(linked);
+        }
+    }
+
+    /// <summary>The developer accepts the run's work as it is; after rounds of changes, it learns what they meant.</summary>
+    public static Task AcceptAsync(FactoryRun run) => DriveAsync(run, learnAfter: run.Revision > 1, cancel =>
+    {
+        run.Accepted = true;
+        Log(run, run.Revision > 1 ? $"Accepted at revision {run.Revision}." : "Accepted.");
+        End(run, FactoryStage.Done, run.Note);
+        return Task.FromResult(false);
     });
 
     /// <summary>The developer rates the run (good / bad, with a note); the run learns again from what they said.</summary>
@@ -1934,7 +2059,13 @@ public static class Factory
             string index = memoryDir != null && File.Exists(Path.Combine(memoryDir, "MEMORY.md")) ? File.ReadAllText(Path.Combine(memoryDir, "MEMORY.md")) : "";
             string log = string.Join("\n\n", run.Log.Select(s => $"[{s.Stage}{(s.Ok ? "" : ", FAILED")}] {Tail(s.Text, 1500)}"));
             // what the developer said: their feedback, their rating, and the lessons they turned down for this repo
-            string said = string.Join("\n", run.Feedback.Select(f => "- feedback: " + f.Text));
+            string said = string.Join("\n", run.Feedback.Select(f => $"- feedback{(f.Revision > 0 ? $" asking for revision {f.Revision}" : "")}{(f.Kind.Length > 0 ? $" ({f.Kind})" : "")}: {f.Text}" +
+                (f.Understood.Length > 0 ? $" - the run understood: {f.Understood}" : "")));
+            if (run.Accepted && run.Revision > 1)
+            {
+                said += $"\n- accepted the work at revision {run.Revision}: the rounds of changes above show what the developer meant " +
+                    "the first time - keep that as a lesson (what such a request means in this repo), so the next run gets it right at once";
+            }
             if (run.Rating.Length > 0) said += $"\n- rated the run {run.Rating}" + (run.RatingNote.Length > 0 ? ": " + run.RatingNote : "");
             string rejected = string.Join("\n", Runs.Where(r => r.Repo.Equals(run.Repo, StringComparison.OrdinalIgnoreCase))
                 .SelectMany(r => r.Lessons).Where(l => l.Status is "dismissed" or "undone")

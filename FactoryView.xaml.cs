@@ -45,6 +45,13 @@ public partial class FactoryView : UserControl
     {
         InitializeComponent();
         Factory.Changed += run => Dispatcher.BeginInvoke(() => Update(run));
+        // a linked run the factory started for another repo: it shows up in History at once
+        Factory.RunCreated += run => Dispatcher.BeginInvoke(() =>
+        {
+            if (_rows.ContainsKey(run.Id)) return;
+            RunList.Items.Insert(0, Row(run));
+            UpdateRunsSummary();
+        });
         _watchdog.Tick += (_, _) =>
         {
             foreach ((FactoryRun run, string text) in Factory.CheckSlow())
@@ -211,7 +218,7 @@ public partial class FactoryView : UserControl
     {
         if (!_rows.TryGetValue(run.Id, out var row)) return;
         SetLight(row.Light, run);
-        row.Status.Text = $"{(run.Department != FactoryDepartment.Development ? run.Department + " · " : "")}{System.IO.Path.GetFileName(run.Repo.Length > 0 ? run.Repo : run.Folder)} · {StageName(run)}{(run.Cost > 0 ? $" · ${run.Cost:0.00}" : "")}";
+        row.Status.Text = $"{(run.Department != FactoryDepartment.Development ? run.Department + " · " : "")}{(run.Revision > 1 ? $"Revision {run.Revision} · " : "")}{System.IO.Path.GetFileName(run.Repo.Length > 0 ? run.Repo : run.Folder)} · {(run.Accepted ? "Accepted" : StageName(run))}{(run.Cost > 0 ? $" · ${run.Cost:0.00}" : "")}";
         if (((row.Status.Parent as StackPanel)?.Children[0]) is TextBlock title) title.Text = run.Title;
     }
 
@@ -226,6 +233,11 @@ public partial class FactoryView : UserControl
     private void Update(FactoryRun run)
     {
         if (run.Working) _working.Add(run.Id);
+        else if (_working.Contains(run.Id) && run.Stage == FactoryStage.Done && run.Revision > 1 && !run.Accepted)
+        {
+            _working.Remove(run.Id);
+            App.Alert("Dev break factory - revision ready", $"{Short(run.Title, 60)}\nRevision {run.Revision} is ready for your review.");
+        }
         else if (_working.Remove(run.Id) && run.Stage == FactoryStage.NeedsYou)
         {
             // the manager escalated: a human has to act (or, not autonomous, the run asks as before)
@@ -454,6 +466,7 @@ public partial class FactoryView : UserControl
         // feedback needs a run that is not working and still has its worktree and session
         // the run has a session to talk to once its first Claude turn ran (a NEEDS_YOU in the plan leaves no plan yet)
         bool canFeedback = !run.Working && !run.CleanedUp && run.Trace.Any(s => s.Kind == "turn") && Directory.Exists(run.Worktree);
+        ShowReview(run);
         FeedbackButton.IsEnabled = canFeedback;
         FeedbackBox.IsEnabled = canFeedback;
         RateButton.IsEnabled = !run.Working && run.Repo.Length > 0;
@@ -758,8 +771,82 @@ public partial class FactoryView : UserControl
     {
         if (_shown == null || FeedbackBox.Text.Trim().Length == 0) return;
         string text = FeedbackBox.Text;
+        string kind = KindWrong.IsChecked == true ? "wrong behaviour" : KindMissing.IsChecked == true ? "missing"
+            : KindDesign.IsChecked == true ? "change design" : KindBug.IsChecked == true ? "bug" : "";
         FeedbackBox.Clear();
-        await Factory.FeedbackAsync(_shown, text);
+        foreach (RadioButton chip in new[] { KindWrong, KindMissing, KindDesign, KindBug }) chip.IsChecked = false;
+        await Factory.FeedbackAsync(_shown, text, kind);
+    }
+
+    // --- the review of finished work: its own decisions, then accept it or ask for changes ---
+
+    private string _reviewFor = "";
+    private readonly List<(CheckBox Ok, TextBox How, string Decision)> _decisionRows = [];
+
+    private void ShowReview(FactoryRun run)
+    {
+        bool show = !run.Working && run.Stage == FactoryStage.Done && !run.Accepted && run.Trace.Any(s => s.Kind == "turn");
+        ReviewBox.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (!show) return;
+        string key = $"{run.Id}|{run.Revision}|{run.Decisions.GetHashCode()}";
+        if (key == _reviewFor) return;
+        _reviewFor = key;
+        ReviewTitle.Text = $"Review revision {run.Revision}" +
+            (run.PrUrl.Length > 0 ? " - the draft PR is ready" : run.ReportFile.Length > 0 ? " - the report is ready" : "");
+        ReviewDecisions.Children.Clear();
+        _decisionRows.Clear();
+        List<string> decisions = DecisionItems(run.Decisions);
+        ReviewDecisionsLabel.Visibility = decisions.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        foreach (string decision in decisions)
+        {
+            var ok = new CheckBox
+            {
+                IsChecked = true, Margin = new Thickness(0, 4, 0, 0),
+                Content = new TextBlock { Text = Short(decision.Replace("\n", " "), 260), TextWrapping = TextWrapping.Wrap, FontSize = 12.5 },
+            };
+            AutomationProperties.SetName(ok, "Decision ok: " + Short(decision, 60));
+            var how = new TextBox
+            {
+                Style = (Style)FindResource("NotebookBox"), FontSize = 12.5, Margin = new Thickness(22, 2, 0, 2), Padding = new Thickness(8, 4, 8, 4),
+                Visibility = Visibility.Collapsed, ToolTip = "How should it be instead?",
+            };
+            AutomationProperties.SetName(how, "How instead: " + Short(decision, 60));
+            ok.Unchecked += (_, _) => { how.Visibility = Visibility.Visible; how.Focus(); };
+            ok.Checked += (_, _) => how.Visibility = Visibility.Collapsed;
+            ReviewDecisions.Children.Add(ok);
+            ReviewDecisions.Children.Add(how);
+            _decisionRows.Add((ok, how, decision));
+        }
+    }
+
+    // the plan's numbered decisions ("1. Should...? Suggested: ...") as separate items
+    private static List<string> DecisionItems(string decisions) =>
+        System.Text.RegularExpressions.Regex.Split(decisions.Replace("\r", "").Trim(), @"(?m)^\s*(?=\d+\.\s)")
+            .Select(d => d.Trim()).Where(d => d.Length > 0).ToList();
+
+    private async void Accept_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown is not { } run || run.Working) return;
+        ReviewBox.Visibility = Visibility.Collapsed;
+        await Factory.AcceptAsync(run);
+    }
+
+    // back to the factory: the unticked decisions, with how they should be, go into the request for the next revision
+    private void Changes_Click(object sender, RoutedEventArgs e)
+    {
+        List<string> changed = _decisionRows.Where(r => r.Ok.IsChecked != true).Select(r =>
+            $"- Your decision \"{Short(r.Decision.Replace("\n", " "), 140)}\" is not what I want" +
+            (r.How.Text.Trim().Length > 0 ? ": " + r.How.Text.Trim() : ".")).ToList();
+        if (changed.Count > 0)
+        {
+            FeedbackBox.Text = string.Join("\n", changed) + (FeedbackBox.Text.Trim().Length > 0 ? "\n" + FeedbackBox.Text : "");
+            if (KindWrong.IsChecked != true && KindMissing.IsChecked != true && KindDesign.IsChecked != true && KindBug.IsChecked != true)
+            {
+                KindDesign.IsChecked = true;
+            }
+        }
+        FeedbackBox.Focus();
+        FeedbackBox.CaretIndex = FeedbackBox.Text.Length;
     }
 
     private void ShowLessons(FactoryRun run)

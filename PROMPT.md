@@ -571,6 +571,25 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
 - Files under `.claude/` in the developer's local changes (Claude tooling state - a hook's edit log grows with every
   edit) never stop a run when they change (seen: `.claude/session-changes.log` stopped a run that never touched it);
   they stay in the local-changes set, so the commit check still keeps them out of every commit.
+- **Review and revise** (`Revision`, from 1; `Accepted`): a done run, not accepted, shows a violet card "Review revision
+  N" (with "the draft PR is ready" or "the report is ready") listing the run's own decisions (`Decisions`, split on
+  their numbers) as ticked boxes - unticking one opens "How should it be instead?". **Accept** (`AcceptAsync`) marks it
+  accepted and, after rounds of changes, learns: Learn hears each request with its revision, kind and what the run
+  understood, and "accepted at revision N: what the developer meant the first time - keep it as a lesson".
+  **Request changes** puts each unticked decision ("Your decision "..." is not what I want: <how>") into the feedback
+  box and picks "Change design" unless a kind chip is chosen (Wrong behaviour, Missing, Change design, Bug).
+  Send (`FeedbackAsync(text, kind)`) records it as `FactoryFeedback { Kind, Revision = Revision + 1 }`, clears the
+  report (each revision writes its own) and: an answered run (`NoChange` with a Result) gets a turn "reviewed your
+  answer (revision N) and asks for changes" that starts with `UNDERSTOOD:`, then the answer check again; a built run
+  goes to `ReviseAsync`: one turn that first says `UNDERSTOOD: <what done now means>`, names an earlier decision it
+  overturns (and follows the developer), adds `OTHER_REPO: <folder> - <task>` for a part in another repository, then
+  changes the files - verify, prove, review and the PR update follow, and `Revision` becomes N. Not autonomous, that
+  turn only states its understanding and the run waits ("Send "ok" to build it"); an "ok" (also yes, go, confirm)
+  builds it. `OTHER_REPO` starts a linked Development run (`LinkedRuns`, shown in History at once via `RunCreated`)
+  only for a git repo under the run's folder (full path, one of `ReposUnder(folder, 3)`, not the run's own); anything
+  else is logged and nothing starts. History shows "Revision N · ..." and "Accepted"; a run whose revision is done
+  raises "Dev break factory - revision ready". (Tested: a decision unticked with "new-customer revenue, not
+  retention" came back as revision 2 that named the decision it overturned, with a new report; Accept learned.)
 - **Delete…** (a run's header, not while it works): deletes one run for good, after a diagnosis.
   - The diagnosis: the run's lessons still kept (saved, applied, pending) are listed first as Insights items; then a
     `claude -p` without tools reads the task, result, log and lessons against the repo's `MEMORY.md`, the global
