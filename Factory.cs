@@ -45,6 +45,19 @@ public sealed class FactoryLesson
     public string UndoData { get; set; } = "";
 }
 
+/// <summary>An insight kept from a factory run that was deleted.</summary>
+public sealed class FactoryInsight
+{
+    public string Repo { get; set; } = "";
+    public string Kind { get; set; } = "insight";
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string Content { get; set; } = "";
+    /// <summary>The title of the run it came from.</summary>
+    public string From { get; set; } = "";
+    public DateTime Created { get; set; }
+}
+
 /// <summary>A tool call Claude made in a step, and how it ended.</summary>
 public sealed class FactoryToolCall
 {
@@ -491,6 +504,173 @@ public static class Factory
         Log(run, freed);
         return freed;
     }
+
+    /// <summary>Something a deleted run leaves behind on purpose: where it goes, its name, one line, and the note itself.</summary>
+    public sealed record KeepSuggestion(string Where, string Name, string Description, string Content); // repo | global | insights
+
+    /// <summary>
+    /// Before a run is deleted: what is worth keeping from it. The run's own lessons that are still kept come first (as
+    /// insights, so the Insights tab keeps them once the record is gone); then a Claude without tools reads the run
+    /// against the repo's memory, the global CLAUDE.md and Insights and suggests what else to keep, and where.
+    /// </summary>
+    public static async Task<List<KeepSuggestion>> DiagnoseAsync(FactoryRun run)
+    {
+        var keep = run.Lessons.Where(l => l.Status is "saved" or "applied" or "pending")
+            .Select(l => new KeepSuggestion("insights", l.Name, l.Description, l.Content)).ToList();
+        string? memoryDir = run.Repo.Length > 0 && Directory.Exists(run.Repo) ? await CliSetup.MemoryDirAsync(run.Repo) : null;
+        string repoIndex = memoryDir != null && File.Exists(Path.Combine(memoryDir, "MEMORY.md")) ? File.ReadAllText(Path.Combine(memoryDir, "MEMORY.md")) : "";
+        string global = File.Exists(GlobalClaudeMd) ? File.ReadAllText(GlobalClaudeMd) : "";
+        string insights = string.Join("\n", Insights.Select(i => $"- {i.Name}: {i.Description}"));
+        string log = string.Join("\n\n", run.Log.Select(s => $"[{s.Stage}{(s.Ok ? "" : ", FAILED")}] {Tail(s.Text, 1200)}"));
+        string prompt = $"""
+            A coding agent's run is about to be deleted for good: its record, trace, evidence and report. Find what is
+            worth keeping from it before that, and where. Keep only what a later run or the developer would really use
+            and what is not kept already; most runs leave 0-3 things.
+
+            THE TASK: {run.Task}
+            HOW IT ENDED: {run.Stage} - {run.Note}
+            THE RESULT:
+            {Tail(run.Result, 6000)}
+            THE LOG:
+            {Tail(log, 14000)}
+            ITS LESSONS (kept as insights already - do not repeat them):
+            {(run.Lessons.Count > 0 ? string.Join("\n", run.Lessons.Select(l => $"- {l.Kind} {l.Name}: {l.Description}")) : "(none)")}
+
+            THE REPO'S MEMORY ALREADY SAYS (do not repeat it):
+            {(repoIndex.Length > 0 ? repoIndex : "(nothing)")}
+            THE GLOBAL CLAUDE.md ALREADY SAYS (do not repeat it):
+            {(global.Length > 0 ? Tail(global, 6000) : "(nothing)")}
+            INSIGHTS ALREADY KEPT (do not repeat them):
+            {(insights.Length > 0 ? insights : "(nothing)")}
+
+            Where each can go:
+            - repo: a fact about this repo for its Claude memory (how to run or check it, where logic lives, a gotcha,
+              what this run found out). Under 120 words.
+            - global: one short imperative line true across ALL repos on this machine (a tool, a login, a workflow) -
+              it goes into the global CLAUDE.md that every session loads, so only when it really is general.
+            - insights: what this mission found or decided, for the developer to read later in Dev break.
+            Reply in exactly this format, one block each:
+            KEEP: <repo|global|insights> | <short-kebab-case-name> | <one-line description>
+            <content>
+            END
+            Or reply with the single word NONE.
+            """;
+        string answer = await ClaudeOnceAsync(run, Path.GetTempPath(), prompt,
+            ["--tools", "", "--strict-mcp-config", "--setting-sources", ""], "Diagnose before delete", CancellationToken.None);
+        foreach (Match block in Regex.Matches(answer.Replace("\r", ""), @"^KEEP:\s*(repo|global|insights)\s*\|\s*([^|\n]+?)\s*\|\s*([^\n]*)\n(.*?)\nEND\s*$",
+                     RegexOptions.Multiline | RegexOptions.Singleline))
+        {
+            keep.Add(new KeepSuggestion(block.Groups[1].Value, Slug(block.Groups[2].Value), block.Groups[3].Value.Trim(), block.Groups[4].Value.Trim()));
+        }
+        return keep;
+    }
+
+    /// <summary>Commits on the run's local branch beyond its base that are not on the remote: what deleting it loses.</summary>
+    public static async Task<int> UnpushedCommitsAsync(FactoryRun run)
+    {
+        if (run.Repo.Length == 0 || run.Branch.Length == 0 || run.BaseCommit.Length == 0 || !Directory.Exists(run.Repo)) return 0;
+        (int exists, _) = await GitAsync(run.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/" + run.Branch);
+        if (exists != 0) return 0;
+        (int code, string count) = await GitAsync(run.Repo, "rev-list", "--count", run.BaseCommit + ".." + run.Branch, "--not", "--remotes");
+        return code == 0 && int.TryParse(count.Trim(), out int n) ? n : 0;
+    }
+
+    // the developer's global Claude Code memory: every session on this machine loads it
+    private static string GlobalClaudeMd => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "CLAUDE.md");
+
+    /// <summary>
+    /// Deletes a run for good, after saving what the developer kept from it: everything a clean up deletes, its
+    /// designed report, its local branch (even unpushed - the developer was warned) and its record. The remote branch
+    /// and PR only when asked: a one-off Claude with the developer's setup closes the PR and deletes the branch there.
+    /// Never the developer's checkout or its own files. Returns what happened.
+    /// </summary>
+    public static async Task<string> DeleteAsync(FactoryRun run, IReadOnlyList<KeepSuggestion> keep, bool remote)
+    {
+        if (run.Working) return "the run is working";
+        var done = new List<string>();
+        // nothing is kept or deleted while the checkout still holds the run's uncommitted work
+        CleanupInfo before = await InspectAsync(run);
+        if (run.InCheckout && before.Uncommitted > 0 && Directory.Exists(run.Repo) && await HeadAsync(run.Repo) == run.Branch)
+        {
+            return $"Your checkout is on {run.Branch} with {before.Uncommitted} uncommitted change(s) - commit or stash them first.";
+        }
+        // 1. what the developer kept
+        string? memoryDir = run.Repo.Length > 0 && Directory.Exists(run.Repo) ? await CliSetup.MemoryDirAsync(run.Repo) : null;
+        foreach (KeepSuggestion k in keep)
+        {
+            switch (k.Where)
+            {
+                case "repo" when memoryDir != null:
+                    SaveMemory(memoryDir, new FactoryLesson
+                    {
+                        Name = k.Name, Description = k.Description,
+                        Content = k.Content + $"\n\nKept by Dev break when deleting the factory run \"{run.Title}\" ({DateTime.Now:yyyy-MM-dd}).",
+                    });
+                    done.Add("repo memory: " + k.Name);
+                    break;
+                case "global":
+                    Directory.CreateDirectory(Path.GetDirectoryName(GlobalClaudeMd)!);
+                    string existing = File.Exists(GlobalClaudeMd) ? File.ReadAllText(GlobalClaudeMd) : "";
+                    File.AppendAllText(GlobalClaudeMd, (existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : "") + $"- {k.Content.Replace("\n", " ").Trim()}\n");
+                    done.Add("global CLAUDE.md: " + k.Name);
+                    break;
+                case "insights":
+                    Insights.Add(new FactoryInsight
+                    {
+                        Repo = run.Repo, Name = k.Name, Description = k.Description, Content = k.Content,
+                        Kind = run.Lessons.FirstOrDefault(l => l.Name == k.Name)?.Kind ?? "insight",
+                        From = run.Title.Length > 0 ? run.Title : run.Task, Created = run.Created,
+                    });
+                    done.Add("insight: " + k.Name);
+                    break;
+            }
+        }
+        SaveInsights();
+        // 2. the remote branch and PR, when asked
+        if (remote && run.Repo.Length > 0 && run.Branch.Length > 0 && Directory.Exists(run.Repo))
+        {
+            string pr = run.PrUrl.Length > 0
+                ? $"First decline (close without merging) the pull request {run.PrUrl} with the git host's tools on this machine - its official MCP server when one is connected, else its CLI or API. "
+                : "";
+            string answer = await ClaudeOnceAsync(run, run.Repo, $"""
+                {pr}Then delete the remote branch {run.Branch} on origin (git push origin --delete {run.Branch}) if it exists.
+                Do nothing else. Reply with one line per action and whether it worked.
+                """, ["--permission-mode", "bypassPermissions"], "Delete remote branch and PR", CancellationToken.None);
+            done.Add("remote: " + answer.Replace("\r", "").Replace("\n", " ").Trim());
+        }
+        // 3. everything on this machine
+        CleanupInfo info = await InspectAsync(run);
+        if (!run.CleanedUp || HasOwnWorktree(run))
+        {
+            string cleaned = await CleanUpAsync(run);
+            if (!cleaned.StartsWith("Cleaned up", StringComparison.Ordinal)) return cleaned;
+        }
+        if (run.Repo.Length > 0 && run.Branch.Length > 0 && Directory.Exists(run.Repo) && await HeadAsync(run.Repo) != run.Branch)
+        {
+            (int deleted, _) = await GitAsync(run.Repo, "branch", "-D", run.Branch);
+            if (deleted == 0) done.Add("local branch " + run.Branch);
+        }
+        string traces = Path.Combine(AppContext.BaseDirectory, "traces");
+        if (Directory.Exists(traces))
+        {
+            foreach (string f in Directory.GetFiles(traces, run.Id + "-*")) File.Delete(f);
+            foreach (string d in Directory.GetDirectories(traces, run.Id + "-*")) await Task.Run(() => DeleteTree(d));
+        }
+        // 4. the record
+        Runs.Remove(run);
+        Save();
+        return $"Deleted the run \"{run.Title}\" - {Size(info.Bytes)} freed." + (done.Count > 0 ? " Kept and done: " + string.Join("; ", done) + "." : "");
+    }
+
+    /// <summary>Insights kept from runs that were deleted: the Insights tab shows them with the live runs' lessons.</summary>
+    public static List<FactoryInsight> Insights => _insights ??= File.Exists(InsightsPath)
+        ? JsonSerializer.Deserialize<List<FactoryInsight>>(File.ReadAllText(InsightsPath)) ?? [] : [];
+
+    private static List<FactoryInsight>? _insights;
+    private static readonly string InsightsPath = Path.Combine(AppContext.BaseDirectory, "insights.json");
+
+    private static void SaveInsights() =>
+        File.WriteAllText(InsightsPath, JsonSerializer.Serialize(Insights, new JsonSerializerOptions { WriteIndented = true }));
 
     // everything a run left on disk besides its record: its own worktree and that worktree's session files, its
     // evidence, its exported traces. A run in the developer's checkout has no worktree, and its sessions are among

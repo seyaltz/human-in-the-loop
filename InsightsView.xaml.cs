@@ -27,12 +27,15 @@ public partial class InsightsView : UserControl
             Factory.Changed += _ => Dispatcher.BeginInvoke(() => { if (IsVisible) Refresh(); });
         }
         Body.Children.Clear();
+        // the live runs' kept lessons, and the insights kept from runs that were deleted
         var kept = Factory.Runs
-            .SelectMany(run => run.Lessons.Where(l => l.Status is "saved" or "applied" or "pending").Select(lesson => (run, lesson)))
-            .OrderByDescending(x => x.run.Created)
+            .SelectMany(run => run.Lessons.Where(l => l.Status is "saved" or "applied" or "pending")
+                .Select(l => new Entry(run.Repo, l.Kind, l.Name, l.Description, l.Content, l.Status, run.Title.Length > 0 ? run.Title : run.Task, run.Created)))
+            .Concat(Factory.Insights.Select(i => new Entry(i.Repo, i.Kind, i.Name, i.Description, i.Content, "kept", i.From + " (deleted run)", i.Created)))
+            .OrderByDescending(x => x.Created)
             .ToList();
-        int repos = kept.Select(x => x.run.Repo).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        int runs = kept.Select(x => x.run.Id).Distinct().Count();
+        int repos = kept.Select(x => x.Repo).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        int runs = kept.Select(x => x.From).Distinct().Count();
         Body.Children.Add(new TextBlock
         {
             Text = kept.Count == 0
@@ -40,10 +43,10 @@ public partial class InsightsView : UserControl
                 : $"{Count(kept.Count, "insight")} from {Count(runs, "factory run")} in {Count(repos, "repo")} - what the next run there starts with.",
             Style = (Style)Res("Caption"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 0, 12),
         });
-        foreach (var repo in kept.GroupBy(x => x.run.Repo, StringComparer.OrdinalIgnoreCase))
+        foreach (var repo in kept.GroupBy(x => x.Repo, StringComparer.OrdinalIgnoreCase))
         {
             var list = new StackPanel();
-            foreach ((FactoryRun run, FactoryLesson lesson) in repo) list.Children.Add(Insight(run, lesson));
+            foreach (Entry entry in repo) list.Children.Add(Insight(entry));
             string name = repo.Key.Length > 0 ? Path.GetFileName(repo.Key.TrimEnd('\\', '/')) : "(no repo)";
             Body.Children.Add(Card(name, $"{Count(repo.Count(), "insight")} · {repo.Key}", list));
         }
@@ -51,10 +54,13 @@ public partial class InsightsView : UserControl
 
     private static string Count(int n, string what) => $"{n} {what}{(n == 1 ? "" : "s")}";
 
-    private static UIElement Insight(FactoryRun run, FactoryLesson lesson)
+    // one insight: a live run's lesson, or one kept from a deleted run
+    private sealed record Entry(string Repo, string Kind, string Name, string Description, string Content, string Status, string From, DateTime Created);
+
+    private static UIElement Insight(Entry lesson)
     {
-        string kind = lesson.Kind switch { "memory" => "memory", "claude-md" => "rule", "hook" => "hook", _ => "skill" };
-        string state = lesson.Status switch { "saved" => "in the repo's memory", "applied" => "applied", _ => "waits for your OK" };
+        string kind = lesson.Kind switch { "memory" => "memory", "claude-md" => "rule", "hook" => "hook", "skill" => "skill", _ => "insight" };
+        string state = lesson.Status switch { "saved" => "in the repo's memory", "applied" => "applied", "kept" => "kept when its run was deleted", _ => "waits for your OK" };
         var head = new TextBlock { TextWrapping = TextWrapping.Wrap };
         head.Inlines.Add(new Run(kind.ToUpperInvariant() + "  ") { FontSize = 11, FontWeight = FontWeights.Bold, Foreground = (Brush)Res("VioletBrush") });
         head.Inlines.Add(new Run(lesson.Name) { FontWeight = FontWeights.Bold, FontSize = 13.5 });
@@ -69,7 +75,7 @@ public partial class InsightsView : UserControl
         });
         body.Children.Add(new TextBlock
         {
-            Text = $"from \"{(run.Title.Length > 0 ? run.Title : run.Task)}\" · {run.Created:yyyy-MM-dd HH:mm}",
+            Text = $"from \"{lesson.From}\" · {lesson.Created:yyyy-MM-dd HH:mm}",
             Style = (Style)Res("Caption"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0),
         });
         return body;

@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
@@ -281,6 +282,98 @@ public partial class FactoryView : UserControl
             });
     }
 
+    // deleting one run: Claude first checks what is worth keeping; the developer ticks what to keep, then it all goes
+    private FactoryRun? _deleting;
+    private List<(CheckBox Box, Factory.KeepSuggestion Keep)> _keepBoxes = [];
+
+    private async void Delete_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown is not { } run || run.Working) return;
+        _deleting = run;
+        ConfirmBar.Visibility = Visibility.Collapsed;
+        DeletePanel.Visibility = Visibility.Visible;
+        DeleteConfirmButton.IsEnabled = false;
+        KeepList.Children.Clear();
+        RemoteBox.Visibility = Visibility.Collapsed;
+        DeleteText.Text = "Claude checks what is worth keeping from this run before it is deleted...";
+        DeleteText.Foreground = (Brush)FindResource("InkBrush");
+        List<Factory.KeepSuggestion> keep;
+        Factory.CleanupInfo info;
+        try
+        {
+            info = await Factory.InspectAsync(run);
+            keep = await Factory.DiagnoseAsync(run);
+        }
+        catch (Exception ex)
+        {
+            DeleteText.Text = "Could not check the run: " + ex.Message;
+            return;
+        }
+        if (_deleting != run) return;
+        var lose = new List<string>();
+        if (info.Uncommitted > 0) lose.Add($"{info.Uncommitted} uncommitted change{(info.Uncommitted == 1 ? "" : "s")}");
+        int unpushed = await Factory.UnpushedCommitsAsync(run);
+        if (unpushed > 0) lose.Add($"{unpushed} commit{(unpushed == 1 ? "" : "s")} on the local branch {run.Branch} that {(unpushed == 1 ? "is" : "are")} on no remote");
+        DeleteText.Text = $"Delete \"{run.Title}\" for good: its record, trace, evidence, report{(info.HasWorktree ? ", worktree and its session files" : "")} " +
+            $"and its local branch - {Factory.Size(info.Bytes)}. Your checkout and its files are not touched." +
+            (keep.Count > 0 ? "\nBefore that, keep what is ticked:" : "\nThe check found nothing worth keeping.") +
+            (lose.Count > 0 ? "\n⚠ This loses: " + string.Join("; ", lose) + "." : "");
+        DeleteText.Foreground = (Brush)FindResource(lose.Count > 0 ? "CoralInkBrush" : "InkBrush");
+        _keepBoxes = [];
+        foreach (Factory.KeepSuggestion k in keep)
+        {
+            string where = k.Where switch { "repo" => "REPO MEMORY", "global" => "GLOBAL CLAUDE.md", _ => "INSIGHTS" };
+            var label = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12.5 };
+            label.Inlines.Add(new Run(where + "  ") { FontSize = 11, FontWeight = FontWeights.Bold, Foreground = (Brush)FindResource("VioletBrush") });
+            label.Inlines.Add(new Run(k.Name) { FontWeight = FontWeights.SemiBold });
+            label.Inlines.Add(new Run("  -  " + k.Description));
+            var box = new CheckBox { Content = label, IsChecked = true, Margin = new Thickness(0, 3, 0, 3), ToolTip = k.Content };
+            AutomationProperties.SetName(box, $"Keep {k.Where} {k.Name}");
+            KeepList.Children.Add(box);
+            _keepBoxes.Add((box, k));
+        }
+        // the remote branch and PR: offered, never ticked by default
+        if (info.Pushed || run.PrUrl.Length > 0)
+        {
+            RemoteText.Text = "Also on the remote: " + (run.PrUrl.Length > 0 ? $"decline the PR {run.PrUrl} and " : "") + $"delete the branch {run.Branch}";
+            RemoteBox.IsChecked = false;
+            RemoteBox.Visibility = Visibility.Visible;
+        }
+        DeleteConfirmButton.Content = lose.Count > 0 ? "Keep the ticked and delete anyway" : "Keep the ticked and delete the run";
+        DeleteConfirmButton.IsEnabled = true;
+    }
+
+    private async void DeleteConfirm_Click(object sender, RoutedEventArgs e)
+    {
+        if (_deleting is not { } run) return;
+        DeleteConfirmButton.IsEnabled = false;
+        DeleteText.Text = "Deleting...";
+        var keep = _keepBoxes.Where(k => k.Box.IsChecked == true).Select(k => k.Keep).ToList();
+        string result = await Factory.DeleteAsync(run, keep, RemoteBox.Visibility == Visibility.Visible && RemoteBox.IsChecked == true);
+        _deleting = null;
+        DeletePanel.Visibility = Visibility.Collapsed;
+        if (Factory.Runs.Contains(run))
+        {
+            RunNote.Text = result;
+            return;
+        }
+        // the run is gone: off the list, onto the next one
+        ListBoxItem? item = RunList.Items.OfType<ListBoxItem>().FirstOrDefault(i => i.Tag == run);
+        if (item != null) RunList.Items.Remove(item);
+        _rows.Remove(run.Id);
+        _shown = null;
+        if (RunList.Items.Count > 0) RunList.SelectedIndex = 0;
+        else RunArea.Visibility = Visibility.Collapsed;
+        RunNote.Text = result;
+        UpdateRunsSummary();
+    }
+
+    private void DeleteCancel_Click(object sender, RoutedEventArgs e)
+    {
+        _deleting = null;
+        DeletePanel.Visibility = Visibility.Collapsed;
+    }
+
     private void AskConfirm(string text, bool loses, Func<Task> act)
     {
         if (RunArea.Visibility != Visibility.Visible && RunList.Items.Count > 0) RunList.SelectedIndex = 0;
@@ -357,6 +450,8 @@ public partial class FactoryView : UserControl
         ContinueButton.Visibility = !run.Working && !run.CleanedUp && run.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped
             ? Visibility.Visible : Visibility.Collapsed;
         CleanButton.Visibility = !run.Working && !run.CleanedUp ? Visibility.Visible : Visibility.Collapsed;
+        DeleteButton.Visibility = run.Working ? Visibility.Collapsed : Visibility.Visible;
+        if (_deleting != null && _deleting != run) DeleteCancel_Click(this, new RoutedEventArgs());
         // the run asked because the developer's checkout could not be used
         WorktreeButton.Visibility = !run.Working && !run.CleanedUp && !run.InCheckout && !run.UseWorktree && run.Stage == FactoryStage.NeedsYou
             && run.Note.Contains("Use a separate worktree", StringComparison.Ordinal) ? Visibility.Visible : Visibility.Collapsed;

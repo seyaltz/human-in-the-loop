@@ -511,6 +511,24 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   - Learned rules (rule lines, skills, hooks) are applied at once, each with **Undo** (the appended text taken
     out, the skill's folder deleted, the settings restored from the backup made before).
   Not autonomous: the questions stop the run, outside changes are forbidden (`NEEDS_YOU`), rules wait for Apply.
+- **Delete…** (a run's header, not while it works): deletes one run for good, after a diagnosis.
+  - The diagnosis: the run's lessons still kept (saved, applied, pending) are listed first as Insights items; then a
+    `claude -p` without tools reads the task, result, log and lessons against the repo's `MEMORY.md`, the global
+    `~\.claude\CLAUDE.md` and the kept insights, and replies `KEEP: <repo|global|insights> | <name> | <description>`
+    blocks (repo: a fact for the repo's memory; global: one imperative line true in every repo; insights: what the
+    mission found). Each is a checkbox, ticked; the tooltip is its content.
+  - The panel says what goes (record, trace, evidence, report, worktree and its session files, local branch, size)
+    and warns, in coral, what is lost: uncommitted changes, and commits on the local branch beyond the base that are
+    on no remote (`git rev-list --count <base>..<branch> --not --remotes`; a branch that no longer exists loses
+    nothing). When the branch is on the remote or there is a PR, "Also on the remote: decline the PR ... and delete the
+    branch" is offered, unticked; ticked, a one-off Claude with the developer's setup declines it with the host's
+    tools (its MCP first) and runs `git push origin --delete <branch>`.
+  - Confirm: nothing is kept or deleted while the checkout holds the run's uncommitted work. Then the ticked items
+    are saved - repo: a memory note ("Kept by Dev break when deleting the factory run ..."); global: one `- ` line
+    appended to the global CLAUDE.md; insights: `insights.json` next to the app (repo, kind, name, description,
+    content, the run's title, its date) - then everything a clean up deletes, the local branch (`branch -D`), every
+    `traces\<id>-*` file and folder, and the record. The run leaves the list; the next one is shown.
+  - The Insights tab shows the kept insights with the live runs' lessons, marked "kept when its run was deleted".
 - **Designed report** (a checkbox under Autonomous, off by default, remembered as `factoryReport`): a run that ends
   Done (answered, or a draft PR) gets one more `claude -p` without tools (`--tools "" --strict-mcp-config
   --setting-sources ""`, like Learn, before Learn) that turns the task, the note, the result, the plan, the decisions
