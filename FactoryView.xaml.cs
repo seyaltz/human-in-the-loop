@@ -272,7 +272,7 @@ public partial class FactoryView : UserControl
 
     private async void Continue_Click(object sender, RoutedEventArgs e)
     {
-        if (_shown != null) await Factory.ContinueAsync(_shown);
+        if (_shown != null) await Factory.ContinueAsync(_shown, byDeveloper: true);
     }
 
     private void CopyResult_Click(object sender, RoutedEventArgs e)
