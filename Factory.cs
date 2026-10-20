@@ -256,6 +256,14 @@ public static class Factory
     private static readonly string[] NoPublish =
         ["--disallowedTools", "Bash(git push:*)", "Bash(gh pr create:*)", "PowerShell(git push:*)", "PowerShell(gh pr create:*)"];
 
+    // the turn that pushes and opens the PR may not change what Dev break checked was committed
+    private static readonly string[] Frozen =
+    [
+        "--disallowedTools",
+        .. new[] { "git commit", "git add", "git reset", "git rebase", "git cherry-pick", "git merge", "git stash", "git checkout", "git switch", "git restore", "git rm", "git mv" }
+            .SelectMany(c => new[] { $"Bash({c}:*)", $"PowerShell({c}:*)" }),
+    ];
+
     private static List<FactoryRun>? _runs;
 
     // each working run's open claude process, by run id: its turns share it instead of starting claude each time
@@ -358,14 +366,15 @@ public static class Factory
     {
         string dir = ProofDir(run);
         Directory.CreateDirectory(dir);
+        string again = "";
         for (int attempt = 1; attempt <= 2; attempt++)
         {
             Enter(run, FactoryStage.Prove, "No change needed: Claude checks the answer against the running app.");
             (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
-                The task needs no change to the repo - it asks for an answer. Check the answer works against the running
-                app (start what it needs with the tools on this machine), exactly as the developer would use it. Save the
-                evidence (the call and its response, log lines) into {dir}, and write {Path.Combine(dir, ManifestName)} as
-                a JSON array of {"{"}"kind", "file", "proves", "result", "detail"{"}"}. Change no file in the repo.
+                {again}The task needs no change to the repo - it asks for an answer. Check the answer works against the running
+                app (start what it needs with the tools on this machine), exactly as the developer would use it. {NamedSources}
+                Save the evidence (the call and its response, log lines) into {dir}, and write {Path.Combine(dir, ManifestName)}
+                as a JSON array of {"{"}"kind", "file", "proves", "result", "detail"{"}"}. Change no file in the repo.
                 Give the final, checked answer - ready to use - after a line RESULT:. Then end with exactly one line:
                 PROOF: PASS / PROOF: FAIL <what is wrong> / PROOF: SKIPPED <why it cannot be checked here>
                 """, $"Answer (attempt {attempt})", cancel);
@@ -375,11 +384,17 @@ public static class Factory
             if (Block(answer, "RESULT:", "PROOF:") is { Length: > 0 } result) run.Result = result;
             string verdict = Line(answer, "PROOF:") ?? "";
             Log(run, $"Answer: {(verdict.Length > 0 ? verdict : "no verdict")}\n{answer}", ok: !verdict.StartsWith("FAIL", StringComparison.OrdinalIgnoreCase));
-            if (!verdict.StartsWith("FAIL", StringComparison.OrdinalIgnoreCase) && run.Result.Length > 0)
+            // done only on an explicit verdict: no PROOF line is not a pass - the next attempt asks for one
+            bool fail = verdict.StartsWith("FAIL", StringComparison.OrdinalIgnoreCase);
+            if (verdict.Length > 0 && !fail && run.Result.Length > 0)
             {
-                End(run, FactoryStage.Done, "Answered - no change was needed, so no PR.");
+                End(run, FactoryStage.Done, "Answered - no change was needed, so no PR." +
+                    (verdict.StartsWith("SKIPPED", StringComparison.OrdinalIgnoreCase) ? " Not checked: " + verdict[7..].Trim() : ""));
                 return true;
             }
+            again = verdict.Length == 0
+                ? "Your last reply had no PROOF: line, so the answer counts as not checked. Check it now and end with the PROOF: line.\n"
+                : "";
         }
         return Wait(run, "Claude could not give a checked answer: " + (Line(run.Proof, "PROOF:") ?? "no RESULT"));
     }
@@ -867,6 +882,10 @@ public static class Factory
             FactorySource.Spec => $"The task is the spec at {run.Task} (a file or a link); read it with the tools you have on this machine.",
             _ => "The task:\n" + run.Task,
         };
+        // what earlier runs in this folder were about and where they went: tasks that read alike go to the same repo
+        // without searching every repository again (each run used to grep all of them)
+        string earlier = string.Join("\n", Runs.Where(r => r != run && r.Repo.Length > 0 && r.Folder.Equals(run.Folder, StringComparison.OrdinalIgnoreCase))
+            .Take(20).Select(r => $"- \"{Tail(r.Task.Replace("\r", "").Replace('\n', ' '), 140)}\" -> {r.Repo}"));
         string prompt = $"""
             A developer gave a coding task and a folder with several git repositories in it. Find the one repository the
             task has to be implemented in. Do not change anything - read only.
@@ -874,6 +893,12 @@ public static class Factory
 
             THE REPOSITORIES:
             {list}
+            {(earlier.Length > 0 ? $"""
+
+            EARLIER TASKS IN THIS FOLDER AND THE REPO EACH WENT TO (newest first):
+            {earlier}
+            When the task clearly belongs with one of these, answer from it - no need to search the repositories.
+            """ : "")}
 
             You may look inside them. End your reply with one line: REPO: <number>. If none fits, or the task needs
             several of them, end with: REPO: NONE <why>.
@@ -1088,7 +1113,9 @@ public static class Factory
             this machine that fit the task (ones that run the app or its services, read logs or data, inspect or debug a
             running service) to see the current behaviour and where it lives, not only the code. Learn how this repo is
             built, run and tested (its README, build files and scripts), so the plan and the verify command fit it, and
-            say how the change can be seen in the running app. If you cannot read the task, reply with one line:
+            say how the change can be seen in the running app. A memory note marked "Checked on <date> - re-check" tells
+            a state that can change (access, a connector, a running service): when the plan depends on it, re-check it
+            with one quick call instead of trusting it. If you cannot read the task, reply with one line:
             CANNOT_READ: <why>. Otherwise reply with a short title for the work on the first line (TITLE: <title>), then
             the plan as short numbered steps, naming the files you will change and the tests you will add or run.
             Then choose the proof this feature needs - what a careful reviewer would want to see before believing it
@@ -1260,6 +1287,7 @@ public static class Factory
                 Now prove the change works, the way a careful developer would before opening a PR. Start what it needs -
                 the app and the services it depends on - with the skills, MCP servers and tools on this machine, from
                 this folder, exercise exactly what the task changed, and stop what you started when you are done.
+                {NamedSources}
 
                 The proof this feature needs, from your plan: {planned}
                 How to produce each kind:
@@ -1305,6 +1333,13 @@ public static class Factory
 
     private const string ManifestName = "evidence.json";
 
+    // a check uses what the task offered to check with - a run once skipped a bucket and a client the task named
+    private const string NamedSources = """
+        When the task names sources to check with - a database, a bucket, a running client or site, a URL, an MCP
+        server, a service - use each one in the check with fresh calls (not an earlier run's logs), and put one
+        evidence entry per source; one that cannot be used gets its entry with result "skipped" and the reason.
+        """;
+
     // the evidence manifest Claude wrote; empty when there is none or it is not the expected JSON
     private static List<FactoryEvidence> ReadManifest(string dir)
     {
@@ -1347,8 +1382,9 @@ public static class Factory
         List<string> mine = await RunChangesAsync(run, run.Worktree);
         string[] untracked = (await GitAsync(run.Worktree, "ls-files", "--others", "--exclude-standard", "-z")).Output
             .Split('\0', StringSplitOptions.RemoveEmptyEntries).Where(p => mine.Contains(p.Replace('\\', '/'))).ToArray();
-        if (untracked.Length > 0) await GitAsync(run.Worktree, ["add", "--intent-to-add", "--", .. untracked]);
-        string[] exclude = run.LocalChanges.Keys.Where(k => !mine.Contains(k)).Select(k => ":(exclude)" + k).ToArray();
+        // literal pathspecs: a file name with glob characters ("*", "?", "[") names only itself
+        if (untracked.Length > 0) await GitAsync(run.Worktree, ["add", "--intent-to-add", "--", .. untracked.Select(p => ":(literal)" + p)]);
+        string[] exclude = run.LocalChanges.Keys.Where(k => !mine.Contains(k)).Select(k => ":(exclude,literal)" + k).ToArray();
         (_, string diff) = await GitAsync(run.Worktree, ["diff", run.BaseCommit, "--", ".", .. exclude]);
         string prompt = $"""
             You review a change before it becomes a pull request. Be strict and concrete; you can read the repo.
@@ -1414,22 +1450,47 @@ public static class Factory
         link += " For the pull request, prefer the git host's official MCP server when one is connected and signed in" +
             " (for example the Atlassian MCP for Bitbucket, the GitHub MCP for GitHub); otherwise use the host's CLI or" +
             " the tools on this machine. Say in your reply which one you used.";
+        // 1. Claude commits - it cannot push yet
+        (string committed, string? commitError) = await TurnAsync(run, isNew: false, $"""
+            {checks}
+
+            Now commit this change's files on branch {run.Branch} with a clear message. Do not push and do not open a
+            pull request yet - Dev break checks the commit first.
+            """, "Commit", cancel);
+        if (commitError != null) return Wait(run, "The commit turn failed: " + commitError);
+        Log(run, "Commit:\n" + committed);
+        // 2. what the commits hold, checked in code: the developer's local files never leave the machine
+        if (await HeadAsync(run.Worktree) != run.Branch) return Wait(run, $"After the commit the folder is not on {run.Branch} - nothing was pushed.");
+        (int listed, string names) = await GitAsync(run.Worktree, "diff", "--name-only", run.BaseCommit + "..HEAD");
+        if (listed != 0) return Wait(run, "Could not read what the commits hold - nothing was pushed: " + names.Trim());
+        var inCommit = names.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim().Replace('\\', '/')).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        List<string> leaked = run.LocalChanges.Keys.Where(k => inCommit.Contains(k.Replace('\\', '/'))).ToList();
+        if (leaked.Count > 0)
+        {
+            return Wait(run, $"The commit holds your own local file{(leaked.Count == 1 ? "" : "s")} {string.Join(", ", leaked)} - nothing was pushed. " +
+                $"Take {(leaked.Count == 1 ? "it" : "them")} out of the commit (git reset --soft {run.BaseCommit[..Math.Min(12, run.BaseCommit.Length)]} and commit only the change's files), then Continue.");
+        }
+        if (inCommit.Count == 0) return Wait(run, "The commit holds no files of the change - nothing was pushed.");
+        string head = (await GitAsync(run.Worktree, "rev-parse", "HEAD")).Output.Trim();
+        Log(run, $"Checked the commit {head[..Math.Min(12, head.Length)]}: {inCommit.Count} file{(inCommit.Count == 1 ? "" : "s")} of the change, none of your local files.");
+        // 3. Claude pushes exactly that and opens the PR - it can no longer change what is committed
         string todo = update
             ? $"""
-              The draft pull request {run.PrUrl} already exists for branch {run.Branch}. Commit the new changes with a
-              clear message and push to the same branch, so the PR updates. If the description no longer fits (what
-              changed, how it was verified), update it with the tools on this machine. Do not merge.
+              The draft pull request {run.PrUrl} already exists for branch {run.Branch}. Push exactly the checked commit
+              with: git push origin {head}:refs/heads/{run.Branch} - so the PR updates. If the description no longer
+              fits (what changed, how it was verified), update it with the tools on this machine. Do not merge.
               Reply with the pull request URL on the last line.
               """
             : $"""
-              Now commit all the changes on branch {run.Branch} with a clear message, push the branch to the remote, and
-              open a DRAFT pull request into {run.BaseBranch} with the tools on this machine.{link} The description: what
-              changed and why, how it was verified (the command and its result), and the review notes. Do not merge.
+              Push exactly the checked commit with: git push origin {head}:refs/heads/{run.Branch} - then open a DRAFT pull request into
+              {run.BaseBranch} with the tools on this machine.{link} The description: what changed and why, how it was
+              verified (the command and its result), and the review notes. Do not merge.
               Reply with the pull request URL on the last line.
               """;
         (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
             {checks}
 
+            The commit is made and checked. Do not commit, amend, reset or rebase - what was checked is what goes out.
             {todo}
             """, update ? "Update the draft PR" : "Draft PR", cancel, publish: true);
         if (error != null) return Wait(run, "The pull request turn failed: " + error);
@@ -1440,11 +1501,45 @@ public static class Factory
         if (!url.Success) return Wait(run, "Claude did not give a pull request URL:\n" + answer);
         run.PrUrl = url.Value.TrimEnd('.', ',');
         Log(run, "Draft PR: " + run.PrUrl);
+        // 4. what reached the remote is what was checked
+        (int remoteCode, string remote) = await GitAsync(run.Worktree, "ls-remote", "origin", "refs/heads/" + run.Branch);
+        string pushed = remoteCode == 0 ? remote.Trim().Split('\t')[0] : "";
+        if (pushed != head)
+        {
+            // fail closed: what is on the remote is not what was checked (or nothing is) - not a finished PR
+            return Wait(run, pushed.Length == 0
+                ? $"The branch {run.Branch} is not on the remote after the PR turn - check the push.\n" + answer
+                : $"The remote branch is at {pushed[..Math.Min(12, pushed.Length)]}, not the checked commit {head[..Math.Min(12, head.Length)]} - " +
+                  "something unchecked was pushed. Look at the branch before you use the PR.\n" + answer);
+        }
         End(run, FactoryStage.Done, (update ? "Draft PR updated" : "Draft PR opened") + (anyway ? " - with failed checks." : "."));
         return true;
     }
 
-    private const string MermaidInit = "mermaid.initialize({startOnLoad:true})";
+    private const string MermaidInit = "mermaid.initialize({startOnLoad:true});";
+
+    // the report is written by Claude from run data that may hold text from anywhere (an issue, a page, a log): it
+    // runs only Dev break's own two scripts - Claude's scripts are removed, and a Content-Security-Policy lets nothing
+    // else run (no other script, no inline handler) and loads nothing but the pinned Mermaid file and images
+    private static string SafeReport(string html)
+    {
+        html = Regex.Replace(html, @"<script\b[^>]*>.*?</script\s*>", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        html = Regex.Replace(html, @"<script\b[^>]*>", "", RegexOptions.IgnoreCase);
+        html = Regex.Replace(html, @"<meta\b[^>]*http-equiv\s*=\s*[""']?content-security-policy[^>]*>", "", RegexOptions.IgnoreCase);
+        const string mermaid = "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js";
+        string initHash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(MermaidInit)));
+        string head =
+            $"<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data: https: file:; " +
+            $"font-src data:; script-src {mermaid} 'sha256-{initHash}'\">\n" +
+            $"<script src=\"{mermaid}\" integrity=\"sha384-WmdflGW9aGfoBdHc4rRyWzYuAjEmDwMdGdiPNacbwfGKxBW/SO6guzuQ76qjnSlr\" crossorigin=\"anonymous\"></script>\n";
+        string init = $"<script>{MermaidInit}</script>\n";
+        // the policy and the library first in <head>; the start call last in <body>, after the diagrams
+        Match headTag = Regex.Match(html, @"<head\b[^>]*>", RegexOptions.IgnoreCase);
+        html = headTag.Success ? html.Insert(headTag.Index + headTag.Length, "\n" + head)
+            : Regex.Replace(html, @"<html\b[^>]*>", m => m.Value + "\n<head>\n" + head + "</head>", RegexOptions.IgnoreCase);
+        int bodyEnd = html.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+        return bodyEnd >= 0 ? html.Insert(bodyEnd, init) : html.Insert(html.LastIndexOf("</html>", StringComparison.OrdinalIgnoreCase), init);
+    }
 
     // the designed report the developer asked for: the run's result as one readable HTML page, from its own facts only
     private static async Task ReportAsync(FactoryRun run)
@@ -1460,10 +1555,9 @@ public static class Factory
                 - a clear title and, first, a short summary box with the direct answer or outcome;
                 - sections with headings for the main points; tables where the facts are tabular (steps, calls and
                   results, what is where); code, commands and curls in <pre> blocks;
-                - a diagram where a flow or structure is easier to see than to read: Mermaid in a <pre class="mermaid">,
-                  with exactly <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"
-                  integrity="sha384-WmdflGW9aGfoBdHc4rRyWzYuAjEmDwMdGdiPNacbwfGKxBW/SO6guzuQ76qjnSlr"
-                  crossorigin="anonymous"></script> and {MermaidInit};
+                - a diagram where a flow or structure is easier to see than to read: Mermaid source in a
+                  <pre class="mermaid"> (Dev break adds the Mermaid script itself - write no <script> and no event
+                  handler attributes; any you write is removed);
                 - "Decisions taken", "Not verified" and "Evidence" sections when the run has them; evidence files as
                   file:/// links;
                 - clean inline CSS: readable sans-serif, max-width about 920px, generous spacing, light background,
@@ -1489,7 +1583,7 @@ public static class Factory
             if (start < 0 || end < start) throw new InvalidOperationException("Claude did not reply with an HTML page");
             string file = Path.Combine(AppContext.BaseDirectory, "traces", run.Id + "-report.html");
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-            File.WriteAllText(file, answer[start..(end + "</html>".Length)]);
+            File.WriteAllText(file, SafeReport(answer[start..(end + "</html>".Length)]));
             run.ReportFile = file;
             Log(run, "Report: " + file);
         }
@@ -1567,6 +1661,11 @@ public static class Factory
                   who calls them) and the repo's conventions for it;
                 - the language and framework: facts it had to look up (the Java version and the features this code
                   uses, framework versions and their quirks).
+
+                A fact about a state that can change - access, a login or credential, a connector or MCP server, whether a
+                service is up, a setting on this machine - is not a standing truth: end it with "Checked on
+                {DateTime.Now:yyyy-MM-dd} - re-check before relying on it." (a run once kept "the connectors are not
+                authorised", and the next run skipped them after they were signed in).
 
                 Lessons can be:
                 - memory: a fact about this repo the run had to discover (a build or test quirk, a command, where things
@@ -1786,7 +1885,7 @@ public static class Factory
         string? error = null;
         try
         {
-            string[] args = [.. publish ? [] : NoPublish, .. KnowledgeArgs(run)];
+            string[] args = [.. publish ? Frozen : NoPublish, .. KnowledgeArgs(run)];
             Action<SessionEntry> onEntry = entry =>
             {
                 switch (entry.Kind)

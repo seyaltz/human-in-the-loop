@@ -381,7 +381,9 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
 - **The run**, each step logged:
   0. **Locate**: the repo the folder is in (`git rev-parse --show-toplevel`); else the git repos up to 3 levels below
      it (`.git` folder, or file for a worktree): none stops the run, one is it, several - a `claude -p` reads the
-     task and the repos' fingerprints and ends with `REPO: <number>` or `REPO: NONE <why>`. For a typed task it has
+     task and the repos' fingerprints and ends with `REPO: <number>` or `REPO: NONE <why>`. It also gets up to 20
+     earlier runs in the same folder (their task, the repo each went to) and may answer from them without searching
+     (before, every run searched all the repos; with them round 6 picked with 0 tool calls). For a typed task it has
      only `Read,Grep,Glob` (read-only, enforced); a Jira issue or a spec needs the machine's own tools to be read, so
      it gets the developer's setup with bypass minus `Edit`, `Write`, `NotebookEdit` and the publish denies (the
      shell can still change files - the same access the plan turn has). Then the base branch and the remembered verify command for it.
@@ -395,8 +397,9 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      staged or untracked): their paths are noted with a SHA-256 fingerprint of the content and logged ("Your N local
      changes stay yours ..."); the switch carries them along untouched. They are never committed: "did the run change
      anything" and "is its work committed" count only the run's own changes (a noted file counts only once its
-     content differs); the review diff is `git diff <base> -- . :(exclude)<each local file>` with the run's new files
-     marked `--intent-to-add` (no `git add -A`, so the developer's index is untouched); the PR step is told the files
+     content differs); the review diff is `git diff <base> -- . :(exclude,literal)<each local file>` with the run's new
+     files marked `--intent-to-add -- :(literal)<file>` (no `git add -A`, so the developer's index is untouched;
+     literal, because a plain pathspec is a glob: excluding `f[1].txt` also hid `f1.txt` from the reviewer in a test); the PR step is told the files
      and to stage only the change's files by name. Before verify and before the PR, a local change whose content
      differs stops the run and asks ("The change touched files that hold your own local changes: ... undo the run's
      edits there and press Continue - or commit or stash your own changes first, or run it in a separate worktree").
@@ -463,6 +466,11 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      `kind`, `file`, `proves`, `result` (pass / fail / skipped), `detail`. The turn ends `PROOF: PASS`, `PROOF: FAIL
      <what>` or `PROOF: SKIPPED <why>`. Dev break reads the manifest and logs it with the planned kinds not produced.
      FAIL goes back to the session to fix, then verify and prove again, up to 3 fixes; no PROOF line stops the run.
+     When the task names sources to check with (a database, a bucket, a running client, a URL, an MCP server), the
+     prompt has each used with fresh calls - not an earlier run's logs - with one evidence entry per source, a source
+     that cannot be used getting a `skipped` entry with the reason (a run once skipped a bucket and a client the task
+     named). The answer of a no-change task is done only on an explicit `PROOF: PASS` or `SKIPPED` (the note says what
+     was not checked): no PROOF line is not a pass - the second attempt is told so and asked for the check.
      **Open evidence** opens the folder.
   5. **Review**: a fresh `claude -p` that can only read (`--tools Read,Grep,Glob`) gets the task, the plan, the
      diff against the base commit and **the evidence** - the verify command's exit code and output end (run by Dev
@@ -472,8 +480,18 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      replies `VERDICT: PASS` or `FIX` with findings; FIX goes back to the session, then verify, prove and review
      again, up to 2 review rounds.
   6. **Draft PR**: only now may the session publish - until here every turn runs with `--disallowedTools` for
-     `git push` and `gh pr create` (Bash and PowerShell; verified: the deny holds under bypass). It commits, pushes
-     and opens a draft PR into the base with the machine's own tools (any host) - the git host's official MCP server
+     `git push` and `gh pr create` (Bash and PowerShell). **Not watertight**: the rule matches the command's start,
+     so `git -c user.name=x commit ...` got through in a test (a commit was made) - the same holds for `git push`.
+     Hence the checks in code below. In three steps:
+     - **Commit** (still no push): the session commits the change's files.
+     - **Dev break checks the commit**: the folder is on the run's branch, and `git diff --name-only <base>..HEAD`
+       holds none of the developer's local-change files (else the run stops, nothing pushed, with how to take them out)
+       and at least one file; logged "Checked the commit <sha>: N files of the change, none of your local files".
+     - **Push and PR**, with commit, add, reset, rebase, cherry-pick, merge, stash, checkout, switch, restore, rm and mv
+       disallowed: the session pushes exactly the checked commit (`git push origin <sha>:refs/heads/<branch>`) - the
+       developer's own PR hooks still see the push - and opens the PR. After it, the remote branch must be at the
+       checked commit (`git ls-remote`), else the run stops at Needs you (fail closed), the PR link kept.
+     It opens a draft PR into the base with the machine's own tools (any host) - the git host's official MCP server
      first when one is connected and signed in (Atlassian's for Bitbucket, GitHub's for GitHub), else its CLI or tools,
      saying which it used - the description saying how it was
      verified (and the app check, describing its evidence without committing it; the app is not run again unless
@@ -484,7 +502,10 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      `LESSON: <memory|claude-md|hook|skill> | <name> | <description>` blocks (at most 4). It is asked first for what the
      next run there needs most: the fastest way to build, start, restart and check the service (commands, ports, health
      URL, environment), where the logic for that kind of task lives and the repo's conventions, and the language and
-     framework facts the run had to look up. **Memory** notes are saved at once into the repo's memory folder (from the
+     framework facts the run had to look up. A fact about a state that can change (access, a login, a connector, a
+     running service, a machine setting) ends "Checked on <date> - re-check before relying on it", and the plan
+     prompt says to re-check such a note with one quick call when the plan depends on it (a run once kept "the
+     connectors are not authorised" and the next one skipped them after they were signed in). **Memory** notes are saved at once into the repo's memory folder (from the
      init line), listed in `MEMORY.md`, ending "Learned by a Dev break factory run on <date> (<title>)" - **Undo**
      removes the file and its line. **Rules wait for the developer**, and never go into the repo (a file there would
      leave the run's checkout dirty and could end up in a PR; seen in a real run): they go to
@@ -535,7 +556,12 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   and the evidence list into one self-contained HTML page - the direct answer first in a summary box, sections,
   tables for tabular facts, `<pre>` for code and curls, a Mermaid diagram where a flow helps (mermaid@10.9.1 from
   jsDelivr with its sha384 integrity hash), "Decisions taken", "Not verified" and "Evidence" (file:/// links); only
-  the run's facts, nothing added. Saved as `traces\<id>-report.html` (`ReportFile`); **Open report** (shown once
+  the run's facts, nothing added. The page is written from run data that may hold text from anywhere, so Dev
+  break removes every `<script>` and any Content-Security-Policy meta Claude wrote, then adds its own: a CSP
+  (`default-src 'none'; style-src 'unsafe-inline'; img-src data: https: file:; font-src data:; script-src <the
+  Mermaid URL> 'sha256-<hash of the init call>'`) and the Mermaid script with its integrity hash in `<head>`, and
+  `mermaid.initialize({startOnLoad:true});` before `</body>` (tested: a hostile inline script and an `onerror`
+  handler did not run - without this the handler ran - and the diagram still drew). Saved as `traces\<id>-report.html` (`ReportFile`); **Open report** (shown once
   it exists) opens it in the browser; a reply with no HTML page logs "Could not write the report".
 - **No change needed** (the plan says `CHANGE: none` - the task asks for an answer, like a curl or an explanation): no
   build, verify, review or PR; an "Answer" turn checks the answer against the running app (evidence and manifest as
