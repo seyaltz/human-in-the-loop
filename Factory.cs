@@ -28,8 +28,8 @@ public sealed class FactoryStep
 }
 
 /// <summary>
-/// Something a run learned for the repo's Claude harness: a memory note (saved at once, can be undone), or a rule -
-/// a CLAUDE.md line, a skill or a hook - that waits for the developer's OK.
+/// Something a run learned for the repo: a memory note (in the repo's Claude memory, saved at once, can be undone), or
+/// a rule - a rule line, a skill or a hook, kept by the factory outside the repo - that waits for the developer's OK.
 /// </summary>
 public sealed class FactoryLesson
 {
@@ -41,6 +41,8 @@ public sealed class FactoryLesson
     public string? File { get; set; }
     /// <summary>Why the developer dismissed or undid it; later lessons for the repo avoid the like.</summary>
     public string Feedback { get; set; } = "";
+    /// <summary>How to take an applied rule back out: the text appended, or the file's backup before it changed.</summary>
+    public string UndoData { get; set; } = "";
 }
 
 /// <summary>A tool call Claude made in a step, and how it ended.</summary>
@@ -133,6 +135,21 @@ public sealed class FactoryRun
     public List<FactoryEvidence> Evidence { get; set; } = [];
     /// <summary>What the task asked to be handed back (a curl, an answer, a link), ready to use - shown on top.</summary>
     public string Result { get; set; } = "";
+    /// <summary>
+    /// No human in the loop: the plan's questions take the suggested answers, the run may change what it needs outside
+    /// its folder (backed up, listed), learned rules apply at once, and it stops only when nothing else is left.
+    /// </summary>
+    public bool Autonomous { get; set; }
+    /// <summary>The run already had its fresh second attempt after getting stuck.</summary>
+    public bool Retried { get; set; }
+    /// <summary>Files the run changed outside its folder, as it reported them: path - what - backup.</summary>
+    public List<string> OutsideChanges { get; set; } = [];
+    /// <summary>Decisions the run took on its own (the plan's questions, answered with its suggestions).</summary>
+    public string Decisions { get; set; } = "";
+    /// <summary>The plan found nothing to change: the run hands back an answer (a curl, an explanation), no PR.</summary>
+    public bool NoChange { get; set; }
+    /// <summary>What made the first attempt stuck, for the fresh attempt's plan.</summary>
+    public string RetryContext { get; set; } = "";
     public string Review { get; set; } = "";
     public string PrUrl { get; set; } = "";
     public double Cost { get; set; }
@@ -204,6 +221,17 @@ public static class Factory
         work needs a change there, do not make it: end your reply with one line NEEDS_YOU: <what should change, where, and why>.
         """;
 
+    // an autonomous run: it fixes what it needs outside its folder itself, backed up and reported; only what no tool
+    // can do - a login, a credential, an access grant - stops it
+    private const string AutonomousRule = """
+
+        You work with no human in the loop: solve problems yourself. When the work needs a change outside this folder
+        (local machine settings, a shared build home, a local service's config), you may make it: first copy each file
+        to <file>.bak-devbreak, change it, and add one line per file to your reply: OUTSIDE: <path> - <what changed> - <backup>.
+        Never touch secrets, credentials or logins. Only when the blocker is something no tool can do for you - a login
+        in a browser, a credential, an access grant - end your reply with one line NEEDS_YOU: <exactly what the developer must do>.
+        """;
+
     /// <summary>Claude stopped to ask the developer (NEEDS_YOU, or the plan's questions): the run waits with the question.</summary>
     private sealed class NeedsYouException(string message) : Exception(message);
 
@@ -212,6 +240,9 @@ public static class Factory
         ["--disallowedTools", "Bash(git push:*)", "Bash(gh pr create:*)", "PowerShell(git push:*)", "PowerShell(gh pr create:*)"];
 
     private static List<FactoryRun>? _runs;
+
+    // each working run's open claude process, by run id: its turns share it instead of starting claude each time
+    private static readonly Dictionary<string, ClaudeSessions.LiveSession> Live = [];
 
     /// <summary>A run changed: its stage, its log, its cost or its lessons.</summary>
     public static event Action<FactoryRun>? Changed;
@@ -240,7 +271,7 @@ public static class Factory
         }
     }
 
-    public static FactoryRun Create(FactorySource source, string task, string folder, string baseBranch, string verify)
+    public static FactoryRun Create(FactorySource source, string task, string folder, string baseBranch, string verify, bool autonomous = false)
     {
         string id = Guid.NewGuid().ToString("N")[..8];
         string first = task.Trim().Split('\n')[0].Trim();
@@ -253,7 +284,7 @@ public static class Factory
         var run = new FactoryRun
         {
             Id = id, Title = title, Source = source, Task = task.Trim(), Folder = folder.TrimEnd('\\'), BaseBranch = baseBranch.Trim(),
-            Verify = verify.Trim(), SessionId = Guid.NewGuid().ToString(), Created = DateTime.Now,
+            Verify = verify.Trim(), SessionId = Guid.NewGuid().ToString(), Created = DateTime.Now, Autonomous = autonomous,
         };
         Runs.Insert(0, run);
         Save();
@@ -274,10 +305,65 @@ public static class Factory
         if (!await WorktreeAsync(run, cancel)) return false;
         // from here on there is something to learn from
         if (!await PlanAsync(run, cancel)) return true;
+        if (run.NoChange) return await AnswerAsync(run, cancel);
         if (!await BuildAsync(run, cancel)) return true;
         if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
+        else await FreshAttemptAsync(run, cancel);
         return true;
     });
+
+    // autonomous and stuck on its checks (not on something only the developer can do): one fresh attempt - a new
+    // session plans again from what went wrong, builds, checks and opens the PR; stuck again, the developer is told
+    private static async Task FreshAttemptAsync(FactoryRun run, CancellationToken cancel)
+    {
+        if (!run.Autonomous || run.Retried || run.Stage != FactoryStage.NeedsYou || run.Note.StartsWith("Claude needs you", StringComparison.Ordinal)) return;
+        run.Retried = true;
+        string stuck = run.Note;
+        run.RetryContext = $"""
+            It stopped with: {stuck}
+            The last verify: {Tail(run.VerifyResult, 2500)}
+            The last review findings: {Tail(run.Review, 2500)}
+            The last app check: {Tail(run.Proof, 1500)}
+            Its changes are still in this folder - keep what is right, redo what is not.
+            """;
+        Log(run, $"Stuck: {stuck.Split('\n')[0]} - a fresh attempt: a new session plans again from what went wrong.");
+        run.SessionId = Guid.NewGuid().ToString();
+        if (!await PlanAsync(run, cancel)) return;
+        if (!await BuildAsync(run, cancel)) return;
+        if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
+    }
+
+    // the plan found nothing to change: the answer (a curl, an explanation) is checked against the running app and
+    // handed back in the Result - no build, no verify, no PR
+    private static async Task<bool> AnswerAsync(FactoryRun run, CancellationToken cancel)
+    {
+        string dir = ProofDir(run);
+        Directory.CreateDirectory(dir);
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            Enter(run, FactoryStage.Prove, "No change needed: Claude checks the answer against the running app.");
+            (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
+                The task needs no change to the repo - it asks for an answer. Check the answer works against the running
+                app (start what it needs with the tools on this machine), exactly as the developer would use it. Save the
+                evidence (the call and its response, log lines) into {dir}, and write {Path.Combine(dir, ManifestName)} as
+                a JSON array of {"{"}"kind", "file", "proves", "result", "detail"{"}"}. Change no file in the repo.
+                Give the final, checked answer - ready to use - after a line RESULT:. Then end with exactly one line:
+                PROOF: PASS / PROOF: FAIL <what is wrong> / PROOF: SKIPPED <why it cannot be checked here>
+                """, $"Answer (attempt {attempt})", cancel);
+            if (error != null) return Wait(run, "The answer turn failed: " + error);
+            run.Proof = answer;
+            run.Evidence = ReadManifest(dir);
+            if (Block(answer, "RESULT:", "PROOF:") is { Length: > 0 } result) run.Result = result;
+            string verdict = Line(answer, "PROOF:") ?? "";
+            Log(run, $"Answer: {(verdict.Length > 0 ? verdict : "no verdict")}\n{answer}", ok: !verdict.StartsWith("FAIL", StringComparison.OrdinalIgnoreCase));
+            if (!verdict.StartsWith("FAIL", StringComparison.OrdinalIgnoreCase) && run.Result.Length > 0)
+            {
+                End(run, FactoryStage.Done, "Answered - no change was needed, so no PR.");
+                return true;
+            }
+        }
+        return Wait(run, "Claude could not give a checked answer: " + (Line(run.Proof, "PROOF:") ?? "no RESULT"));
+    }
 
     /// <summary>
     /// Picks up a run that stopped or waits for the developer where it left off: the steps already done (repo, worktree,
@@ -302,7 +388,12 @@ public static class Factory
             // the plan never finished: a fresh session plans it
             run.SessionId = Guid.NewGuid().ToString();
             if (!await PlanAsync(run, cancel)) return true;
+            if (run.NoChange) return await AnswerAsync(run, cancel);
             if (!await BuildAsync(run, cancel)) return true;
+        }
+        else if (run.NoChange)
+        {
+            return await AnswerAsync(run, cancel);
         }
         else if (!run.Log.Any(s => s.Stage == FactoryStage.Build))
         {
@@ -470,6 +561,8 @@ public static class Factory
             run.Plan = plan;
             Log(run, "Plan:\n" + plan);
             if (Questions(plan) is { Length: > 0 } open) throw new NeedsYouException("The plan still has questions for you:\n" + open);
+            run.NoChange = (Line(plan, "CHANGE:") ?? "").StartsWith("none", StringComparison.OrdinalIgnoreCase);
+            if (run.NoChange) return await AnswerAsync(run, cancel);
             if (!await BuildAsync(run, cancel)) return true;
             if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
             return true;
@@ -515,6 +608,8 @@ public static class Factory
         catch (NeedsYouException ex)
         {
             Wait(run, ex.Message);
+            // stopped for the developer inside a step (NEEDS_YOU): there is something to learn from, as after a plan
+            learn |= run.Trace.Any(s => s.Kind == "turn");
         }
         catch (Exception ex)
         {
@@ -522,6 +617,7 @@ public static class Factory
         }
         finally
         {
+            CloseLive(run);
             if (cancel.IsCancellationRequested) End(run, FactoryStage.Stopped, "Stopped.");
             else if (learn) await LearnAsync(run);
             try
@@ -632,7 +728,14 @@ public static class Factory
             return true;
         }
         Enter(run, FactoryStage.Worktree, $"Working in your checkout {run.Repo}, on a new branch {run.Branch} from {run.BaseBranch}.");
-        if (await CheckoutProblemAsync(run, "start") is { } problem) return Wait(run, problem);
+        if (await CheckoutProblemAsync(run, "start") is { } problem)
+        {
+            // autonomous: another run in the checkout is no reason to wait - this one goes beside it
+            if (!run.Autonomous || !problem.StartsWith("Another run", StringComparison.Ordinal)) return Wait(run, problem);
+            Log(run, problem.Split(" Wait for it")[0] + " This run goes on in a separate worktree.");
+            run.UseWorktree = true;
+            return await WorktreeAsync(run, cancel);
+        }
         // the developer's own local changes (temp files, local settings) stay theirs: noted with a fingerprint each
         run.LocalChanges = [];
         foreach (string path in await ChangedPathsAsync(run.Repo)) run.LocalChanges[path] = Fingerprint(run.Repo, path);
@@ -746,6 +849,11 @@ public static class Factory
         }
         (int exit, string output) = await GitSpanAsync(run, run.Repo, "switch", run.ReturnTo.Length == 40 ? "--detach" : "--no-guess", run.ReturnTo);
         Log(run, exit == 0 ? $"Your checkout is back on {run.ReturnTo}." : $"Could not switch your checkout back to {run.ReturnTo}: {output.Trim()}", ok: exit == 0);
+        // an answer-only run left its branch without a commit: it goes
+        if (exit == 0 && run.NoChange && run.Stage == FactoryStage.Done && (await GitAsync(run.Repo, "rev-list", "--count", run.BaseCommit + ".." + run.Branch)).Output.Trim() == "0")
+        {
+            await GitAsync(run.Repo, "branch", "-D", run.Branch);
+        }
     }
 
     /// <summary>The developer's checkout could not be used: this run goes on in a separate worktree beside the repo.</summary>
@@ -799,7 +907,10 @@ public static class Factory
             crap. A service: api, logs, trace. Pick only what proves this change.)
             If the task leaves a decision that is the developer's to make - behaviour, naming, defaults, which of several
             options - do not guess: after the plan, add a line QUESTIONS: and then the numbered questions, each with the
-            answer you suggest. The run waits for the answers before building. Leave QUESTIONS out when nothing is open.
+            answer you suggest. {(run.Autonomous ? "No one will answer: the run goes on with your suggested answers, so make them the best choice and they are recorded as the decisions taken." : "The run waits for the answers before building.")} Leave QUESTIONS out when nothing is open.
+            If the task needs no change to the repo - it asks for information, like a curl to try something, an
+            explanation, where something is - add one line CHANGE: none, and plan how to check the answer against the
+            running app instead.{(run.RetryContext.Length > 0 ? "\n\nA FIRST ATTEMPT GOT STUCK - plan so this one finishes:\n" + run.RetryContext : "")}
             {verify}
             """;
         (string answer, string? error) = await TurnAsync(run, isNew: true, prompt, "Plan", cancel);
@@ -815,8 +926,15 @@ public static class Factory
         run.EvidencePlan = (Line(answer, "EVIDENCE:") ?? "").Split(',', ';').Select(k => k.Trim().Trim('`', '*', '.').ToLowerInvariant())
             .Where(k => EvidenceKinds.Contains(k)).Distinct().ToList();
         Log(run, "Plan:\n" + answer);
-        // decisions that are the developer's: the run asks before it builds
-        if (Questions(answer) is { Length: > 0 } questions)
+        run.NoChange = (Line(answer, "CHANGE:") ?? "").StartsWith("none", StringComparison.OrdinalIgnoreCase);
+        // decisions that are the developer's: the run asks before it builds - or, autonomous, takes its suggestions
+        string questions = Questions(answer);
+        if (questions.Length > 0 && run.Autonomous)
+        {
+            run.Decisions = questions;
+            Log(run, "Decisions taken on my own (the suggested answers):\n" + questions);
+        }
+        else if (questions.Length > 0)
         {
             throw new NeedsYouException("The plan has questions for you. Answer them in the box below and press Send to the run - " +
                 "the ones you skip take the suggested answer (or press Continue to take all the suggestions):\n" + questions);
@@ -860,7 +978,9 @@ public static class Factory
         (string answer, string? error) = await TurnAsync(run, isNew: false, """
             Now implement the plan in this folder. Change only what the task needs, and add or update tests for it.
             Keep it fast: run only the tests for what you changed - Dev break runs the full verify command right after -
-            and do not reinstall dependencies that are already installed.
+            and do not reinstall dependencies that are already installed. Do not start or restart the app or its
+            services and do not call it to try the change: the Prove step right after runs the app once with the
+            change and checks it live.
             Do not commit, push or open a pull request - that comes after the checks. Reply with a short summary of
             what you changed.
             """, "Build", cancel);
@@ -1096,6 +1216,8 @@ public static class Factory
                 string.Join(", ", run.LocalChanges.Keys) + ".";
         }
         if (run.Result.Length > 0) checks += $"\nWhat the task asked to be handed back (put it in the PR description too):\n{run.Result}";
+        if (run.Decisions.Length > 0) checks += $"\nDecisions the run took on its own (list them in the PR description under 'Decisions taken'):\n{run.Decisions}";
+        if (run.OutsideChanges.Count > 0) checks += "\nChanges made outside the repo on this machine (list them in the PR description under 'Outside the repo'):\n" + string.Join("\n", run.OutsideChanges.Select(c => "- " + c));
         checks += $"\nThe evidence:\n{EvidenceSummary(run)}\nIts files are in {ProofDir(run)} - list it in the PR description (attach the images or video to the PR if the host's tools can), do not commit it. The app was already run after the last change; do not run it again unless a check on this machine requires it.";
         string link = run.Source == FactorySource.Jira ? $" Link it to the Jira issue {run.Task} the way this repo does." : "";
         // the git host's own MCP server first (Atlassian's for Bitbucket, GitHub's for GitHub), then its CLI or tools
@@ -1169,6 +1291,9 @@ public static class Factory
                 WHAT THE REPO'S MEMORY ALREADY SAYS (do not repeat it):
                 {(index.Length > 0 ? index : "(nothing yet)")}
 
+                THE FACTORY'S RULES AND SKILLS FOR THIS REPO ALREADY (do not repeat them):
+                {FactoryKnows(run.Repo)}
+
                 ALREADY LEARNED FROM THIS RUN (do not repeat it):
                 {(already.Length > 0 ? already : "(nothing yet)")}
 
@@ -1179,13 +1304,28 @@ public static class Factory
                 {SpeedSummary(run)}
                 For what was slow and avoidable here, add a lesson that makes the next run faster: e.g. dependencies are
                 already installed (do not reinstall), run only the tests for the change, a faster command for the same
-                check, a step that waited for something it did not need.
+                check, a step that waited for something it did not need.{(run.Autonomous && (ended == FactoryStage.NeedsYou || run.Retried) ? $"""
+
+
+                THE RUN GOT STUCK{(run.Retried ? " (and needed a fresh attempt)" : "")}: {note.Split('\n')[0]}
+                The developer wants the factory to run with no human in the loop, correcting itself: find what would have
+                let this run finish on its own, and add it - a memory fact, a rule, a skill or a hook - so the
+                next run does not get stuck the same way. Rules and hooks are applied at once.
+                """ : "")}
+
+                What the next run here needs most, so it starts fast and knows its way - keep what this run had to find out:
+                - running the service: the fastest way to build, start, restart and check it (exact commands, ports,
+                  health URL, environment such as JAVA_HOME), and what to skip;
+                - the logic: where the code for this kind of task lives (files, classes, endpoints, how they connect,
+                  who calls them) and the repo's conventions for it;
+                - the language and framework: facts it had to look up (the Java version and the features this code
+                  uses, framework versions and their quirks).
 
                 Lessons can be:
                 - memory: a fact about this repo the run had to discover (a build or test quirk, a command, where things
                   live, a gotcha). Under 100 words. Most lessons.
-                - claude-md: one imperative rule line for the repo's CLAUDE.md - only for a mistake the agent made that
-                  a standing rule would prevent.
+                - claude-md: one imperative rule line every later factory run in this repo gets - only for a mistake
+                  the agent made that a standing rule would prevent.
                 - hook: only for a check that must always run; the content is a JSON object of Claude Code hook settings,
                   e.g. {HookExample}.
                 - skill: only for a multi-step procedure that will repeat here; numbered steps, under 250 words.
@@ -1206,10 +1346,23 @@ public static class Factory
                     lesson.Status = "saved";
                 }
                 run.Lessons.Add(lesson);
+                // autonomous: rules apply at once too (each can be undone)
+                if (run.Autonomous && lesson.Status == "pending")
+                {
+                    try
+                    {
+                        Apply(run, lesson);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log(run, $"Could not apply the {lesson.Kind} rule {lesson.Name}: {ex.Message}", ok: false);
+                    }
+                }
             }
             List<FactoryLesson> learned = run.Lessons[before..];
             Log(run, learned.Count == 0 ? "Nothing new to remember." :
-                $"Learned {learned.Count}: {learned.Count(l => l.Status == "saved")} saved to memory, {learned.Count(l => l.Status == "pending")} rules wait for you.");
+                $"Learned {learned.Count}: {learned.Count(l => l.Status == "saved")} saved to memory, {learned.Count(l => l.Status == "applied")} rules applied, " +
+                $"{learned.Count(l => l.Status == "pending")} rules wait for you.");
         }
         catch (Exception ex)
         {
@@ -1261,6 +1414,15 @@ public static class Factory
     /// <summary>Takes a saved memory note back out: its file and its line in MEMORY.md.</summary>
     public static void Undo(FactoryRun run, FactoryLesson lesson, string why = "")
     {
+        if (lesson.Status == "applied")
+        {
+            UndoRule(run, lesson);
+            lesson.Feedback = why.Trim();
+            lesson.Status = "undone";
+            Save();
+            Notify(run);
+            return;
+        }
         if (lesson.Status != "saved" || lesson.File == null) return;
         lesson.Feedback = why.Trim();
         string name = Path.GetFileName(lesson.File);
@@ -1275,6 +1437,26 @@ public static class Factory
         Notify(run);
     }
 
+    // takes an applied rule back out: the CLAUDE.md text appended, the skill's folder, the hook settings as they were
+    private static void UndoRule(FactoryRun run, FactoryLesson lesson)
+    {
+        switch (lesson.Kind)
+        {
+            case "claude-md" when lesson.File != null && File.Exists(lesson.File) && lesson.UndoData.Length > 0:
+                string text = File.ReadAllText(lesson.File);
+                int at = text.LastIndexOf(lesson.UndoData, StringComparison.Ordinal);
+                if (at >= 0) File.WriteAllText(lesson.File, text.Remove(at, lesson.UndoData.Length));
+                break;
+            case "skill" when lesson.UndoData.Length > 0 && File.Exists(lesson.UndoData):
+                Directory.Delete(Path.GetDirectoryName(lesson.UndoData)!, recursive: true);
+                break;
+            case "hook" when lesson.File != null:
+                if (lesson.UndoData == "new") File.Delete(lesson.File);
+                else if (File.Exists(lesson.UndoData)) File.Copy(lesson.UndoData, lesson.File, overwrite: true);
+                break;
+        }
+    }
+
     /// <summary>Applies a rule the developer approved; returns the file it went into.</summary>
     public static string Apply(FactoryRun run, FactoryLesson lesson)
     {
@@ -1282,15 +1464,36 @@ public static class Factory
         switch (lesson.Kind)
         {
             case "claude-md":
-                file = Path.Combine(run.Repo, "CLAUDE.md");
-                string existing = File.Exists(file) ? File.ReadAllText(file) : "";
-                File.AppendAllText(file, (existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : "") + lesson.Content.Trim() + "\n");
+                Directory.CreateDirectory(KnowledgeDir(run.Repo));
+                file = Path.Combine(KnowledgeDir(run.Repo), "rules.md");
+                string existing = File.Exists(file) ? File.ReadAllText(file) : "Rules the Dev break factory learned in this repo - follow them:\n";
+                string appended = (existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : "") + lesson.Content.Trim() + "\n";
+                if (!File.Exists(file)) File.WriteAllText(file, existing);
+                File.AppendAllText(file, appended);
+                lesson.UndoData = appended;
                 break;
             case "skill":
-                file = ClaudeProjects.Save(new ShareSuggestion(new ClaudeProject("", run.Repo, ""), "skill", lesson.Name, lesson.Description, lesson.Content), lesson.Content);
+                // a skill of the factory's own plugin for this repo, loaded with --plugin-dir
+                string plugin = Path.Combine(KnowledgeDir(run.Repo), "plugin");
+                string manifest = Path.Combine(plugin, ".claude-plugin", "plugin.json");
+                if (!File.Exists(manifest))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(manifest)!);
+                    File.WriteAllText(manifest, """{"name":"devbreak-factory","version":"1.0.0","description":"What the Dev break factory learned in this repo"}""");
+                }
+                string skillDir = Path.Combine(plugin, "skills", lesson.Name);
+                for (int n = 2; Directory.Exists(skillDir); n++) skillDir = Path.Combine(plugin, "skills", $"{lesson.Name}-{n}");
+                Directory.CreateDirectory(skillDir);
+                file = Path.Combine(skillDir, "SKILL.md");
+                File.WriteAllText(file, $"---\nname: {Path.GetFileName(skillDir)}\ndescription: {lesson.Description.Replace("\n", " ")}\n---\n\n{lesson.Content.Trim()}\n");
+                lesson.UndoData = file;
                 break;
             case "hook":
-                file = Path.Combine(run.Repo, ".claude", "settings.local.json");
+                file = Path.Combine(KnowledgeDir(run.Repo), "settings.json");
+                // the settings as they were, for Undo ("new" when there was no file)
+                string backup = file + ".bak-devbreak-" + lesson.Name;
+                if (File.Exists(file)) File.Copy(file, backup, overwrite: true);
+                lesson.UndoData = File.Exists(file) ? backup : "new";
                 // the JSON object, without a code fence around it
                 int open = lesson.Content.IndexOf('{'), close = lesson.Content.LastIndexOf('}');
                 if (open < 0 || close < open) throw new InvalidOperationException("the hook is not a JSON object");
@@ -1330,13 +1533,14 @@ public static class Factory
     private static async Task<(string Answer, string? Error)> TurnAsync(FactoryRun run, bool isNew, string prompt, string title,
         CancellationToken cancel, bool publish = false)
     {
-        prompt += OutsideRule;
+        prompt += run.Autonomous ? AutonomousRule : OutsideRule;
         FactorySpan span = Begin(run, "turn", title, prompt);
         string answer = "";
         string? error = null;
         try
         {
-            await ClaudeSessions.RunTurnAsync(run.Worktree, run.SessionId, isNew, prompt, entry =>
+            string[] args = [.. publish ? [] : NoPublish, .. KnowledgeArgs(run)];
+            Action<SessionEntry> onEntry = entry =>
             {
                 switch (entry.Kind)
                 {
@@ -1350,14 +1554,34 @@ public static class Factory
                         error = entry.Text;
                         break;
                 }
-            }, cancel, publish ? null : NoPublish, root => Observe(run, span, root));
+            };
+            if (publish)
+            {
+                // the turn that may push runs on its own, as a one-off claude, like before the open process: a second
+                // open process for it hung before reading its message (round 4, cause not found yet). The open one is
+                // closed first - it would not know this turn, and the next turn resumes the session from its file.
+                CloseLive(run);
+                await ClaudeSessions.RunTurnAsync(run.Worktree, run.SessionId, isNew, prompt, onEntry, cancel, args, root => Observe(run, span, root));
+            }
+            else
+            {
+                await LiveFor(run, isNew, args).TurnAsync(prompt, onEntry, cancel, root => Observe(run, span, root));
+            }
         }
         finally
         {
+            if (error != null) CloseLive(run);
             span.Error = error ?? (cancel.IsCancellationRequested ? "stopped" : "");
             Finish(run, span, answer);
         }
         cancel.ThrowIfCancellationRequested();
+        // what it changed outside its folder, as it reported it
+        foreach (string outside in answer.Replace("\r", "").Split('\n').Select(l => l.Trim().TrimStart('*', '-', ' '))
+                     .Where(l => l.StartsWith("OUTSIDE:", StringComparison.OrdinalIgnoreCase)).Select(l => l[8..].Trim()))
+        {
+            if (!run.OutsideChanges.Contains(outside)) run.OutsideChanges.Add(outside);
+            Log(run, "Changed outside the repo: " + outside);
+        }
         // Claude needs something changed outside the folder: the developer decides
         if (error == null && Line(answer, "NEEDS_YOU:") is { Length: > 0 } need)
         {
@@ -1365,6 +1589,62 @@ public static class Factory
             throw new NeedsYouException("Claude needs you: " + need);
         }
         return (answer, error);
+    }
+
+    // what the factory learned for a repo, next to the app and never in the repo (the checkout stays clean):
+    // rules.md goes into every turn's system prompt, plugin\skills are its skills, settings.json holds its hooks
+    public static string KnowledgeDir(string repo) => Path.Combine(AppContext.BaseDirectory, "factory-knowledge",
+        Regex.Replace(Path.GetFullPath(repo).TrimEnd('\\', '/'), "[^A-Za-z0-9]+", "-").Trim('-'));
+
+    // the factory's rules and skill names for a repo, for Learn not to repeat them
+    private static string FactoryKnows(string repo)
+    {
+        string dir = KnowledgeDir(repo);
+        string rules = Path.Combine(dir, "rules.md");
+        string skills = Path.Combine(dir, "plugin", "skills");
+        string known = (File.Exists(rules) ? File.ReadAllText(rules).Trim() : "") +
+            (Directory.Exists(skills) ? "\nSkills: " + string.Join(", ", Directory.EnumerateDirectories(skills).Select(Path.GetFileName)) : "");
+        return known.Trim().Length > 0 ? known.Trim() : "(nothing yet)";
+    }
+
+    // the claude arguments that bring that knowledge into a turn
+    private static List<string> KnowledgeArgs(FactoryRun run)
+    {
+        var args = new List<string>();
+        if (run.Repo.Length == 0) return args;
+        string dir = KnowledgeDir(run.Repo);
+        string rules = Path.Combine(dir, "rules.md");
+        if (File.Exists(rules)) args.AddRange(["--append-system-prompt-file", rules]);
+        string skills = Path.Combine(dir, "plugin", "skills");
+        if (Directory.Exists(skills) && Directory.EnumerateDirectories(skills).Any()) args.AddRange(["--plugin-dir", Path.Combine(dir, "plugin")]);
+        string settings = Path.Combine(dir, "settings.json");
+        if (File.Exists(settings)) args.AddRange(["--settings", settings]);
+        return args;
+    }
+
+    // the run's open claude process when it fits this turn (same folder, session and arguments), else a new one
+    private static ClaudeSessions.LiveSession LiveFor(FactoryRun run, bool isNew, string[]? args)
+    {
+        lock (Live)
+        {
+            if (Live.TryGetValue(run.Id, out ClaudeSessions.LiveSession? open))
+            {
+                if (open.Usable && open.Key == ClaudeSessions.LiveSession.KeyOf(run.Worktree, run.SessionId, args)) return open;
+                open.Dispose();
+                Live.Remove(run.Id);
+            }
+            ClaudeSessions.LiveSession live = ClaudeSessions.LiveSession.Start(run.Worktree, run.SessionId, isNew, args);
+            Live[run.Id] = live;
+            return live;
+        }
+    }
+
+    private static void CloseLive(FactoryRun run)
+    {
+        lock (Live)
+        {
+            if (Live.Remove(run.Id, out ClaudeSessions.LiveSession? open)) open.Dispose();
+        }
     }
 
     // a one-off claude -p (locate, review, learn), streamed so its tools show in the trace; its answer
