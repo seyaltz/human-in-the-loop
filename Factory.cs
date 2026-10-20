@@ -2627,14 +2627,15 @@ public static class Factory
         var missing = Regex.Matches(text, @"`([^`\r\n]+\.[A-Za-z0-9]{1,6})`|([A-Za-z]:\\[^\s`'""*?<>|]+\.[A-Za-z0-9]{1,6})")
             .Select(m => (m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value).Trim().TrimEnd('.', ',', ')'))
             .Where(p => p.Contains('\\') || p.Contains('/'))
-            // never probe a network path: checking \\host\share would send this machine's Windows login to that host
-            .Where(p => !p.StartsWith(@"\\", StringComparison.Ordinal) && !p.StartsWith("//", StringComparison.Ordinal))
             .Distinct()
             .Where(p =>
             {
                 try
                 {
-                    string full = Path.IsPathRooted(p) ? p : Path.Combine(folder, p);
+                    // only a path on a local drive is probed: checking \\host\share (or /\host, \/host) would send this
+                    // machine's Windows login to that host
+                    string full = Path.GetFullPath(Path.IsPathRooted(p) ? p : Path.Combine(folder, p));
+                    if (!Regex.IsMatch(Path.GetPathRoot(full) ?? "", @"^[A-Za-z]:\\$")) return false;
                     return !File.Exists(full) && !Directory.Exists(full);
                 }
                 catch (Exception)
