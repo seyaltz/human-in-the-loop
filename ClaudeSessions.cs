@@ -164,43 +164,7 @@ public static class ClaudeSessions
         bool finished = false;
         while (await process.StandardOutput.ReadLineAsync() is { } line)
         {
-            if (!line.StartsWith('{')) continue;
-            try
-            {
-                using JsonDocument doc = JsonDocument.Parse(line);
-                JsonElement root = doc.RootElement;
-                onLine?.Invoke(root);
-                string type = root.TryGetProperty("type", out JsonElement t) ? t.GetString() ?? "" : "";
-                if (type == "assistant" && root.TryGetProperty("message", out JsonElement message)
-                    && message.TryGetProperty("content", out JsonElement content) && content.ValueKind == JsonValueKind.Array)
-                {
-                    var entries = new List<SessionEntry>();
-                    foreach (JsonElement block in content.EnumerateArray()) AddBlock(entries, block);
-                    foreach (SessionEntry entry in entries) onEntry(entry);
-                }
-                else if (type == "result")
-                {
-                    finished = true;
-                    bool error = root.TryGetProperty("is_error", out JsonElement e) && e.ValueKind == JsonValueKind.True;
-                    double seconds = root.TryGetProperty("duration_ms", out JsonElement ms) && ms.ValueKind == JsonValueKind.Number ? ms.GetDouble() / 1000 : 0;
-                    double cost = root.TryGetProperty("total_cost_usd", out JsonElement c) && c.ValueKind == JsonValueKind.Number ? c.GetDouble() : 0;
-                    string text = root.TryGetProperty("result", out JsonElement r) && r.ValueKind == JsonValueKind.String ? r.GetString()! : "";
-                    if (error)
-                    {
-                        onEntry(new SessionEntry(SessionEntryKind.Error, text.Length > 0 ? text : "the turn ended with an error"));
-                    }
-                    else
-                    {
-                        // the answer that ends the turn; the texts streamed before it were notes on the way
-                        if (text.Length > 0) onEntry(new SessionEntry(SessionEntryKind.Answer, text));
-                        onEntry(new SessionEntry(SessionEntryKind.Done, $"{seconds:0.#} s · ${cost:0.00}"));
-                    }
-                }
-            }
-            catch (JsonException)
-            {
-                // not a whole JSON line: skip it
-            }
+            finished |= ReadLine(line, onEntry, onLine);
         }
         await process.WaitForExitAsync();
         if (cancel.IsCancellationRequested)
@@ -211,6 +175,158 @@ public static class ClaudeSessions
         {
             string err = (await stderr).Trim();
             onEntry(new SessionEntry(SessionEntryKind.Error, $"claude exited with {process.ExitCode}" + (err.Length > 0 ? ": " + err : "")));
+        }
+    }
+
+    // one streamed line of a turn: its steps and answer go to onEntry; true when it is the line that ends the turn
+    private static bool ReadLine(string line, Action<SessionEntry> onEntry, Action<JsonElement>? onLine)
+    {
+        if (!line.StartsWith('{')) return false;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(line);
+            JsonElement root = doc.RootElement;
+            onLine?.Invoke(root);
+            string type = root.TryGetProperty("type", out JsonElement t) ? t.GetString() ?? "" : "";
+            if (type == "assistant" && root.TryGetProperty("message", out JsonElement message)
+                && message.TryGetProperty("content", out JsonElement content) && content.ValueKind == JsonValueKind.Array)
+            {
+                var entries = new List<SessionEntry>();
+                foreach (JsonElement block in content.EnumerateArray()) AddBlock(entries, block);
+                foreach (SessionEntry entry in entries) onEntry(entry);
+            }
+            else if (type == "result")
+            {
+                bool error = root.TryGetProperty("is_error", out JsonElement e) && e.ValueKind == JsonValueKind.True;
+                double seconds = root.TryGetProperty("duration_ms", out JsonElement ms) && ms.ValueKind == JsonValueKind.Number ? ms.GetDouble() / 1000 : 0;
+                double cost = root.TryGetProperty("total_cost_usd", out JsonElement c) && c.ValueKind == JsonValueKind.Number ? c.GetDouble() : 0;
+                string text = root.TryGetProperty("result", out JsonElement r) && r.ValueKind == JsonValueKind.String ? r.GetString()! : "";
+                if (error)
+                {
+                    onEntry(new SessionEntry(SessionEntryKind.Error, text.Length > 0 ? text : "the turn ended with an error"));
+                }
+                else
+                {
+                    // the answer that ends the turn; the texts streamed before it were notes on the way
+                    if (text.Length > 0) onEntry(new SessionEntry(SessionEntryKind.Answer, text));
+                    onEntry(new SessionEntry(SessionEntryKind.Done, $"{seconds:0.#} s · ${cost:0.00}"));
+                }
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+            // not a whole JSON line: skip it
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// A session's claude process kept open for many turns (--input-format stream-json): it starts with the user's
+    /// whole setup once, not once per turn. Measured: a new process took 11.7-13.7 s for a one-line answer, a later
+    /// turn of an open one 2.9-3.0 s, and the open process still knew the earlier turns. A stopped or failed turn
+    /// ends the process; the next turn starts a new one that resumes the session.
+    /// </summary>
+    public sealed class LiveSession : IDisposable
+    {
+        private readonly Process _process;
+        private readonly StringBuilder _stderr = new();
+        private bool _broken;
+
+        /// <summary>The folder, session id and arguments it was started with: a turn that needs others needs another process.</summary>
+        public string Key { get; }
+
+        public bool Usable => !_broken && !_process.HasExited;
+
+        private LiveSession(Process process, string key)
+        {
+            _process = process;
+            Key = key;
+        }
+
+        public static LiveSession Start(string folder, string id, bool isNew, IEnumerable<string>? extraArgs)
+        {
+            string[] extra = (extraArgs ?? []).ToArray();
+            var start = new ProcessStartInfo("claude")
+            {
+                WorkingDirectory = folder,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardInputEncoding = new UTF8Encoding(false),
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            foreach (string arg in new[] { "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions" })
+            {
+                start.ArgumentList.Add(arg);
+            }
+            start.ArgumentList.Add(isNew ? "--session-id" : "--resume");
+            start.ArgumentList.Add(id);
+            foreach (string arg in extra) start.ArgumentList.Add(arg);
+            Process process = Process.Start(start) ?? throw new InvalidOperationException("could not start claude");
+            var live = new LiveSession(process, KeyOf(folder, id, extra));
+            process.ErrorDataReceived += (_, e) =>
+            {
+                if (e.Data != null) lock (live._stderr) live._stderr.AppendLine(e.Data);
+            };
+            process.BeginErrorReadLine();
+            return live;
+        }
+
+        public static string KeyOf(string folder, string id, IEnumerable<string>? extraArgs) =>
+            folder + "|" + id + "|" + string.Join(" ", extraArgs ?? []);
+
+        /// <summary>One turn: the prompt goes in as the next user message; it ends at the turn's result line.</summary>
+        public async Task TurnAsync(string prompt, Action<SessionEntry> onEntry, CancellationToken cancel, Action<JsonElement>? onLine = null)
+        {
+            bool finished = false;
+            using (cancel.Register(Dispose))
+            {
+                try
+                {
+                    string message = JsonSerializer.Serialize(new
+                    {
+                        type = "user",
+                        message = new { role = "user", content = new[] { new { type = "text", text = prompt } } },
+                    });
+                    await _process.StandardInput.WriteLineAsync(message);
+                    await _process.StandardInput.FlushAsync();
+                    while (await _process.StandardOutput.ReadLineAsync() is { } line)
+                    {
+                        if (ReadLine(line, onEntry, onLine))
+                        {
+                            finished = true;
+                            break;
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+                {
+                    // the process went away under the read (stopped, or it died): reported below
+                }
+            }
+            if (cancel.IsCancellationRequested)
+            {
+                onEntry(new SessionEntry(SessionEntryKind.Error, "Stopped."));
+            }
+            else if (!finished)
+            {
+                _broken = true;
+                string err;
+                lock (_stderr) err = _stderr.ToString().Trim();
+                string code = _process.HasExited ? $" with {_process.ExitCode}" : "";
+                onEntry(new SessionEntry(SessionEntryKind.Error, $"claude exited{code}" + (err.Length > 0 ? ": " + err : "")));
+            }
+        }
+
+        /// <summary>Ends the process and everything it started.</summary>
+        public void Dispose()
+        {
+            _broken = true;
+            try { _process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
         }
     }
 

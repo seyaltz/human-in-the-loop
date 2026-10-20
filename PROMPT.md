@@ -420,7 +420,14 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      **Every turn** is told to change files only inside its folder - never shared build homes (Gradle, Maven, npm,
      Ivy settings), the developer's profile, tool or system settings, not even to make a command work - and to end
      with `NEEDS_YOU: <what, where, why>` instead; that line stops the run with "Claude needs you: ...".
-  3. **Build**: the same session implements the plan and its tests, without committing or pushing.
+  3. **Build**: the same session implements the plan and its tests, without committing or pushing, and without
+     starting the app or calling it - Prove runs the app once (seen in a real run: Build restarted the service, 41 s,
+     and Prove restarted it again, 40 s).
+     The session's turns share **one open claude process** (`claude -p --input-format stream-json`, each turn one
+     user message, it ends at the turn's `result` line) while the folder, session id and arguments stay the same -
+     the PR turn, which may push, gets its own. A new process starts the developer's whole setup each time:
+     measured 11.7-13.7 s for a one-line answer, against 2.9-3.0 s for a later turn of an open process. A stopped or
+     failed turn ends the process, and so does the end of the run's drive; the next turn resumes the session.
   4. **Verify**: Dev break runs the verify command itself (a fresh PowerShell in the run's folder with the machine's
      default environment, both streams, 30 min max - so the plan's command must carry what its own commands needed,
      e.g. `$env:JAVA_HOME=...`). It is done when the command's own process exits (the `Exited` event), not when every
@@ -467,14 +474,42 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      a check on the machine requires it), linked to the Jira issue; the PR is the URL on the reply's **last line**
      only (a link elsewhere in the reply is not a PR).
   7. **Learn** (after every run that got a worktree, unless stopped): a `claude -p` without tools reads the task, the
-     log and the repo's `MEMORY.md` and replies `LESSON: <memory|claude-md|hook|skill> | <name> | <description>` blocks
-     (at most 4). **Memory** notes are saved at once into the repo's memory folder (from the init line), listed in
-     `MEMORY.md`, ending "Learned by a Dev break factory run on <date> (<title>)" - **Undo** removes the file and its
-     line. **Rules wait for the developer**: **Apply** appends a CLAUDE.md line to `<repo>\CLAUDE.md`, saves a skill to
-     `<repo>\.claude\skills\<name>\SKILL.md`, or merges a hook object into `<repo>\.claude\settings.local.json`;
-     **Dismiss** drops it.
+     log, the repo's `MEMORY.md` and the factory's rules and skill names for the repo, and replies
+     `LESSON: <memory|claude-md|hook|skill> | <name> | <description>` blocks (at most 4). It is asked first for what the
+     next run there needs most: the fastest way to build, start, restart and check the service (commands, ports, health
+     URL, environment), where the logic for that kind of task lives and the repo's conventions, and the language and
+     framework facts the run had to look up. **Memory** notes are saved at once into the repo's memory folder (from the
+     init line), listed in `MEMORY.md`, ending "Learned by a Dev break factory run on <date> (<title>)" - **Undo**
+     removes the file and its line. **Rules wait for the developer**, and never go into the repo (a file there would
+     leave the run's checkout dirty and could end up in a PR; seen in a real run): they go to
+     `factory-knowledge\<repo path as a name>\` next to the app - **Apply** appends a rule line to `rules.md`, saves a
+     skill to `plugin\skills\<name>\SKILL.md` (the folder is a plugin, `plugin\.claude-plugin\plugin.json`), or merges
+     a hook object into `settings.json`. Every turn of a run in that repo gets them: `--append-system-prompt-file
+     rules.md`, `--plugin-dir plugin`, `--settings settings.json` (each proven headless: the rule, the skill and a
+     UserPromptSubmit hook's context all reached Claude); **Dismiss** drops it.
   Anything that stops a run (a failed turn, checks still failing, no PR URL) ends it at **Needs you** with the reason;
   **Stop** ends it at **Stopped**. A run open when Dev break closes is marked Stopped on the next start.
+- **Autonomous** (a checkbox in the form, on by default, remembered): no human in the loop.
+  - The plan's questions take the suggested answers - "no one will answer, so make them the best choice" - logged as
+    "Decisions taken on my own" and listed in the PR description.
+  - Every turn may change what the work needs outside its folder (local machine settings, a shared build home, a local
+    service's config): each file copied to `<file>.bak-devbreak` first and reported as `OUTSIDE: <path> - <what> -
+    <backup>`, logged and listed in the PR; never secrets, credentials or logins. `NEEDS_YOU:` is only for what no tool
+    can do (a login in a browser, a credential, an access grant).
+  - Another run working in the checkout: this one goes on in a separate worktree.
+  - Stuck on its checks (verify, prove or review still failing): one **fresh attempt** - a new session plans again with
+    what went wrong (the note, the last verify, review findings and app check), builds, checks, PR. Stuck again, or
+    NEEDS_YOU: it stops - the developer is told by a Windows notification - and Learn is asked what would have let it
+    finish on its own ("THE RUN GOT STUCK ..."), so the next run corrects itself. A run that stops on NEEDS_YOU inside
+    a step learns too, once it got as far as a Claude step (seen in a test: it skipped Learn).
+  - Learned rules (rule lines, skills, hooks) are applied at once, each with **Undo** (the appended text taken
+    out, the skill's folder deleted, the settings restored from the backup made before).
+  Not autonomous: the questions stop the run, outside changes are forbidden (`NEEDS_YOU`), rules wait for Apply.
+- **No change needed** (the plan says `CHANGE: none` - the task asks for an answer, like a curl or an explanation): no
+  build, verify, review or PR; an "Answer" turn checks the answer against the running app (evidence and manifest as
+  in Prove, up to 2 attempts) and gives it after `RESULT:`; the run ends Done ("Answered - no change was needed, so no
+  PR") and its branch, with no commit, is deleted when the checkout goes back.
+- A run that stops at Needs you after working is announced with a Windows notification.
 - **Feedback**, three kinds:
   - **Send to the run** (a run that is not working and has its plan and worktree): the text is kept on the run, a
     "Your feedback" turn in the run's session applies it (without committing), verify and review run again, then the
@@ -571,7 +606,15 @@ Score?, Xp, Lesson?)`), earned `Badges` (`record EarnedBadge(Id, At)`) and `Goal
 - Calls: `QuestionAnswered(tab, topic, score)` after scoring; `QuestionSeen(tab, topic)` on Show answer;
   `LessonDone(course, index, title, courseFinished)` / `LessonUndone(course, index)` from Mark as done.
 
-## Main window (`QuestionWindow`): Quiz, Learn, Stats, TL;DR, Sessions and Factory in one window
+## Insights (`InsightsView`)
+
+- A tab after Factory, built in code like Stats: every lesson the factory's runs kept - status saved, applied or
+  pending (dismissed and undone are left out) - grouped by repo (a card per repo: its folder name, the count and the
+  path), newest run first. Each shows its kind (MEMORY, RULE, SKILL, HOOK), name, state, description, content and
+  `from "<run title>" · <date>`. It refreshes when a run changes while it is shown. Nothing kept yet: a line that says
+  what will show up there.
+
+## Main window (`QuestionWindow`): Quiz, Learn, Stats, TL;DR, Sessions, Factory and Insights in one window
 
 Light and simple: Fluent theme surfaces, rounded cards, few controls. Shared styles in `App.xaml` resources:
 `ChipList` (a `ListBox` with a `WrapPanel`, items templated as rounded chips: `ControlFillColorDefaultBrush` with a
@@ -581,7 +624,7 @@ with `TextOnAccentFillColorPrimaryBrush` text) and `Card` (a `Border`, corner ra
 
 900x680, min 640x460, Topmost, placed bottom-right of the work area (16 px margin).
 - **Top bar**: on the left six toggle buttons in one group (`RadioButton`s with the `ToggleButton` style): **Quiz**
-  (default), **Learn**, **Stats**, **TL;DR**, **Sessions**, **Factory**. On the right the game HUD: a rank pill (rank colour, white caps), an XP bar (130 px,
+  (default), **Learn**, **Stats**, **TL;DR**, **Sessions**, **Factory**, **Insights**. On the right the game HUD: a rank pill (rank colour, white caps), an XP bar (130 px,
   "N / next XP"), the streak "🔥 N" (tooltip with the best), today's goal "🎯 q/3 questions · l/1 lesson" or "🎯 Goal
   done", and a gear button.
 - **Gear menu** (a `ContextMenu` built on click): "Knowledge about me" (From my Claude history / From profile.txt /

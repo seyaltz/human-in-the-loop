@@ -67,6 +67,10 @@
                                      FontSize="12.5" AutomationProperties.Name="Verify command" />
                         </StackPanel>
                     </Grid>
+                    <CheckBox x:Name="AutonomousBox" Margin="2,10,0,0" IsChecked="True" AutomationProperties.Name="Autonomous"
+                              ToolTip="No human in the loop: the plan's questions take the suggested answers, the run fixes what it needs outside the repo (backed up and listed), learned rules apply at once, and it stops only for what no tool can do - a login">
+                        <TextBlock TextWrapping="Wrap" FontSize="13"><Run FontWeight="SemiBold" Text="Autonomous" /><Run Text=" - no stops; it decides, fixes and learns on its own" /></TextBlock>
+                    </CheckBox>
                     <TextBlock x:Name="FormError" Foreground="{StaticResource CoralInkBrush}" TextWrapping="Wrap" Margin="2,8,0,0"
                                Visibility="Collapsed" />
                     <Button x:Name="StartButton" Content="Start run" Style="{StaticResource PrimaryButton}" Margin="0,12,0,0"
@@ -92,7 +96,7 @@
         <ContentControl Grid.Column="1" Style="{StaticResource ShadowCard}" Padding="20,16,16,14">
             <Grid>
                 <TextBlock x:Name="EmptyText" Style="{StaticResource Caption}" TextWrapping="Wrap" FontSize="14" Margin="4"
-                           Text="Give the factory a task - typed, a Jira issue or a spec - and a repository. Each run works in its own git worktree and branch: Claude plans, builds and fixes until the verify command passes, a read-only reviewer checks the diff, and then Claude opens a draft PR. What the run learned goes into the repo's Claude memory; new rules (CLAUDE.md, hooks, skills) wait for your OK." />
+                           Text="Give the factory a task - typed, a Jira issue or a spec - and a repository. Each run works in your checkout on a new branch: Claude plans, builds and fixes until the verify command passes, proves it in the running app, a read-only reviewer checks the diff, and then Claude opens a draft PR. Facts it learned go into the repo's Claude memory; rules, skills and hooks are kept by the factory outside the repo, for its next runs there." />
                 <DockPanel x:Name="RunArea" Visibility="Collapsed">
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                         <WrapPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top" MaxWidth="420"

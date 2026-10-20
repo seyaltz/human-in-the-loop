@@ -100,26 +100,45 @@ needs - screenshots, a video, tests that fail before and pass after, coverage of
 CRAP scores, API responses, logs, traces - shown in the run's **Evidence** tab; a second Claude that can only read reviews the diff with that evidence; only then may Claude
 push and open a **draft** PR - you review and merge. If a check keeps failing, the run stops and says why.
 
-Then it **learns**: facts the run had to discover go straight into the repo's Claude memory (with Undo), and rules -
-a CLAUDE.md line, a hook, a skill - wait for your **Apply**. The next run starts smarter.
+Then it **learns** what the next run there needs most: how to build, start and check the service fastest, where the
+logic for that kind of task lives, and the language and framework facts it had to look up (say, the Java version and
+its features). Facts go straight into the repo's Claude memory (with Undo), so your own sessions there know them too.
+Rules, skills and hooks wait for your **Apply** and are kept by the factory **outside the repo**
+(`factory-knowledge\` next to the app) - every later factory step in that repo gets them (the rules in its system
+prompt, the skills as a plugin, the hooks as settings), and your checkout never gets a file it did not ask for. The
+next run starts smarter.
 
 Tell it what you think: **send feedback to the run** ("also handle underscores") and it applies it, checks again and
 updates the draft PR; **rate the run** good or bad with a note; say **why** when you undo or dismiss a lesson. All of
 it goes into what the factory learns. Every run has a **Trace** - each step with its time, cost, tokens, every tool
 call and the exact prompt and answer - and **Export trace** saves it as JSON and Markdown.
 
-When the task leaves a decision to you, the run **stops after its plan and asks** - answer in the box and it builds.
+**Autonomous** (on by default): no human in the loop. The run takes the plan's open decisions itself (and lists them
+in the PR), fixes what it needs on your machine outside the repo (backed up, listed), applies what it learns at once
+(with Undo), and when its checks keep failing it makes one fresh attempt; it stops - with a Windows notification - only
+for what no tool can do, like a login, and learns how to get further next time. A task that needs no code change (give
+me the curl...) is answered and checked against the running app, with no PR.
+
+Without Autonomous, when the task leaves a decision to you, the run **stops after its plan and asks** - answer in the box and it builds.
 It never changes anything outside the repo (shared build settings, your profile); if something there must change, it
 stops and asks. What you asked to get back - a curl, an answer, a link - is shown on top of the run, ready to copy.
 
 Every step is timed: a step or tool call that runs **over a minute** turns amber and you get a Windows notification;
-what was slow goes into what the factory learns, so the next run in that repo is faster.
+what was slow goes into what the factory learns, so the next run in that repo is faster. A run keeps **one Claude
+process open** for its steps (plan, build, fixes, prove) instead of starting Claude - with your whole setup - for each
+one, and Build leaves running the app to Prove, so the app is started once.
 
 The **History** tab lists every run so far: **Continue** one that stopped or needs you, from where it stopped. **Clean
 up** deletes what a run left on disk - its worktree (if it had one) and that worktree's session files, its evidence,
 and its local branch once that is pushed - after showing what goes and warning about any work that would be lost (an
 unpushed branch keeps its commits); **Clean up all** does every finished run. Your checkout and its files, its
 sessions and memory, and the remote branches and PRs are never touched, and each run's record and trace stay.
+
+## Insights
+
+The **Insights** tab collects what the factory learned while building features, per repo, newest first: the memory
+notes, rules, skills and hooks its runs kept (how to start the service fast, where the logic lives, the language and
+framework facts it had to look up), each with the run it came from. Dismissed and undone lessons are left out.
 
 ## Save it to your Claude
 

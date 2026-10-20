@@ -69,6 +69,7 @@ public partial class FactoryView : UserControl
         _started = true;
         foreach (FactoryRun run in Factory.Runs) RunList.Items.Add(Row(run));
         UpdateRunsSummary();
+        AutonomousBox.IsChecked = AppSettings.Get("factoryAutonomous") != "0";
         IReadOnlyList<string> repos = await Task.Run(ClaudeProjects.GitRepos);
         foreach (string repo in repos.OrderBy(r => r, StringComparer.OrdinalIgnoreCase)) RepoBox.Items.Add(repo);
         if (AppSettings.Get("factoryRepo") is { Length: > 0 } last) RepoBox.Text = last;
@@ -140,7 +141,9 @@ public partial class FactoryView : UserControl
         FactorySource source = JiraSource.IsChecked == true ? FactorySource.Jira : SpecSource.IsChecked == true ? FactorySource.Spec : FactorySource.Typed;
         AppSettings.Set("factoryRepo", repo);
         if (IsRepo(repo) && VerifyBox.Text.Trim().Length > 0) AppSettings.Set("factoryVerify:" + repo.ToLowerInvariant(), VerifyBox.Text.Trim());
-        FactoryRun run = Factory.Create(source, task, repo, baseBranch, VerifyBox.Text);
+        bool autonomous = AutonomousBox.IsChecked == true;
+        AppSettings.Set("factoryAutonomous", autonomous ? "1" : "0");
+        FactoryRun run = Factory.Create(source, task, repo, baseBranch, VerifyBox.Text, autonomous);
         RunList.Items.Insert(0, Row(run));
         RunList.SelectedIndex = 0;
         RunsTab.IsChecked = true;
@@ -181,8 +184,16 @@ public partial class FactoryView : UserControl
         if (RunList.SelectedItem is ListBoxItem { Tag: FactoryRun run }) Show(run);
     }
 
+    // the runs that were working at the last update: one that stops needing the developer is told once
+    private readonly HashSet<string> _working = [];
+
     private void Update(FactoryRun run)
     {
+        if (run.Working) _working.Add(run.Id);
+        else if (_working.Remove(run.Id) && run.Stage == FactoryStage.NeedsYou)
+        {
+            App.Alert("Dev break factory - needs you", $"{Short(run.Title, 60)}\n{Short(run.Note, 180)}");
+        }
         UpdateRow(run);
         UpdateRunsSummary();
         if (run == _shown) Show(run);
@@ -311,7 +322,8 @@ public partial class FactoryView : UserControl
             ExportText.Visibility = Visibility.Collapsed;
         }
         // feedback needs a run that is not working and still has its worktree and session
-        bool canFeedback = !run.Working && run.Plan.Length > 0 && Directory.Exists(run.Worktree);
+        // the run has a session to talk to once its first Claude turn ran (a NEEDS_YOU in the plan leaves no plan yet)
+        bool canFeedback = !run.Working && !run.CleanedUp && run.Trace.Any(s => s.Kind == "turn") && Directory.Exists(run.Worktree);
         FeedbackButton.IsEnabled = canFeedback;
         FeedbackBox.IsEnabled = canFeedback;
         RateButton.IsEnabled = !run.Working && run.Repo.Length > 0;
@@ -625,7 +637,7 @@ public partial class FactoryView : UserControl
 
     private Border LessonCard(FactoryRun run, FactoryLesson lesson)
     {
-        string kind = lesson.Kind switch { "memory" => "memory", "claude-md" => "CLAUDE.md rule", "hook" => "hook", _ => "skill" };
+        string kind = lesson.Kind switch { "memory" => "memory", "claude-md" => "rule", "hook" => "hook", _ => "skill" };
         string state = lesson.Status switch
         {
             "saved" => "saved to the repo's memory", "pending" => "waits for your OK", "applied" => "applied to " + lesson.File,
@@ -690,6 +702,7 @@ public partial class FactoryView : UserControl
         }
         else if (lesson.Status == "applied")
         {
+            buttons.Children.Add(Act("Undo", false, () => AskWhy("Undo it", why => Factory.Undo(run, lesson, why))));
             buttons.Children.Add(Act("Open file", false, () => OpenFile(lesson.File)));
         }
         if (buttons.Children.Count > 0) body.Children.Add(buttons);
