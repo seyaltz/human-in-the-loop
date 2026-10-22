@@ -633,8 +633,9 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
     repo with a big CLAUDE.md);
     **Curated** - their settings and connectors, only the plugins listed (`CuratedKeep`, default "playwright,
     atlassian, context7"; the others off through `enabledPlugins` in the turn's settings file, a file of its own) ~8 s;
-    **Fast lane** - none of their setup (`--setting-sources ""`, `--strict-mcp-config`): the factory's guard and
-    push block, its learned rules, the developer's CLAUDE.md and the repo's CLAUDE.md / AGENTS.md handed in as one
+    **Fast lane** - none of their plugins or MCP servers (`--setting-sources ""`, `--strict-mcp-config`), but their
+    own `settings.json` hooks and permission rules copied into the turn's settings file (`OwnGuards`; they cost no
+    measurable start time - their safety guards keep running), the factory's guard and push block, its learned rules, the developer's CLAUDE.md and the repo's CLAUDE.md / AGENTS.md handed in as one
     `--append-system-prompt-file` (a session without settings reads no CLAUDE.md - tested), built-in tools ~7 s, 24k;
     **Auto** (the default) - a lean call (no tools, no setup) reads the task and answers `LANE: FAST|FULL <why>` (the
     code is enough vs data, cloud, browser, the issue tracker, the stack; unsure: full); a Jira issue or a spec is

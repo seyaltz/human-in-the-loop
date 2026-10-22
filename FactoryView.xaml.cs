@@ -164,7 +164,7 @@ public partial class FactoryView : UserControl
         if (LaneHint == null) return;
         LaneHint.Text = Lane switch
         {
-            FactoryHarness.Fast => "Fast lane: none of your plugins, hooks or MCP servers - the factory's own guard and rules, the repo's CLAUDE.md, built-in tools. About 7 s per step to start instead of 19. If a step needs your tools, the task moves to Full by itself.",
+            FactoryHarness.Fast => "Fast lane: none of your plugins or MCP servers (your own settings.json guard hooks stay) - the factory's own guard and rules, the repo's CLAUDE.md, built-in tools. About 7 s per step to start instead of 19. If a step needs your tools, the task moves to Full by itself.",
             FactoryHarness.Curated => "Curated: your settings and connectors, with only the plugins listed under More options. About 8 s per step to start.",
             FactoryHarness.Full => "Full: everything you have - all plugins, hooks and MCP servers. About 19 s per step to start.",
             _ => "Auto: the gate reads the task and picks the fast lane (the code is enough) or full (data, cloud, browser, the issue tracker). The review always runs lean, and the draft PR step always runs on your full setup, so your own PR gate checks it.",
