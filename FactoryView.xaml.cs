@@ -16,12 +16,15 @@ using System.Windows.Shapes;
 namespace DevBreak;
 
 /// <summary>
-/// The Factory view: a new task (typed, a Jira issue or a spec) for a repository, the runs, and the selected run -
-/// its pipeline, its log, its draft PR and what it learned for the repo's Claude (memory saved, rules to approve).
+/// The Factory view: on the left a new task, the floor and the inbox of tasks (needs you, working, done); on the
+/// right the New task form, the floor, or the selected task - its production line, one card for what it needs now,
+/// and its activity, evidence, trace and what it learned.
 /// </summary>
 public partial class FactoryView : UserControl
 {
     private readonly Dictionary<string, (Ellipse Light, TextBlock Status)> _rows = [];
+    // the inbox group each task was listed under: a task that moves to another group rebuilds the list
+    private readonly Dictionary<string, Group> _listedIn = [];
     private FactoryRun? _shown;
     private int _shownLog = -1;
     private string? _shownLessons;
@@ -30,8 +33,14 @@ public partial class FactoryView : UserControl
     // the trace steps the developer opened stay open while the trace updates
     private readonly HashSet<int> _openSpans = [];
     private bool _started;
+    // Request changes pressed: the card shows the kinds of change and the box for the next revision
+    private bool _changing;
 
-    /// <summary>"Open in Sessions": the run's Claude Code session, to continue it there.</summary>
+    private enum Group { NeedsYou, Working, Done }
+
+    private enum Page { Form, Floor, Task }
+
+    /// <summary>"Open in Sessions": the task's Claude Code session, to continue it there.</summary>
     public event Action<SessionInfo>? OpenSessionRequested;
 
     // the slow watchdog: every few seconds, a step or tool call that just passed a minute turns amber and is told
@@ -41,19 +50,18 @@ public partial class FactoryView : UserControl
     public FactoryView()
     {
         InitializeComponent();
-        FloorHowText.Text = RunHowText.Text = FactoryLine.HowItWorks;
+        FloorHowText.Text = EmptyHowText.Text = FactoryLine.HowItWorks;
         Factory.Changed += run => Dispatcher.BeginInvoke(() => Update(run));
-        // a linked run the factory started for another repo: it shows up in History at once
+        // a linked task the factory started for another repo: it shows up in the inbox at once
         Factory.RunCreated += run => Dispatcher.BeginInvoke(() =>
         {
             if (_rows.ContainsKey(run.Id)) return;
-            RunList.Items.Insert(0, Row(run));
-            UpdateRunsSummary();
+            ShowList();
         });
         _watchdog.Tick += (_, _) =>
         {
-            // the times on the line move while a station works
-            if (_shown is { Working: true } shown) ShowPipeline(shown);
+            // the times on the line and the card move while a station works
+            if (_shown is { Working: true } shown && RunPage.Visibility == Visibility.Visible) Show(shown);
             if (FloorArea.Visibility == Visibility.Visible) ShowFloor();
             foreach ((FactoryRun run, string text) in Factory.CheckSlow())
             {
@@ -71,28 +79,52 @@ public partial class FactoryView : UserControl
         return brush;
     }
 
-    /// <summary>Lists the runs and the repositories the first time the view is shown.</summary>
+    /// <summary>Lists the tasks and the repositories the first time the view is shown.</summary>
     public async void Start()
     {
         if (_started) return;
         _started = true;
-        foreach (FactoryRun run in Factory.Runs) RunList.Items.Add(Row(run));
-        UpdateRunsSummary();
+        ShowList();
+        ShowPage(Factory.Runs.Count == 0 ? Page.Form : Page.Task);
         AutonomousBox.IsChecked = AppSettings.Get("factoryAutonomous") != "0";
         ReportBox.IsChecked = AppSettings.Get("factoryReport") == "1";
         if (AppSettings.Get("factoryDepartment") is "Troubleshooting") TroubleshootingDept.IsChecked = true;
         else if (AppSettings.Get("factoryDepartment") is "Research") ResearchDept.IsChecked = true;
         else if (AppSettings.Get("factoryDepartment") is "Development") DevelopmentDept.IsChecked = true;
         else if (AppSettings.Get("factoryDepartment") is "Management") ManagementDept.IsChecked = true;
+        Department_Checked(this, new RoutedEventArgs());
         IReadOnlyList<string> repos = await Task.Run(ClaudeProjects.GitRepos);
         foreach (string repo in repos.OrderBy(r => r, StringComparer.OrdinalIgnoreCase)) RepoBox.Items.Add(repo);
         if (AppSettings.Get("factoryRepo") is { Length: > 0 } last) RepoBox.Text = last;
         await RepoChangedAsync();
     }
 
+    // one page on the right: the New task form, the floor, or the selected task
+    private void ShowPage(Page page)
+    {
+        FormArea.Visibility = page == Page.Form ? Visibility.Visible : Visibility.Collapsed;
+        FloorArea.Visibility = page == Page.Floor ? Visibility.Visible : Visibility.Collapsed;
+        RunPage.Visibility = page == Page.Task ? Visibility.Visible : Visibility.Collapsed;
+        NewButton.Style = (Style)FindResource(page == Page.Form ? "SecondaryButton" : "PrimaryButton");
+        if (page == Page.Floor) ShowFloor();
+    }
+
+    private void New_Click(object sender, RoutedEventArgs e)
+    {
+        RunList.SelectedItem = null;
+        ShowPage(Page.Form);
+        TaskBox.Focus();
+    }
+
+    private void Floor_Click(object sender, RoutedEventArgs e)
+    {
+        RunList.SelectedItem = null;
+        ShowPage(Page.Floor);
+    }
+
     // --- the form ---
 
-    // null: Auto - the gate chooses when the run starts
+    // null: Auto - the gate chooses when the task starts
     private FactoryDepartment? Department => AutoDept.IsChecked == true ? null
         : TroubleshootingDept.IsChecked == true ? FactoryDepartment.Troubleshooting
         : ResearchDept.IsChecked == true ? FactoryDepartment.Research
@@ -101,12 +133,20 @@ public partial class FactoryView : UserControl
     // troubleshooting and research change no code: no verify command, and they always end in a report
     private void Department_Checked(object sender, RoutedEventArgs e)
     {
-        if (ReportBox == null || VerifyBox == null) return;
+        if (ReportBox == null || VerifyBox == null || DepartmentHint == null) return;
         bool dev = Department is null or FactoryDepartment.Development;
         VerifyBox.IsEnabled = dev;
         ReportBox.IsEnabled = dev;
         if (!dev) ReportBox.IsChecked = true;
         else ReportBox.IsChecked = AppSettings.Get("factoryReport") == "1";
+        DepartmentHint.Text = Department switch
+        {
+            null => "A gate reads the task when it starts and chooses the department.",
+            FactoryDepartment.Development => "Builds a change: plan, build, verify, review, prove, then a draft PR.",
+            FactoryDepartment.Troubleshooting => "A customer's or a site's problem, for the call center: reproduce, compare with what works, root cause - no code; a report with a plain part for support.",
+            FactoryDepartment.Research => "A question about the system: a checked answer and a report - no code.",
+            _ => "A vision, an idea or a company-wide matter: a decision brief - options, value, effort, risk, a recommendation - no code.",
+        };
         Source_Checked(sender, e);
     }
 
@@ -124,7 +164,7 @@ public partial class FactoryView : UserControl
                 _ => "What to build or fix",
             };
         BrowseSpecButton.Visibility = SpecSource.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
-        TaskBox.Height = TypedSource.IsChecked == true ? 92 : 40;
+        TaskBox.Height = TypedSource.IsChecked == true ? 140 : 40;
     }
 
     private void BrowseSpec_Click(object sender, RoutedEventArgs e)
@@ -152,7 +192,7 @@ public partial class FactoryView : UserControl
     private string _formRepo = "";
 
     // a repository picked: its current branch as the base, and the verify command used there last time; a folder
-    // with repos in it: both empty - the run finds the repo and fills them
+    // with repos in it: both empty - the task finds the repo and fills them
     private async Task RepoChangedAsync()
     {
         string repo = RepoBox.Text.Trim().TrimEnd('\\');
@@ -188,15 +228,55 @@ public partial class FactoryView : UserControl
         if (department is null or FactoryDepartment.Development) AppSettings.Set("factoryReport", report ? "1" : "0");
         AppSettings.Set("factoryDepartment", department?.ToString() ?? "Auto");
         FactoryRun run = Factory.Create(source, task, repo, baseBranch, department is null or FactoryDepartment.Development ? VerifyBox.Text : "", autonomous, report, department);
-        RunList.Items.Insert(0, Row(run));
-        RunList.SelectedIndex = 0;
-        RunsTab.IsChecked = true;
-        UpdateRunsSummary();
         TaskBox.Clear();
+        Select(run);
         await Factory.RunAsync(run);
     }
 
-    // --- the runs ---
+    // --- the inbox: needs you, working, done ---
+
+    private static Group GroupOf(FactoryRun run) => run.Working ? Group.Working
+        : run.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped && !run.CleanedUp ? Group.NeedsYou : Group.Done;
+
+    // the list again, in its groups (newest first in each), keeping the task that was selected
+    private void ShowList()
+    {
+        FactoryRun? selected = (RunList.SelectedItem as ListBoxItem)?.Tag as FactoryRun;
+        RunList.Items.Clear();
+        _rows.Clear();
+        _listedIn.Clear();
+        List<FactoryRun> runs = Factory.Runs.OrderByDescending(r => r.Created).ToList();
+        foreach ((Group group, string name) in new[] { (Group.NeedsYou, "NEEDS YOU"), (Group.Working, "WORKING"), (Group.Done, "DONE") })
+        {
+            List<FactoryRun> mine = runs.Where(r => GroupOf(r) == group).ToList();
+            if (mine.Count == 0) continue;
+            RunList.Items.Add(new ListBoxItem
+            {
+                Content = new TextBlock { Text = $"{name} ({mine.Count})", FontSize = 11, FontWeight = FontWeights.Bold, Foreground = (Brush)FindResource(group == Group.NeedsYou ? "CoralInkBrush" : "InkSoftBrush") },
+                Focusable = false, IsHitTestVisible = false, Margin = new Thickness(0, RunList.Items.Count == 0 ? 0 : 10, 0, 0),
+            });
+            foreach (FactoryRun run in mine)
+            {
+                RunList.Items.Add(Row(run));
+                _listedIn[run.Id] = group;
+            }
+        }
+        if (runs.Count == 0)
+        {
+            RunList.Items.Add(new ListBoxItem { Content = new TextBlock { Text = "No tasks yet.", Style = (Style)FindResource("Caption") }, Focusable = false, IsHitTestVisible = false });
+        }
+        if (selected != null && RunList.Items.OfType<ListBoxItem>().FirstOrDefault(i => i.Tag == selected) is { } again) RunList.SelectedItem = again;
+        UpdateRunsSummary();
+    }
+
+    // the task picked: listed, selected and shown
+    private void Select(FactoryRun run)
+    {
+        if (!_rows.ContainsKey(run.Id)) ShowList();
+        if (RunList.Items.OfType<ListBoxItem>().FirstOrDefault(i => i.Tag == run) is { } item) RunList.SelectedItem = item;
+        ShowPage(Page.Task);
+        Show(run);
+    }
 
     private ListBoxItem Row(FactoryRun run)
     {
@@ -210,7 +290,7 @@ public partial class FactoryView : UserControl
         DockPanel.SetDock(light, Dock.Left);
         row.Children.Add(light);
         row.Children.Add(text);
-        var item = new ListBoxItem { Content = row, Tag = run, ToolTip = run.Repo };
+        var item = new ListBoxItem { Content = row, Tag = run, ToolTip = run.Repo.Length > 0 ? run.Repo : run.Folder };
         UpdateRow(run);
         return item;
     }
@@ -219,18 +299,18 @@ public partial class FactoryView : UserControl
     {
         if (!_rows.TryGetValue(run.Id, out var row)) return;
         SetLight(row.Light, run);
-        row.Status.Text = $"{(run.Department != FactoryDepartment.Development ? run.Department + " · " : "")}{(run.Revision > 1 ? $"Revision {run.Revision} · " : "")}{System.IO.Path.GetFileName(run.Repo.Length > 0 ? run.Repo : run.Folder)} · {(run.Accepted ? "Accepted" : StageName(run))}{(run.Cost > 0 ? $" · ${run.Cost:0.00}" : "")}";
+        row.Status.Text = $"{(run.Department != FactoryDepartment.Development ? run.Department + " · " : "")}{(run.Revision > 1 ? $"revision {run.Revision} · " : "")}{System.IO.Path.GetFileName(run.Repo.Length > 0 ? run.Repo : run.Folder)} · {StatusText(run)}";
         if (((row.Status.Parent as StackPanel)?.Children[0]) is TextBlock title) title.Text = run.Title;
     }
 
     private void RunList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        // a run picked on the floor's list opens its page
-        if (FloorTab.IsChecked == true && RunList.SelectedItem != null && RunList.IsKeyboardFocusWithin) RunsTab.IsChecked = true;
-        if (RunList.SelectedItem is ListBoxItem { Tag: FactoryRun run }) Show(run);
+        if (RunList.SelectedItem is not ListBoxItem { Tag: FactoryRun run }) return;
+        ShowPage(Page.Task);
+        Show(run);
     }
 
-    // the runs that were working at the last update: one that stops needing the developer is told once
+    // the tasks that were working at the last update: one that stops needing the developer is told once
     private readonly HashSet<string> _working = [];
 
     private void Update(FactoryRun run)
@@ -243,29 +323,17 @@ public partial class FactoryView : UserControl
         }
         else if (_working.Remove(run.Id) && run.Stage == FactoryStage.NeedsYou)
         {
-            // the manager escalated: a human has to act (or, not autonomous, the run asks as before)
-            App.Alert(run.ManagerCase.Length > 0 ? "Dev break factory - needs a human" : "Dev break factory - needs you",
-                $"{Short(run.Title, 60)}\n{Short(run.Note, 180)}");
+            // the manager could not get it going (or, not autonomous, the task asks as before)
+            App.Alert("Dev break factory - needs you", $"{Short(run.Title, 60)}\n{Short(run.ManagerCase.Length > 0 ? run.ManagerCase : run.Note, 180)}");
         }
-        UpdateRow(run);
+        if (!_listedIn.TryGetValue(run.Id, out Group listed) || listed != GroupOf(run)) ShowList();
+        else UpdateRow(run);
         UpdateRunsSummary();
-        if (run == _shown) Show(run);
+        if (run == _shown && RunPage.Visibility == Visibility.Visible) Show(run);
         if (FloorArea.Visibility == Visibility.Visible) ShowFloor();
     }
 
-    private void LeftTab_Checked(object sender, RoutedEventArgs e)
-    {
-        if (FormArea == null || RunsArea == null) return;
-        FormArea.Visibility = NewTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
-        // the floor keeps the list of runs on the left, and takes the place of the run page on the right
-        RunsArea.Visibility = RunsTab.IsChecked == true || FloorTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
-        bool floor = FloorTab.IsChecked == true;
-        FloorArea.Visibility = floor ? Visibility.Visible : Visibility.Collapsed;
-        RunPage.Visibility = floor ? Visibility.Collapsed : Visibility.Visible;
-        if (floor) ShowFloor();
-    }
-
-    // every department's line with the items standing on it now, and what the department managers are doing
+    // every department's line with the tasks standing on it now, and what the department managers are doing
     private void ShowFloor()
     {
         List<FactoryRun> runs = Factory.Runs;
@@ -282,34 +350,33 @@ public partial class FactoryView : UserControl
             List<FactoryRun> mine = runs.Where(r => r.Department == department).ToList();
             List<FactoryRun> onLine = mine.Where(r => r.Working || r.Stage == FactoryStage.NeedsYou && !r.CleanedUp).ToList();
             int done = mine.Count(r => !r.Working && r.Stage == FactoryStage.Done);
-            string counts = $"   {onLine.Count(r => r.Working)} working · {onLine.Count(r => !r.Working)} waiting · {done} done";
-            FloorLines.Children.Add(FactoryLine.Floor(name + counts, FactoryLine.LineOf(department), onLine, k => (Brush)FindResource(k), OpenFromFloor));
+            string counts = $"   {onLine.Count(r => r.Working)} working · {onLine.Count(r => !r.Working)} need you · {done} done";
+            FloorLines.Children.Add(FactoryLine.Floor(name + counts, FactoryLine.LineOf(department), onLine, k => (Brush)FindResource(k), Select));
         }
         int working = runs.Count(r => r.Working), waiting = runs.Count(r => !r.Working && r.Stage == FactoryStage.NeedsYou && !r.CleanedUp);
-        FloorSummary.Text = $"{working} item{(working == 1 ? "" : "s")} on the lines, {waiting} waiting, {runs.Count(r => r.PrUrl.Length > 0)} shipped as a draft PR. " +
-            "Hover a station for what it does, the check it runs and why; click an item to open it.";
+        FloorSummary.Text = $"{working} task{(working == 1 ? "" : "s")} on the lines, {waiting} need{(waiting == 1 ? "s" : "")} you, {runs.Count(r => r.PrUrl.Length > 0)} with a draft PR. " +
+            "Hover a station for what it does, the check it runs and why; click a task to open it.";
         List<FactoryRun> human = runs.Where(r => !r.Working && r.Stage == FactoryStage.NeedsYou && r.ManagerCase.Length > 0 && !r.CleanedUp).ToList();
         int resumed = runs.Sum(r => r.ManagerResumes);
-        FloorManager.Text = "Department managers: " + (human.Count == 0 ? "no item needs a human." : $"{human.Count} item{(human.Count == 1 ? " needs" : "s need")} a human - " +
-            string.Join("; ", human.Take(3).Select(r => Short(r.Title, 40)))) + $" They restarted stopped items {resumed} time{(resumed == 1 ? "" : "s")} so far.";
-    }
-
-    private void OpenFromFloor(FactoryRun run)
-    {
-        RunsTab.IsChecked = true;
-        ListBoxItem? item = RunList.Items.OfType<ListBoxItem>().FirstOrDefault(i => i.Tag == run);
-        if (item != null) RunList.SelectedItem = item;
-        Show(run);
+        FloorManager.Text = "Department managers: " + (human.Count == 0 ? "no task is stuck on something only you can do." : $"{human.Count} task{(human.Count == 1 ? " needs" : "s need")} you - " +
+            string.Join("; ", human.Take(3).Select(r => Short(r.Title, 40)))) + $" They restarted stopped tasks {resumed} time{(resumed == 1 ? "" : "s")} so far.";
     }
 
     private void UpdateRunsSummary()
     {
         List<FactoryRun> runs = Factory.Runs;
-        RunsTab.Content = runs.Count > 0 ? $"History ({runs.Count})" : "History";
-        int working = runs.Count(r => r.Working), waiting = runs.Count(r => !r.Working && r.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped);
-        int prs = runs.Count(r => r.PrUrl.Length > 0);
-        RunsSummary.Text = runs.Count == 0 ? "No runs yet." : $"{working} working · {waiting} to continue · {prs} with a PR";
+        int working = runs.Count(r => r.Working), waiting = runs.Count(r => GroupOf(r) == Group.NeedsYou);
+        RunsSummary.Text = runs.Count == 0 ? "" : $"{runs.Count} task{(runs.Count == 1 ? "" : "s")} · {working} working · {waiting} need{(waiting == 1 ? "s" : "")} you";
         CleanAllButton.IsEnabled = runs.Any(r => !r.Working && !r.CleanedUp);
+    }
+
+    // a passing line under the task's title: what a clean up freed, a result to know
+    private void Notice(string text)
+    {
+        RunNoteText.Text = text;
+        ExportRun.Text = "";
+        ExportLink.Tag = null;
+        RunNote.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     // --- continue and clean up ---
@@ -340,14 +407,14 @@ public partial class FactoryView : UserControl
         if (info.Uncommitted > 0) lose.Add($"{info.Uncommitted} uncommitted change{(info.Uncommitted == 1 ? "" : "s")} in the worktree");
         if (info.HasWorktree && !info.Pushed) lose.Add("the branch was never pushed (its commits stay in the local branch)");
         string what = run.InCheckout
-            ? $"Delete this run's evidence and exported trace{(info.Pushed ? ", and its local branch (it is on the remote)" : "")} - {Factory.Size(info.Bytes)}. "
-            : $"Delete this run's worktree, evidence, exported trace and session files - {Factory.Size(info.Bytes)}. ";
+            ? $"Delete this task's evidence and exported trace{(info.Pushed ? ", and its local branch (it is on the remote)" : "")} - {Factory.Size(info.Bytes)}. "
+            : $"Delete this task's worktree, evidence, exported trace and session files - {Factory.Size(info.Bytes)}. ";
         AskConfirm(what + "The record and its trace stay; your checkout, its memory and the remote branch and PR are not touched." +
             (lose.Count > 0 ? "\n⚠ This loses: " + string.Join("; ", lose) + "." : ""), lose.Count > 0, async () =>
             {
                 string freed = await Factory.CleanUpAsync(run);
                 Show(run);
-                RunNote.Text = freed;
+                Notice(freed);
             });
     }
 
@@ -363,14 +430,14 @@ public partial class FactoryView : UserControl
             bytes += info.Bytes;
             if (info.Uncommitted > 0 || (info.HasWorktree && !info.Pushed)) lose.Add(run.Title);
         }
-        if (_shown == null && RunList.Items.Count > 0) RunList.SelectedIndex = 0;
-        AskConfirm($"Clean up {runs.Count} run{(runs.Count == 1 ? "" : "s")}: worktrees, evidence, exported traces and session files - {Factory.Size(bytes)}. " +
+        if (_shown == null && Factory.Runs.FirstOrDefault(r => !r.Working) is { } first) Select(first);
+        AskConfirm($"Clean up {runs.Count} task{(runs.Count == 1 ? "" : "s")}: worktrees, evidence, exported traces and session files - {Factory.Size(bytes)}. " +
             "The records stay; your checkouts, memory and remote branches and PRs are not touched." +
             (lose.Count > 0 ? $"\n⚠ Uncommitted or unpushed work is lost in: {string.Join("; ", lose)}." : ""), lose.Count > 0, async () =>
             {
                 foreach (FactoryRun run in runs) await Factory.CleanUpAsync(run);
                 if (_shown != null) Show(_shown);
-                RunNote.Text = $"Cleaned up {runs.Count} run{(runs.Count == 1 ? "" : "s")} - {Factory.Size(bytes)} freed.";
+                Notice($"Cleaned up {runs.Count} task{(runs.Count == 1 ? "" : "s")} - {Factory.Size(bytes)} freed.");
             });
     }
 
@@ -387,7 +454,7 @@ public partial class FactoryView : UserControl
         DeleteConfirmButton.IsEnabled = false;
         KeepList.Children.Clear();
         RemoteBox.Visibility = Visibility.Collapsed;
-        DeleteText.Text = "Claude checks what is worth keeping from this run before it is deleted...";
+        DeleteText.Text = "Claude checks what is worth keeping from this task before it is deleted...";
         DeleteText.Foreground = (Brush)FindResource("InkBrush");
         List<Factory.KeepSuggestion> keep;
         Factory.CleanupInfo info;
@@ -398,7 +465,7 @@ public partial class FactoryView : UserControl
         }
         catch (Exception ex)
         {
-            DeleteText.Text = "Could not check the run: " + ex.Message;
+            DeleteText.Text = "Could not check the task: " + ex.Message;
             return;
         }
         if (_deleting != run) return;
@@ -431,7 +498,7 @@ public partial class FactoryView : UserControl
             RemoteBox.IsChecked = false;
             RemoteBox.Visibility = Visibility.Visible;
         }
-        DeleteConfirmButton.Content = lose.Count > 0 ? "Keep the ticked and delete anyway" : "Keep the ticked and delete the run";
+        DeleteConfirmButton.Content = lose.Count > 0 ? "Keep the ticked and delete anyway" : "Keep the ticked and delete the task";
         DeleteConfirmButton.IsEnabled = true;
     }
 
@@ -446,18 +513,23 @@ public partial class FactoryView : UserControl
         DeletePanel.Visibility = Visibility.Collapsed;
         if (Factory.Runs.Contains(run))
         {
-            RunNote.Text = result;
+            Notice(result);
             return;
         }
-        // the run is gone: off the list, onto the next one
-        ListBoxItem? item = RunList.Items.OfType<ListBoxItem>().FirstOrDefault(i => i.Tag == run);
-        if (item != null) RunList.Items.Remove(item);
-        _rows.Remove(run.Id);
+        // the task is gone: off the list, onto the next one
         _shown = null;
-        if (RunList.Items.Count > 0) RunList.SelectedIndex = 0;
-        else RunArea.Visibility = Visibility.Collapsed;
-        RunNote.Text = result;
-        UpdateRunsSummary();
+        RunList.SelectedItem = null;
+        ShowList();
+        if (Factory.Runs.OrderByDescending(r => r.Created).FirstOrDefault() is { } next)
+        {
+            Select(next);
+            Notice(result);
+        }
+        else
+        {
+            RunArea.Visibility = Visibility.Collapsed;
+            EmptyText.Visibility = Visibility.Visible;
+        }
     }
 
     private void DeleteCancel_Click(object sender, RoutedEventArgs e)
@@ -468,10 +540,10 @@ public partial class FactoryView : UserControl
 
     private void AskConfirm(string text, bool loses, Func<Task> act)
     {
-        if (RunArea.Visibility != Visibility.Visible && RunList.Items.Count > 0) RunList.SelectedIndex = 0;
+        ShowPage(Page.Task);
         ConfirmText.Text = text;
         ConfirmText.Foreground = (Brush)FindResource(loses ? "CoralInkBrush" : "InkBrush");
-        ConfirmButton.Content = loses ? "Delete it anyway" : "Delete it";
+        ConfirmButton.Content = loses ? "Clean up anyway" : "Clean up";
         _confirmed = act;
         ConfirmBar.Visibility = Visibility.Visible;
     }
@@ -491,7 +563,7 @@ public partial class FactoryView : UserControl
         _confirmed = null;
     }
 
-    // --- the selected run ---
+    // --- the selected task ---
 
     private void Show(FactoryRun run)
     {
@@ -503,19 +575,11 @@ public partial class FactoryView : UserControl
             _shownTrace = null;
             _shownEvidence = null;
             _openSpans.Clear();
-            GoodRating.IsChecked = run.Rating == "good";
-            BadRating.IsChecked = run.Rating == "bad";
-            RatingNote.Text = run.RatingNote;
+            _changing = false;
             FeedbackBox.Clear();
-            ExportText.Visibility = Visibility.Collapsed;
+            Notice("");
+            if (_deleting != null) DeleteCancel_Click(this, new RoutedEventArgs());
         }
-        // feedback needs a run that is not working and still has its worktree and session
-        // the run has a session to talk to once its first Claude turn ran (a NEEDS_YOU in the plan leaves no plan yet)
-        bool canFeedback = !run.Working && !run.CleanedUp && run.Trace.Any(s => s.Kind == "turn") && Directory.Exists(run.Worktree);
-        ShowReview(run);
-        FeedbackButton.IsEnabled = canFeedback;
-        FeedbackBox.IsEnabled = canFeedback;
-        RateButton.IsEnabled = !run.Working && run.Repo.Length > 0;
         string evidence = $"{run.EvidencePlan.Count}:" + string.Join(",", run.Evidence.Select(e => e.Kind + e.Result + e.File));
         if (evidence != _shownEvidence)
         {
@@ -532,37 +596,16 @@ public partial class FactoryView : UserControl
         RunArea.Visibility = Visibility.Visible;
         SetLight(Light, run);
         RunTitle.Text = run.Title;
-        RunMeta.Text = run.Repo.Length == 0 ? $"{run.Folder}   ·   finding the repo"
-            : $"{run.Repo}{(run.InCheckout ? " (your checkout)" : run.UseWorktree ? " (separate worktree)" : "")}   ·   {run.Branch} from {run.BaseBranch}   ·   {run.Steps} steps   ·   ${run.Cost:0.00}";
-        RunNote.Text = run.Working ? $"{StageName(run)}..." : run.Note.Replace("\r", "").Split('\n')[0].Trim();
-        RunNote.Foreground = (Brush)FindResource(!run.Working && run.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped ? "CoralInkBrush" : "VioletBrush");
-        StopButton.Visibility = run.Working ? Visibility.Visible : Visibility.Collapsed;
-        string result = run.Result + (run.PrUrl.Length > 0 ? (run.Result.Length > 0 ? "\n\n" : "") + "Draft PR: " + run.PrUrl : "");
-        ResultBox.Visibility = result.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        if (ResultText.Text != result) ResultText.Text = result;
-        ContinueButton.Visibility = !run.Working && !run.CleanedUp && run.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped
-            ? Visibility.Visible : Visibility.Collapsed;
-        CleanButton.Visibility = !run.Working && !run.CleanedUp ? Visibility.Visible : Visibility.Collapsed;
-        DeleteButton.Visibility = run.Working ? Visibility.Collapsed : Visibility.Visible;
-        if (_deleting != null && _deleting != run) DeleteCancel_Click(this, new RoutedEventArgs());
-        // the run asked because the developer's checkout could not be used
-        WorktreeButton.Visibility = !run.Working && !run.CleanedUp && !run.InCheckout && !run.UseWorktree && run.Stage == FactoryStage.NeedsYou
-            && run.Note.Contains("Use a separate worktree", StringComparison.Ordinal) ? Visibility.Visible : Visibility.Collapsed;
-        AnywayButton.Visibility = !run.Working && run.Stage == FactoryStage.NeedsYou && run.Plan.Length > 0 && run.PrUrl.Length == 0
-            ? Visibility.Visible : Visibility.Collapsed;
-        OpenPrButton.Visibility = run.PrUrl.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        SessionButton.Visibility = FolderButton.Visibility = Directory.Exists(run.Worktree) ? Visibility.Visible : Visibility.Collapsed;
-        ReportButton.Visibility = run.ReportFile.Length > 0 && File.Exists(run.ReportFile) ? Visibility.Visible : Visibility.Collapsed;
-        bool human = !run.Working && run.Stage == FactoryStage.NeedsYou && run.ManagerCase.Length > 0;
-        ManagerBox.Visibility = human ? Visibility.Visible : Visibility.Collapsed;
-        if (human && ManagerText.Text != run.ManagerCase) ManagerText.Text = run.ManagerCase;
-        FixItButton.Visibility = run.Department == FactoryDepartment.Troubleshooting && !run.Working && run.Stage == FactoryStage.Done && run.Result.Length > 0
-            ? Visibility.Visible : Visibility.Collapsed;
-        string proof = Factory.ProofDir(run);
-        ProofButton.Visibility = Directory.Exists(proof) && Directory.EnumerateFiles(proof, "*", SearchOption.AllDirectories).Any()
-            ? Visibility.Visible : Visibility.Collapsed;
-        SessionButton.IsEnabled = !run.Working;
+        RunMeta.Text = Meta(run);
         ShowPipeline(run);
+        ShowCard(run);
+        // the menu: what is there to open, and what may be cleaned up or deleted now
+        SessionItem.IsEnabled = !run.Working && Directory.Exists(run.Worktree);
+        FolderItem.IsEnabled = Directory.Exists(run.Worktree);
+        string proof = Factory.ProofDir(run);
+        ProofItem.IsEnabled = Directory.Exists(proof) && Directory.EnumerateFiles(proof, "*", SearchOption.AllDirectories).Any();
+        CleanItem.IsEnabled = !run.Working && !run.CleanedUp;
+        DeleteItem.IsEnabled = !run.Working;
         if (run.Log.Count != _shownLog)
         {
             _shownLog = run.Log.Count;
@@ -576,7 +619,115 @@ public partial class FactoryView : UserControl
         }
     }
 
-    // the item's production line: each station passed (with its time), working, stopped, or to come
+    // one line: department, where it works, the branch, the revision, how long it took and the tokens it used
+    private static string Meta(FactoryRun run)
+    {
+        var parts = new List<string> { run.Department.ToString() };
+        if (run.Repo.Length == 0) parts.Add(run.Folder + " - finding the repo");
+        else
+        {
+            parts.Add(System.IO.Path.GetFileName(run.Repo) + (run.InCheckout ? " (your checkout)" : run.UseWorktree ? " (separate worktree)" : ""));
+            if (run.Branch.Length > 0) parts.Add($"{run.Branch} from {run.BaseBranch}");
+        }
+        if (run.Revision > 1) parts.Add("revision " + run.Revision);
+        DateTime end = run.Working ? DateTime.Now : run.Log.Count > 0 ? run.Log[^1].At : run.Created;
+        if (FactoryLine.Time(end - run.Created) is { Length: > 0 } took) parts.Add(took);
+        long tokens = run.Trace.Sum(s => s.InputTokens + s.OutputTokens);
+        if (tokens > 0) parts.Add(Tokens(tokens) + " tokens");
+        return string.Join("   ·   ", parts);
+    }
+
+    // the one card for the task's state: what it does or needs, and the actions that make sense now - no others
+    private void ShowCard(FactoryRun run)
+    {
+        bool working = run.Working;
+        bool waiting = !working && run.Stage is FactoryStage.NeedsYou or FactoryStage.Stopped && !run.CleanedUp;
+        bool done = !working && run.Stage == FactoryStage.Done;
+        // the task has a session to talk to once its first Claude turn ran (a NEEDS_YOU in the plan leaves no plan yet)
+        bool canTalk = !working && !run.CleanedUp && run.Trace.Any(s => s.Kind == "turn") && Directory.Exists(run.Worktree);
+        bool reviewable = done && !run.Accepted && run.Trace.Any(s => s.Kind == "turn");
+        if (!done) _changing = false;
+
+        string title, text;
+        string border;
+        if (working)
+        {
+            FactoryLine.Station? station = FactoryLine.LineOf(run).FirstOrDefault(s => s.Stages.Contains(run.Stage));
+            FactorySpan? step = run.Trace.LastOrDefault(s => s.Ended == null);
+            FactoryToolCall? tool = step?.Tools.LastOrDefault();
+            title = $"Working · {station?.Name ?? StageName(run.Stage)}" + (step != null && FactoryLine.Time(DateTime.Now - step.Started) is { Length: > 0 } t ? $" · {t}" : "");
+            text = tool != null ? $"{step!.Title}: {tool.Name} {Short(tool.Detail, 160)}" : Short(run.Note, 300);
+            border = "VioletBrush";
+        }
+        else if (waiting)
+        {
+            title = run.ManagerCase.Length > 0 ? "Needs you - the department manager could not get it going"
+                : run.Stage == FactoryStage.Stopped ? "Stopped" : "Needs you";
+            text = run.ManagerCase.Length > 0 ? run.ManagerCase : run.Note.Trim();
+            border = "CoralInkBrush";
+        }
+        else if (done)
+        {
+            string what = run.PrUrl.Length > 0 ? "the draft PR is ready" : run.ReportFile.Length > 0 ? "the report is ready" : run.Result.Length > 0 ? "the answer is ready" : "done";
+            title = run.Accepted ? $"Accepted - revision {run.Revision}" : reviewable ? $"Review revision {run.Revision} - {what}" : char.ToUpper(what[0]) + what[1..];
+            text = run.Note.Trim();
+            border = reviewable ? "VioletBrush" : "LineBrush";
+        }
+        else
+        {
+            title = run.CleanedUp ? "Cleaned up" : StatusText(run);
+            text = run.Note.Trim();
+            border = "LineBrush";
+        }
+        if (run.CleanedUp && !working) title += " · cleaned up - the record stays";
+        NextTitle.Text = title;
+        NextTitle.Foreground = (Brush)FindResource(waiting ? "CoralInkBrush" : "InkBrush");
+        if (NextText.Text != text) NextText.Text = text;
+        NextText.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        NextCard.BorderBrush = (Brush)FindResource(border);
+        NextCard.Background = (Brush)FindResource(waiting ? "CoralTintBrush" : working || reviewable ? "VioletTintBrush" : "CardBrush");
+
+        // what it hands back, ready to use
+        ResultBox.Visibility = run.Result.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (ResultText.Text != run.Result) ResultText.Text = run.Result;
+
+        // the decisions it took on its own, while it waits for the review
+        ShowDecisions(run, reviewable);
+
+        // your words to the task: a reply while it waits for you, the changes for the next revision once it is done
+        bool reply = waiting && canTalk, change = done && canTalk && _changing;
+        ReplyPanel.Visibility = reply || change ? Visibility.Visible : Visibility.Collapsed;
+        KindPanel.Visibility = change ? Visibility.Visible : Visibility.Collapsed;
+        FeedbackButton.Content = change ? "Send to the next revision" : "Send reply";
+        FeedbackBox.ToolTip = change ? "What should change - the factory takes it round the line again as the next revision"
+            : "Answer its question, or tell it what to do - it goes on from there";
+
+        // the actions: one primary for the state, and only the others that apply
+        Visibility On(bool on) => on ? Visibility.Visible : Visibility.Collapsed;
+        StopButton.Visibility = On(working);
+        ContinueButton.Visibility = On(waiting);
+        WorktreeButton.Visibility = On(waiting && !run.InCheckout && !run.UseWorktree && run.Stage == FactoryStage.NeedsYou
+            && run.Note.Contains("Use a separate worktree", StringComparison.Ordinal));
+        AnywayButton.Visibility = On(waiting && run.Department == FactoryDepartment.Development && run.Plan.Length > 0 && run.PrUrl.Length == 0);
+        OpenPrButton.Visibility = On(!working && run.PrUrl.Length > 0);
+        ReportButton.Visibility = On(!working && run.ReportFile.Length > 0 && File.Exists(run.ReportFile));
+        AcceptButton.Visibility = On(reviewable && !_changing);
+        ChangesButton.Visibility = On(done && canTalk && !_changing);
+        CancelChangeButton.Visibility = On(change);
+        FixItButton.Visibility = On(done && run.Department == FactoryDepartment.Troubleshooting && run.Result.Length > 0);
+        // the first action shown is the primary one; a PR or report next to Accept steps back to secondary
+        OpenPrButton.Style = ReportButton.Style = (Style)FindResource(reviewable ? "SecondaryButton" : "PrimaryButton");
+        NextButtons.Visibility = NextButtons.Children.OfType<Button>().Any(b => b.Visibility == Visibility.Visible) ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void More_Click(object sender, RoutedEventArgs e)
+    {
+        MoreMenu.PlacementTarget = MoreButton;
+        MoreMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        MoreMenu.IsOpen = true;
+    }
+
+    // the task's production line: each station passed (with its time), working, stopped, or to come
     private void ShowPipeline(FactoryRun run)
     {
         LineHost.Content = FactoryLine.Build(run, k => (Brush)FindResource(k));
@@ -603,7 +754,7 @@ public partial class FactoryView : UserControl
         LessonsArea.Visibility = LessonsTab.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    // each step a line - time, stage, what, how long, cost, tokens, tools - that opens to its tool calls, prompt and answer
+    // each step a line - time, stage, what, how long, tokens, tools - that opens to its tool calls, prompt and answer
     private void ShowTrace(FactoryRun run)
     {
         TraceList.Children.Clear();
@@ -619,7 +770,6 @@ public partial class FactoryView : UserControl
             header.Inlines.Add(new Run(span.Title) { FontWeight = FontWeights.Bold, Foreground = span.Error.Length > 0 ? coral : span.Slow ? Amber : (Brush)FindResource("InkBrush") });
             if (span.Slow || span.Tools.Any(t => t.Slow)) header.Inlines.Add(new Run("  ⏱ slow") { FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Amber });
             var stats = new List<string> { span.Kind, Factory.Duration(span) };
-            if (span.Cost > 0) stats.Add($"${span.Cost:0.00}");
             if (span.InputTokens + span.OutputTokens > 0) stats.Add($"{Tokens(span.InputTokens)} in / {Tokens(span.OutputTokens)} out");
             if (span.Tools.Count > 0) stats.Add($"{span.Tools.Count} tool{(span.Tools.Count == 1 ? "" : "s")}");
             int denied = span.Tools.Count(t => t.Result == "denied"), failed = span.Tools.Count(t => t.Result == "error");
@@ -749,7 +899,7 @@ public partial class FactoryView : UserControl
         }
     }
 
-    private static string Tokens(long n) => n >= 1000 ? $"{n / 1000.0:0.#}k" : n.ToString();
+    private static string Tokens(long n) => n >= 1_000_000 ? $"{n / 1_000_000.0:0.#}M" : n >= 1000 ? $"{n / 1000.0:0.#}k" : n.ToString();
 
     private static string Short(string text, int max)
     {
@@ -763,16 +913,15 @@ public partial class FactoryView : UserControl
         try
         {
             string file = Factory.Export(_shown);
+            Notice("Trace exported: ");
             ExportRun.Text = System.IO.Path.GetFileName(file);
             ExportLink.Tag = file;
             ExportLink.ToolTip = file + "\nClick to show it in its folder";
         }
         catch (Exception ex)
         {
-            ExportRun.Text = "Could not export: " + ex.Message;
-            ExportLink.Tag = null;
+            Notice("Could not export: " + ex.Message);
         }
-        ExportText.Visibility = Visibility.Visible;
     }
 
     private void ExportLink_Click(object sender, RoutedEventArgs e)
@@ -780,22 +929,17 @@ public partial class FactoryView : UserControl
         if (ExportLink.Tag is string file && File.Exists(file)) Process.Start("explorer.exe", $"/select,\"{file}\"");
     }
 
-    private async void Rate_Click(object sender, RoutedEventArgs e)
-    {
-        if (_shown == null) return;
-        string rating = GoodRating.IsChecked == true ? "good" : BadRating.IsChecked == true ? "bad" : "";
-        if (rating.Length == 0) return;
-        await Factory.RateAsync(_shown, rating, RatingNote.Text);
-    }
-
+    // a reply while the task waits for you, or the changes for its next revision
     private async void Feedback_Click(object sender, RoutedEventArgs e)
     {
-        if (_shown == null || FeedbackBox.Text.Trim().Length == 0) return;
-        string text = FeedbackBox.Text;
-        string kind = KindWrong.IsChecked == true ? "wrong behaviour" : KindMissing.IsChecked == true ? "missing"
-            : KindDesign.IsChecked == true ? "change design" : KindBug.IsChecked == true ? "bug" : "";
+        string text = _changing ? ChangeRequest(FeedbackBox.Text) : FeedbackBox.Text.Trim();
+        if (_shown == null || text.Length == 0) return;
+        bool decisionsChanged = _changing && _decisionRows.Any(r => r.Ok.IsChecked != true);
+        string kind = !_changing ? "" : KindWrong.IsChecked == true ? "wrong behaviour" : KindMissing.IsChecked == true ? "missing"
+            : KindDesign.IsChecked == true ? "change design" : KindBug.IsChecked == true ? "bug" : decisionsChanged ? "change design" : "";
         FeedbackBox.Clear();
         foreach (RadioButton chip in new[] { KindWrong, KindMissing, KindDesign, KindBug }) chip.IsChecked = false;
+        _changing = false;
         await Factory.FeedbackAsync(_shown, text, kind);
     }
 
@@ -804,20 +948,16 @@ public partial class FactoryView : UserControl
     private string _reviewFor = "";
     private readonly List<(CheckBox Ok, TextBox How, string Decision)> _decisionRows = [];
 
-    private void ShowReview(FactoryRun run)
+    private void ShowDecisions(FactoryRun run, bool show)
     {
-        bool show = !run.Working && run.Stage == FactoryStage.Done && !run.Accepted && run.Trace.Any(s => s.Kind == "turn");
-        ReviewBox.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        if (!show) return;
-        string key = $"{run.Id}|{run.Revision}|{run.Decisions.GetHashCode()}";
+        List<string> decisions = show ? DecisionItems(run.Decisions) : [];
+        ReviewDecisionsLabel.Visibility = decisions.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ReviewDecisions.Visibility = decisions.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        string key = show ? $"{run.Id}|{run.Revision}|{run.Decisions.GetHashCode()}" : "";
         if (key == _reviewFor) return;
         _reviewFor = key;
-        ReviewTitle.Text = $"Review revision {run.Revision}" +
-            (run.PrUrl.Length > 0 ? " - the draft PR is ready" : run.ReportFile.Length > 0 ? " - the report is ready" : "");
         ReviewDecisions.Children.Clear();
         _decisionRows.Clear();
-        List<string> decisions = DecisionItems(run.Decisions);
-        ReviewDecisionsLabel.Visibility = decisions.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         foreach (string decision in decisions)
         {
             var ok = new CheckBox
@@ -832,7 +972,13 @@ public partial class FactoryView : UserControl
                 Visibility = Visibility.Collapsed, ToolTip = "How should it be instead?",
             };
             AutomationProperties.SetName(how, "How instead: " + Short(decision, 60));
-            ok.Unchecked += (_, _) => { how.Visibility = Visibility.Visible; how.Focus(); };
+            // unticking a decision is asking for a change: the card opens the box for the next revision
+            ok.Unchecked += (_, _) =>
+            {
+                how.Visibility = Visibility.Visible;
+                if (!_changing) Changes_Click(this, new RoutedEventArgs());
+                how.Focus();
+            };
             ok.Checked += (_, _) => how.Visibility = Visibility.Collapsed;
             ReviewDecisions.Children.Add(ok);
             ReviewDecisions.Children.Add(how);
@@ -848,26 +994,41 @@ public partial class FactoryView : UserControl
     private async void Accept_Click(object sender, RoutedEventArgs e)
     {
         if (_shown is not { } run || run.Working) return;
-        ReviewBox.Visibility = Visibility.Collapsed;
         await Factory.AcceptAsync(run);
     }
 
-    // back to the factory: the unticked decisions, with how they should be, go into the request for the next revision
+    // Request changes: the card shows the kinds of change and the box; the unticked decisions, with how they should
+    // be, go in first
     private void Changes_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown is not { } run) return;
+        _changing = true;
+        ShowCard(run);
+        FeedbackBox.Focus();
+    }
+
+    // Cancel on a change request: the decisions ticked again, the box empty, the card back to Accept / Request changes
+    private void CancelChange_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown is not { } run) return;
+        _changing = false;
+        FeedbackBox.Clear();
+        foreach (RadioButton chip in new[] { KindWrong, KindMissing, KindDesign, KindBug }) chip.IsChecked = false;
+        foreach ((CheckBox ok, TextBox how, _) in _decisionRows)
+        {
+            ok.IsChecked = true;
+            how.Clear();
+        }
+        ShowCard(run);
+    }
+
+    // what goes to the next revision: the unticked decisions (with how they should be), then the developer's words
+    private string ChangeRequest(string words)
     {
         List<string> changed = _decisionRows.Where(r => r.Ok.IsChecked != true).Select(r =>
             $"- Your decision \"{Short(r.Decision.Replace("\n", " "), 140)}\" is not what I want" +
             (r.How.Text.Trim().Length > 0 ? ": " + r.How.Text.Trim() : ".")).ToList();
-        if (changed.Count > 0)
-        {
-            FeedbackBox.Text = string.Join("\n", changed) + (FeedbackBox.Text.Trim().Length > 0 ? "\n" + FeedbackBox.Text : "");
-            if (KindWrong.IsChecked != true && KindMissing.IsChecked != true && KindDesign.IsChecked != true && KindBug.IsChecked != true)
-            {
-                KindDesign.IsChecked = true;
-            }
-        }
-        FeedbackBox.Focus();
-        FeedbackBox.CaretIndex = FeedbackBox.Text.Length;
+        return string.Join("\n", changed) + (changed.Count > 0 && words.Trim().Length > 0 ? "\n" : "") + words.Trim();
     }
 
     private void ShowLessons(FactoryRun run)
@@ -876,7 +1037,7 @@ public partial class FactoryView : UserControl
         LessonsTab.Content = run.Lessons.Count > 0 ? $"Learned ({run.Lessons.Count})" : "Learned";
         if (run.Lessons.Count == 0)
         {
-            LessonList.Children.Add(new TextBlock { Text = "Nothing learned yet - the run learns when it ends.", Style = (Style)FindResource("Caption"), Margin = new Thickness(4) });
+            LessonList.Children.Add(new TextBlock { Text = "Nothing learned yet - the task learns when it ends.", Style = (Style)FindResource("Caption"), Margin = new Thickness(4) });
         }
         foreach (FactoryLesson lesson in run.Lessons) LessonList.Children.Add(LessonCard(run, lesson));
     }
@@ -1001,14 +1162,12 @@ public partial class FactoryView : UserControl
         if (_shown != null && Directory.Exists(Factory.ProofDir(_shown))) Open(Factory.ProofDir(_shown));
     }
 
-    // the diagnosis goes to Development as a new run, shown at once
+    // the diagnosis goes to Development as a new task, shown at once
     private async void FixIt_Click(object sender, RoutedEventArgs e)
     {
         if (_shown is not { } diagnosed) return;
         FactoryRun run = Factory.HandOff(diagnosed);
-        RunList.Items.Insert(0, Row(run));
-        RunList.SelectedIndex = 0;
-        UpdateRunsSummary();
+        Select(run);
         await Factory.RunAsync(run);
     }
 
@@ -1024,24 +1183,35 @@ public partial class FactoryView : UserControl
 
     // --- shared bits ---
 
-    private static string StageName(FactoryRun run) => run.Working ? StageName(run.Stage) : run.Stage switch
+    // where a task is, in the inbox's words: the station it works at, or what it waits for, or what it handed over
+    private static string StatusText(FactoryRun run)
     {
-        FactoryStage.Done => "draft PR",
-        FactoryStage.NeedsYou => "needs you",
-        FactoryStage.Stopped => "stopped",
-        _ => StageName(run.Stage),
-    };
+        if (run.Working) return (FactoryLine.LineOf(run).FirstOrDefault(s => s.Stages.Contains(run.Stage))?.Name ?? StageName(run.Stage)) + "…";
+        string status = run.Stage switch
+        {
+            FactoryStage.NeedsYou => "needs you",
+            FactoryStage.Stopped => "stopped",
+            FactoryStage.Done when run.Accepted => "accepted",
+            FactoryStage.Done when run.PrUrl.Length > 0 => "draft PR ready",
+            FactoryStage.Done when run.ReportFile.Length > 0 => "report ready",
+            FactoryStage.Done when run.Result.Length > 0 => "answer ready",
+            FactoryStage.Done => "done",
+            _ => StageName(run.Stage),
+        };
+        return run.CleanedUp ? status + " · cleaned up" : status;
+    }
 
     private static string StageName(FactoryStage stage) => stage switch
     {
-        FactoryStage.PullRequest => "Draft PR",
-        // where the run works: the developer's checkout, or a separate worktree when they chose one
+        FactoryStage.PullRequest => "Ship",
+        // where the task works: the developer's checkout, or a separate worktree when they chose one
         FactoryStage.Worktree => "Workspace",
+        FactoryStage.Locate => "Gate",
         FactoryStage.NeedsYou => "Needs you",
         _ => stage.ToString(),
     };
 
-    // green and pulsing while the run works, red when it needs you or was stopped, none when it is done
+    // green and pulsing while the task works, red when it needs you or was stopped, none when it is done
     private static void SetLight(Ellipse light, FactoryRun run)
     {
         light.BeginAnimation(OpacityProperty, null);
