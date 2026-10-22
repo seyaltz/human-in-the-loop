@@ -606,7 +606,47 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
     driven (also during Learn and the manager), and a restart marks a busy run stopped.
   - **Proof scripts kept**: each repo has `factory-knowledge\<repo>\proof-scripts`; prove and answer checks are told
     to reuse and adapt those and save new ones there, and to keep evidence to the manifest and about 15 files.
-  - Troubleshooting, research and management never reach a build path from feedback; without an answer they ask.
+  - Troubleshooting, research and management never reach a build path from feedback. One with no answer yet takes
+    the reply into its investigation: the replies go into the investigation prompt ("The developer replied while this
+    waited - follow it; it overrides what was assumed before") and it works the answer out again (before: "no answer
+    yet to revise - press Continue", and only the manager got the task going).
+  - **Code-only questions are checked in the code** (`CodeOnlyCheck`, on the research answer check): re-read every
+    cited file:line and the callers named; run something only when quick and it adds proof; a learned rule for the repo
+    comes first (one answer spent 240 s on data grants and a debug attach, and the developer said "I mean in code").
+  - **A step stops only what it started, by PID**: a test task once ran `Get-CimInstance Win32_Process ... Where
+    CommandLine -match 'server.js' | ForEach-Object { Stop-Process -Id ... }` and stopped 9 node processes - its own 2
+    and 7 others. The guard (every step, every mode) refuses a kill by name or filter (`| Stop-Process`, `Stop-Process
+    -Name`, `kill -Name`, `taskkill /IM|/FI`, `pkill`, `killall`, `wmic ... delete|terminate`, `Invoke-CimMethod
+    Terminate`, `.Kill()`) and any command that both queries processes (Get-CimInstance, Get-Process, pgrep, pidof,
+    tasklist, Get-NetTCPConnection, netstat, fuser, `lsof -t`, `ps aux`) and kills; `kill <pid>`, `kill $(cat pidfile)`,
+    `Stop-Process -Id <pid>`, `taskkill /PID <pid>` work (23 of 23 cases, the incident's command among them). Every
+    step and the manager are told to stop only the processes they started, by the PID they recorded.
+  - **One Dev break per app folder**: a named mutex keyed on the folder; a second copy signals the first (an event
+    the first waits on opens its window) and exits - two copies wrote factory.json over each other and a finished
+    task was lost. Tested: the second copy exits 0, the first stays.
+  - **The manager's proposals for the factory are shown**: a box on the task's card, "The manager proposes these
+    changes to the factory - for you to approve", numbered, with **Copy** and **Got it** (`FixesSeen`); before, they
+    showed only when the manager handed the task to the developer.
+  - **Harness levels** (`FactoryHarness`, chosen per task in the form, `Harness`; the level it runs with, `Lane`,
+    `LaneWhy`), measured for one call on a developer machine with a large setup (dozens of plugins, ~200 skills, ~20 MCP
+    servers): **Full** - everything the developer has, all hooks - ~19 s to start, 57k tokens of context (more in a
+    repo with a big CLAUDE.md);
+    **Curated** - their settings and connectors, only the plugins listed (`CuratedKeep`, default "playwright,
+    atlassian, context7"; the others off through `enabledPlugins` in the turn's settings file, a file of its own) ~8 s;
+    **Fast lane** - none of their setup (`--setting-sources ""`, `--strict-mcp-config`): the factory's guard and
+    push block, its learned rules, the developer's CLAUDE.md and the repo's CLAUDE.md / AGENTS.md handed in as one
+    `--append-system-prompt-file` (a session without settings reads no CLAUDE.md - tested), built-in tools ~7 s, 24k;
+    **Auto** (the default) - a lean call (no tools, no setup) reads the task and answers `LANE: FAST|FULL <why>` (the
+    code is enough vs data, cloud, browser, the issue tracker, the stack; unsure: full); a Jira issue or a spec is
+    Full. Most of the ~11 s came from two plugin groups with many session-start hooks; the developer's own
+    settings.json hooks cost nothing measurable. A fast-lane turn is told what it lacks and ends with `NEEDS_FULL: <why>` when it truly
+    needs the developer's tools: the task moves to Full and the step goes on in the same session ("You now have the
+    developer's full setup..."). The **Ship** step always runs on the full setup (the developer's own PR gate checks
+    before a PR opens), and so does the department **manager**; a manager that resumes a lighter task moves it to
+    Full. The **review** and **Pick the repo** (typed) always run lean (they only read; the review gets the same
+    context file). Report, Learn, the gate's department choice and the delete diagnosis were lean already. Tested:
+    in the fast lane the guard still blocks `git push`, git's push block stops an alias push, and the repo's CLAUDE.md
+    reaches Claude.
   - **Push safety - blocked and detected**: the guard reads command text, which an alias or an include in `.git/config`
     can hide, so a step that may not push (guard modes nopublish and all) also gets, through the `env` of its settings
     file, `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=url.devbreak-push-blocked://.pushInsteadOf`, `GIT_CONFIG_VALUE_0=` (empty):
@@ -733,13 +773,16 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
     accepted / done; "· cleaned up"); a task moving to another group rebuilds the list and keeps the selection.
     Under it "N tasks · N working · N need you" and **Clean up all**.
   - **Right** is one of three pages: the **New task** form at full width (max 820 px) - Department pills with a
-    one-line hint of what the chosen department does, "The task comes from" Typed / Jira / Spec doc, the task box,
-    the folder, **Autonomous** and **Designed report**, a folded **More options** (base branch, verify command),
+    one-line hint of what the chosen department does, **Harness** pills (Auto / Fast lane / Curated / Full) with a
+    hint of what each loads and costs (the last choice remembered), "The task comes from" Typed / Jira / Spec doc, the task box,
+    the folder, **Autonomous** and **Designed report**, a folded **More options** (base branch, verify command,
+    the plugins Curated keeps),
     **Start task**; the **Floor** (below); or the **selected task**. With no task selected: "Pick a task on the left,
     or start a new one." and the How the factory works text. The form opens first when there are no tasks.
   - **The task page**, top to bottom: the title with its light and **⋯** (Open in Sessions, Open folder, Open the
     evidence folder, Export the trace | Clean up…, Delete… - each enabled only when it applies); one meta line
-    "department · repo (your checkout / separate worktree) · branch from base · revision N · time · tokens" (no
+    "department · repo (your checkout / separate worktree) · branch from base · revision N · harness: <level> (auto) ·
+    time · tokens" (no
     money: on a subscription `total_cost_usd` is only an API-price estimate - tokens and time instead, here, in the
     trace and in the exported trace); a passing notice line (what a clean up freed, the exported file as a link); the
     clean-up confirm bar ("Clean up" / "Clean up anyway") or the delete panel when asked; the **production line**

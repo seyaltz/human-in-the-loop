@@ -93,6 +93,11 @@ public partial class FactoryView : UserControl
         else if (AppSettings.Get("factoryDepartment") is "Development") DevelopmentDept.IsChecked = true;
         else if (AppSettings.Get("factoryDepartment") is "Management") ManagementDept.IsChecked = true;
         Department_Checked(this, new RoutedEventArgs());
+        if (AppSettings.Get("factoryLane") is "Fast") FastLane.IsChecked = true;
+        else if (AppSettings.Get("factoryLane") is "Curated") CuratedLane.IsChecked = true;
+        else if (AppSettings.Get("factoryLane") is "Full") FullLane.IsChecked = true;
+        Lane_Checked(this, new RoutedEventArgs());
+        CuratedBox.Text = Factory.CuratedKeep;
         IReadOnlyList<string> repos = await Task.Run(ClaudeProjects.GitRepos);
         foreach (string repo in repos.OrderBy(r => r, StringComparer.OrdinalIgnoreCase)) RepoBox.Items.Add(repo);
         if (AppSettings.Get("factoryRepo") is { Length: > 0 } last) RepoBox.Text = last;
@@ -148,6 +153,22 @@ public partial class FactoryView : UserControl
             _ => "A vision, an idea or a company-wide matter: a decision brief - options, value, effort, risk, a recommendation - no code.",
         };
         Source_Checked(sender, e);
+    }
+
+    private FactoryHarness Lane => FastLane.IsChecked == true ? FactoryHarness.Fast : CuratedLane.IsChecked == true ? FactoryHarness.Curated
+        : FullLane.IsChecked == true ? FactoryHarness.Full : FactoryHarness.Auto;
+
+    // what each harness level loads, with the cost measured on this machine for one call
+    private void Lane_Checked(object sender, RoutedEventArgs e)
+    {
+        if (LaneHint == null) return;
+        LaneHint.Text = Lane switch
+        {
+            FactoryHarness.Fast => "Fast lane: none of your plugins, hooks or MCP servers - the factory's own guard and rules, the repo's CLAUDE.md, built-in tools. About 7 s per step to start instead of 19. If a step needs your tools, the task moves to Full by itself.",
+            FactoryHarness.Curated => "Curated: your settings and connectors, with only the plugins listed under More options. About 8 s per step to start.",
+            FactoryHarness.Full => "Full: everything you have - all plugins, hooks and MCP servers. About 19 s per step to start.",
+            _ => "Auto: the gate reads the task and picks the fast lane (the code is enough) or full (data, cloud, browser, the issue tracker). The review always runs lean, and the draft PR step always runs on your full setup, so your own PR gate checks it.",
+        };
     }
 
     private void Source_Checked(object sender, RoutedEventArgs e)
@@ -227,7 +248,10 @@ public partial class FactoryView : UserControl
         FactoryDepartment? department = Department;
         if (department is null or FactoryDepartment.Development) AppSettings.Set("factoryReport", report ? "1" : "0");
         AppSettings.Set("factoryDepartment", department?.ToString() ?? "Auto");
-        FactoryRun run = Factory.Create(source, task, repo, baseBranch, department is null or FactoryDepartment.Development ? VerifyBox.Text : "", autonomous, report, department);
+        FactoryHarness lane = Lane;
+        AppSettings.Set("factoryLane", lane.ToString());
+        if (CuratedBox.Text.Trim().Length > 0) Factory.CuratedKeep = CuratedBox.Text.Trim();
+        FactoryRun run = Factory.Create(source, task, repo, baseBranch, department is null or FactoryDepartment.Development ? VerifyBox.Text : "", autonomous, report, department, lane);
         TaskBox.Clear();
         Select(run);
         await Factory.RunAsync(run);
@@ -630,6 +654,7 @@ public partial class FactoryView : UserControl
             if (run.Branch.Length > 0) parts.Add($"{run.Branch} from {run.BaseBranch}");
         }
         if (run.Revision > 1) parts.Add("revision " + run.Revision);
+        parts.Add("harness: " + Factory.LaneName(run.Lane) + (run.Harness == FactoryHarness.Auto ? " (auto)" : ""));
         DateTime end = run.Working ? DateTime.Now : run.Log.Count > 0 ? run.Log[^1].At : run.Created;
         if (FactoryLine.Time(end - run.Created) is { Length: > 0 } took) parts.Add(took);
         long tokens = run.Trace.Sum(s => s.InputTokens + s.OutputTokens);
@@ -687,6 +712,12 @@ public partial class FactoryView : UserControl
         NextCard.BorderBrush = (Brush)FindResource(border);
         NextCard.Background = (Brush)FindResource(waiting ? "CoralTintBrush" : working || reviewable ? "VioletTintBrush" : "CardBrush");
 
+        // what the manager proposes to change in the factory, until the developer puts it away
+        bool fixes = !working && run.FactoryFixes.Count > 0 && !run.FixesSeen;
+        FixesBox.Visibility = fixes ? Visibility.Visible : Visibility.Collapsed;
+        string fixesText = string.Join("\n\n", run.FactoryFixes.Select((f, i) => $"{i + 1}. {f}"));
+        if (fixes && FixesText.Text != fixesText) FixesText.Text = fixesText;
+
         // what it hands back, ready to use
         ResultBox.Visibility = run.Result.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         if (ResultText.Text != run.Result) ResultText.Text = run.Result;
@@ -718,6 +749,19 @@ public partial class FactoryView : UserControl
         // the first action shown is the primary one; a PR or report next to Accept steps back to secondary
         OpenPrButton.Style = ReportButton.Style = (Style)FindResource(reviewable ? "SecondaryButton" : "PrimaryButton");
         NextButtons.Visibility = NextButtons.Children.OfType<Button>().Any(b => b.Visibility == Visibility.Visible) ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void CopyFixes_Click(object sender, RoutedEventArgs e)
+    {
+        if (FixesText.Text.Length > 0) Clipboard.SetText(FixesText.Text);
+    }
+
+    private void FixesSeen_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown is not { } run) return;
+        run.FixesSeen = true;
+        Factory.Save();
+        ShowCard(run);
     }
 
     private void More_Click(object sender, RoutedEventArgs e)

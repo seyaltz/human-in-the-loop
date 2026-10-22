@@ -26,6 +26,14 @@ public enum FactoryDepartment { Development, Troubleshooting, Research, Manageme
 /// <summary>Where a factory run is.</summary>
 public enum FactoryStage { Queued, Worktree, Plan, Build, Verify, Review, PullRequest, Learn, Done, NeedsYou, Stopped, Locate, Prove }
 
+/// <summary>
+/// How much of the developer's own Claude setup a task's turns load. Measured on this machine for one call: Full
+/// (every plugin, hook and MCP server) ~19 s to start and 57k tokens of context; Curated (the developer's settings and
+/// connectors, only the plugins they keep) ~8 s; Fast (none of it - the factory's own guard, rules and the repo's
+/// CLAUDE.md, built-in tools) ~7 s and 24k. Auto: the gate picks Fast or Full per task.
+/// </summary>
+public enum FactoryHarness { Auto, Fast, Curated, Full }
+
 /// <summary>One line of a run's log.</summary>
 public sealed class FactoryStep
 {
@@ -146,6 +154,13 @@ public sealed class FactoryRun
     public bool FolderWide { get; set; }
     /// <summary>The gate chooses the department when the run starts (the developer chose Auto); false once it has.</summary>
     public bool AutoDepartment { get; set; }
+    // the harness level the developer chose, and the one the task runs with (Auto resolved by the gate); a fast-lane
+    // step that needs the developer's tools moves the task to Full
+    public FactoryHarness Harness { get; set; } = FactoryHarness.Full;
+    public FactoryHarness Lane { get; set; } = FactoryHarness.Full;
+    public string LaneWhy { get; set; } = "";
+    // the manager's proposals for the factory were shown to the developer and put away
+    public bool FixesSeen { get; set; }
     /// <summary>Why the gate sent it to its department, one line.</summary>
     public string Routing { get; set; } = "";
     public string Task { get; set; } = "";
@@ -305,6 +320,9 @@ public static class Factory
         Change files in the repo with the Edit and Write tools, never with scripts in the shell (python, sed, heredocs,
         Set-Content): the developer's hooks and PR checks follow the Edit and Write calls. Shell commands are for
         building, testing, running and reading.
+        Stop only the processes you started in this task, by the PID you recorded when you started them (echo $! >
+        a file, or Start-Process -PassThru). Never stop a process by its name, command line or port: the developer has
+        their own servers running on this machine.
         """;
 
     private const string AutonomousRule = """
@@ -365,7 +383,7 @@ public static class Factory
     }
 
     public static FactoryRun Create(FactorySource source, string task, string folder, string baseBranch, string verify, bool autonomous = false,
-        bool report = false, FactoryDepartment? department = FactoryDepartment.Development)
+        bool report = false, FactoryDepartment? department = FactoryDepartment.Development, FactoryHarness harness = FactoryHarness.Full)
     {
         string id = Guid.NewGuid().ToString("N")[..8];
         string first = task.Trim().Split('\n')[0].Trim();
@@ -383,6 +401,7 @@ public static class Factory
             // null: the gate decides when the run starts
             Report = report || department is not (null or FactoryDepartment.Development),
             Department = department ?? FactoryDepartment.Development, AutoDepartment = department == null,
+            Harness = harness, Lane = harness == FactoryHarness.Auto ? FactoryHarness.Full : harness,
         };
         Runs.Insert(0, run);
         Save();
@@ -420,6 +439,7 @@ public static class Factory
     public static Task RunAsync(FactoryRun run) => DriveAsync(run, learnAfter: false, async cancel =>
     {
         if (run.AutoDepartment && !await RouteAsync(run, cancel)) return false;
+        await ChooseLaneAsync(run, cancel);
         if (!await LocateAsync(run, cancel)) return false;
         if (!run.FolderWide && !await WorktreeAsync(run, cancel)) return false;
         // from here on there is something to learn from
@@ -463,7 +483,7 @@ public static class Factory
         {
             Enter(run, FactoryStage.Prove, "No change needed: Claude checks the answer against the running app.");
             (string answer, string? error) = await TurnAsync(run, isNew: false, $"""
-                {again}{(run.Department == FactoryDepartment.Management ? ManagementCheck : run.Department == FactoryDepartment.Troubleshooting ? TroubleshootingCheck : "The task needs no change to the repo - it asks for an answer. Check the answer works against the running app (start what it needs with the tools on this machine), exactly as the developer would use it.")} {NamedSources}
+                {again}{(run.Department == FactoryDepartment.Management ? ManagementCheck : run.Department == FactoryDepartment.Troubleshooting ? TroubleshootingCheck : "The task needs no change to the repo - it asks for an answer. Check the answer works against the running app (start what it needs with the tools on this machine), exactly as the developer would use it." + CodeOnlyCheck)} {NamedSources}
                 {ProofReuse(run)}
                 Save the evidence (the call and its response, log lines) into {dir}, and write {Path.Combine(dir, ManifestName)}
                 as a JSON array of {"{"}"kind", "file", "proves", "result", "detail"{"}"}. Change no file in the repo.
@@ -887,10 +907,13 @@ public static class Factory
             Log(run, $"Revision {ask.Revision}:\n" + redo);
             return await AnswerAsync(run, cancel);
         }
-        // troubleshooting, research and management never build - one with no answer yet asks instead
+        // troubleshooting, research and management never build - one with no answer yet takes the reply into its
+        // investigation (it tells what the developer meant) and works the answer out again
         if (run.Department != FactoryDepartment.Development || run.FolderWide)
         {
-            return Wait(run, "This run has no answer yet to revise - press Continue to let it finish its answer first.");
+            Log(run, "Your reply goes into the investigation: " + text.Trim());
+            if (!await PlanAsync(run, cancel)) return true;
+            return !run.NoChange || await AnswerAsync(run, cancel);
         }
         // nothing built yet: the feedback answers the plan's questions - the plan is updated, then built
         if (!run.Log.Any(s => s.Stage == FactoryStage.Build))
@@ -1173,8 +1196,9 @@ public static class Factory
             """;
         // a typed task needs only the files: read-only tools, enforced. A Jira issue or a spec needs the machine's own
         // tools (MCP servers, CLIs) to be read - the same full access the run's plan turn gets - minus editing and publishing.
+        // (a typed task: only the files are read, so it runs lean - none of the developer's plugins, hooks or MCP servers)
         string[] tools = run.Source == FactorySource.Typed
-            ? ["--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob"]
+            ? ["--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob", "--setting-sources", "", "--strict-mcp-config"]
             : ["--permission-mode", "bypassPermissions", "--disallowedTools", "Edit", "Write", "NotebookEdit", .. NoPublish[1..]];
         string answer = await ClaudeOnceAsync(run, run.Folder, prompt, tools, "Pick the repo", cancel);
         string pick = answer.Replace("\r", "").Split('\n').Select(l => l.Trim().Trim('*', '`').Trim()).LastOrDefault(l => l.StartsWith("REPO:", StringComparison.OrdinalIgnoreCase)) ?? "";
@@ -1544,6 +1568,126 @@ public static class Factory
     }
 
     // the gate: which department handles a new item - read from the task itself, before anything else runs
+    // --- the harness lane: how much of the developer's own Claude setup a task's turns load ---
+
+    // Auto: a lean call (no tools, no setup - ~6 s) reads the task and picks Fast or Full; a Jira issue or a spec is
+    // read with the developer's connectors, so it is Full without asking
+    private static async Task ChooseLaneAsync(FactoryRun run, CancellationToken cancel)
+    {
+        if (run.Harness != FactoryHarness.Auto)
+        {
+            run.Lane = run.Harness;
+            Log(run, $"Harness: {LaneName(run.Lane)} (your choice).");
+            return;
+        }
+        if (run.Source != FactorySource.Typed)
+        {
+            run.Lane = FactoryHarness.Full;
+            run.LaneWhy = "a Jira issue or a spec is read with your connectors";
+            Log(run, $"Harness: full - {run.LaneWhy}.");
+            return;
+        }
+        string answer = await ClaudeOnceAsync(run, Path.GetTempPath(), $"""
+            A software factory is about to work on this task ({run.Department}):
+            {run.Task}
+
+            Choose how much of the developer's Claude setup its steps need.
+            FAST: the code is enough - a question about the code (where something is, whether there is X, how it works), or
+            a change that the repo's own build and tests can check. Built-in tools only (read, search, edit, the shell).
+            FULL: it needs the developer's own tools - a database or data store, the cloud (GCP, logs, deploys), a browser,
+            the issue tracker, the running services and their stack scripts, or anything about live behaviour or data.
+            When unsure, FULL. Reply with one line: LANE: FAST <why, in a few words> or LANE: FULL <why, in a few words>.
+            """, ["--tools", "", "--strict-mcp-config", "--setting-sources", ""], "Harness lane", cancel);
+        string line = Line(answer, "LANE:") ?? "";
+        run.Lane = line.StartsWith("FAST", StringComparison.OrdinalIgnoreCase) ? FactoryHarness.Fast : FactoryHarness.Full;
+        run.LaneWhy = line.Length > 4 ? line[4..].Trim().TrimStart('-', ':', ' ') : "the gate gave no reason";
+        Log(run, $"Harness: {LaneName(run.Lane)} - {run.LaneWhy}");
+    }
+
+    public static string LaneName(FactoryHarness lane) => lane switch
+    {
+        FactoryHarness.Fast => "fast lane",
+        FactoryHarness.Curated => "curated",
+        FactoryHarness.Auto => "auto",
+        _ => "full",
+    };
+
+    // the plugins a curated task keeps (the developer can change the list); every other enabled plugin is off
+    public static string CuratedKeep
+    {
+        get => AppSettings.Get("factoryCuratedKeep") ?? "playwright, atlassian, context7";
+        set => AppSettings.Set("factoryCuratedKeep", value);
+    }
+
+    // the CLI switches for a turn's lane; full: the step runs on the developer's full setup whatever the lane - Ship
+    // (so their own PR gate checks before a PR opens) and the department manager (it has to see everything)
+    private static string[] LaneArgs(FactoryRun run, bool full) =>
+        !full && run.Lane == FactoryHarness.Fast ? ["--setting-sources", "", "--strict-mcp-config"] : [];
+
+    // the plugins switched off for a curated turn: every one the developer has on that is not kept
+    private static JsonObject? CuratedPlugins(FactoryRun run, bool full)
+    {
+        if (full || run.Lane != FactoryHarness.Curated) return null;
+        try
+        {
+            string file = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json");
+            if (JsonNode.Parse(File.ReadAllText(file))?["enabledPlugins"] is not JsonObject enabled) return null;
+            string[] keep = CuratedKeep.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var off = new JsonObject();
+            foreach ((string plugin, JsonNode? on) in enabled)
+            {
+                if (on?.GetValue<bool>() == true && !keep.Any(k => plugin.StartsWith(k + "@", StringComparison.OrdinalIgnoreCase) || plugin.Equals(k, StringComparison.OrdinalIgnoreCase)))
+                {
+                    off[plugin] = false;
+                }
+            }
+            return off;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    // what a fast-lane turn would otherwise miss: without the developer's settings Claude does not read CLAUDE.md, so
+    // the learned rules, the developer's own CLAUDE.md and the repo's CLAUDE.md and AGENTS.md go in as one appended file
+    private static string? FastContext(FactoryRun run, string? rules)
+    {
+        var parts = new List<string>();
+        if (rules != null && File.Exists(rules)) parts.Add(File.ReadAllText(rules).Trim());
+        string global = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "CLAUDE.md");
+        if (File.Exists(global)) parts.Add("# The developer's own instructions (their CLAUDE.md)\n" + File.ReadAllText(global).Trim());
+        string folder = Directory.Exists(run.Worktree) ? run.Worktree : run.Repo;
+        foreach (string name in new[] { "CLAUDE.md", "AGENTS.md", Path.Combine(".claude", "CLAUDE.md") })
+        {
+            string file = folder.Length > 0 ? Path.Combine(folder, name) : "";
+            if (file.Length > 0 && File.Exists(file)) parts.Add($"# The repo's {name.Replace('\\', '/')}\n" + File.ReadAllText(file).Trim());
+        }
+        if (parts.Count == 0) return null;
+        string home = Path.Combine(AppContext.BaseDirectory, "factory-guard");
+        Directory.CreateDirectory(home);
+        string path = Path.Combine(home, $"context-{run.Id}.md");
+        File.WriteAllText(path, string.Join("\n\n", parts));
+        return path;
+    }
+
+    // a question about the code itself is checked in the code: one such answer spent 240 s on data grants and a debug
+    // attach, and the developer answered "I mean in code"
+    private const string CodeOnlyCheck = """
+         When the task asks only about the code (where something is, whether there is X, how it works) and not about
+        runtime behaviour or data, the check is the code itself: re-read every file:line you cite and confirm it says what
+        you claim, and follow the callers you name; run something only when that is quick and adds proof. A learned rule
+        for this repo that says how to check such questions comes first.
+        """;
+
+    private const string FastLaneRule = """
+
+        This step runs in the factory's fast lane: the developer's plugins, skills and MCP servers are not loaded - you
+        have the built-in tools (read, search, edit, the shell). If the step truly needs one of the developer's own tools
+        (a database, the cloud, a browser tool, the issue tracker, their stack scripts), do not work around it: end with
+        exactly one line NEEDS_FULL: <what you need and why> and stop - the step goes on with their full setup.
+        """;
+
     private static async Task<bool> RouteAsync(FactoryRun run, CancellationToken cancel)
     {
         Enter(run, FactoryStage.Locate, "The gate reads the task and chooses the department.");
@@ -1613,10 +1757,14 @@ public static class Factory
               app and its data with the skills, MCP servers and tools on this machine, and check what you find rather than
               reason it out: each claim backed by a file:line, a call and its response, or a data row.
               """;
+        // what the developer replied while it waited: it says what they meant, over what was assumed
+        List<string> replies = run.Feedback.Select(f => f.Text.Trim()).Where(t => t.Length > 0).ToList();
+        string replied = replies.Count == 0 ? ""
+            : "\nThe developer replied while this waited - follow it; it overrides what was assumed before:\n" + string.Join("\n", replies.Select(r => "- " + r)) + "\n";
         string prompt = $"""
             {where}
             {task}
-
+            {replied}
             {how}
             A memory note marked "Checked on <date> - re-check" tells a state that can change: when the answer depends on
             it, re-check it with one quick call instead of trusting it. If you cannot read the task, reply with one line:
@@ -1984,7 +2132,13 @@ public static class Factory
             for, missing or weak tests, security issues. No style nits. Reply with VERDICT: PASS or VERDICT: FIX on the
             first line, then the findings as a short list (file:line - problem - what to do). PASS when nothing real is left.
             """;
-        string answer = await ClaudeOnceAsync(run, run.Worktree, prompt, ["--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob"], "Review", cancel);
+        // the reviewer only reads: it runs lean at every level (none of the developer's plugins, hooks or MCP servers
+        // - ~11 s and ~33k tokens less per call), with the repo's CLAUDE.md, the developer's and the learned rules
+        // handed in, since a lean session reads no CLAUDE.md on its own
+        string? reviewContext = FastContext(run, run.Home.Length > 0 ? Path.Combine(KnowledgeDir(run.Home), "rules.md") : null);
+        string answer = await ClaudeOnceAsync(run, run.Worktree, prompt,
+            ["--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob", "--setting-sources", "", "--strict-mcp-config",
+             .. reviewContext != null ? new[] { "--append-system-prompt-file", reviewContext } : []], "Review", cancel);
         bool pass = Line(answer, "VERDICT:")?.StartsWith("PASS", StringComparison.OrdinalIgnoreCase) == true;
         int newline = answer.IndexOf('\n');
         return (pass, newline > 0 ? answer[(newline + 1)..].Trim() : answer.Trim());
@@ -2236,7 +2390,8 @@ public static class Factory
     private const string ManagerLimits = """
 
         Decide within about five minutes. Look at the run's folder, its logs and the services it uses - never search
-        whole drives, the Gradle home, the Ivy or Maven caches or node_modules.
+        whole drives, the Gradle home, the Ivy or Maven caches or node_modules. Stop only processes the run started, by
+        their PID - never by name, command line or port: the developer's own servers run on this machine.
         """;
 
     /// <summary>
@@ -2296,7 +2451,7 @@ public static class Factory
         using var budget = new CancellationTokenSource(ManagerBudget);
         try
         {
-            answer = await ClaudeOnceAsync(run, folder, prompt + ManagerLimits, ["--permission-mode", "bypassPermissions", .. NoPublish, .. KnowledgeArgs(run, "nopublish")],
+            answer = await ClaudeOnceAsync(run, folder, prompt + ManagerLimits, ["--permission-mode", "bypassPermissions", .. NoPublish, .. KnowledgeArgs(run, "nopublish", full: true)],
                 "Manager", budget.Token);
         }
         catch (OperationCanceledException)
@@ -2336,6 +2491,13 @@ public static class Factory
             run.ManagerResumes++;
             run.ManagerCase = "";
             Log(run, $"Manager: resumes the run ({run.ManagerResumes} of {MaxManagerResumes}) - {what[6..].Trim()}\n\n{answer}");
+            // a lighter lane that stopped goes on with the developer's full setup - what the manager used to fix it
+            if (run.Lane != FactoryHarness.Full)
+            {
+                run.Lane = FactoryHarness.Full;
+                run.LaneWhy = "the manager resumed it with everything";
+                Log(run, "Harness: full from here on - the manager resumed the task with your full setup.");
+            }
             return true;
         }
         string need = what.StartsWith("ESCALATE", StringComparison.OrdinalIgnoreCase) ? what[8..].Trim()
@@ -2637,7 +2799,9 @@ public static class Factory
     private static async Task<(string Answer, string? Error)> TurnAsync(FactoryRun run, bool isNew, string prompt, string title,
         CancellationToken cancel, bool publish = false)
     {
-        prompt += (run.Autonomous ? AutonomousRule : OutsideRule) + EditRule;
+        string asked = prompt;
+        bool fast = !publish && run.Lane == FactoryHarness.Fast;
+        prompt += (run.Autonomous ? AutonomousRule : OutsideRule) + EditRule + (fast ? FastLaneRule : "");
         FactorySpan span = Begin(run, "turn", title, prompt);
         string answer = "";
         string? error = null;
@@ -2647,7 +2811,7 @@ public static class Factory
             // may work right in the developer's folder - a folder-wide run has no branch of its own)
             bool investigation = run.Department != FactoryDepartment.Development;
             string guard = investigation ? "all" : publish ? "frozen" : "nopublish";
-            string[] args = [.. publish ? Frozen : NoPublish, .. investigation ? Frozen[1..] : [], .. KnowledgeArgs(run, guard)];
+            string[] args = [.. publish ? Frozen : NoPublish, .. investigation ? Frozen[1..] : [], .. KnowledgeArgs(run, guard, full: publish)];
             Action<SessionEntry> onEntry = entry =>
             {
                 switch (entry.Kind)
@@ -2690,6 +2854,16 @@ public static class Factory
         {
             if (!run.OutsideChanges.Contains(outside)) run.OutsideChanges.Add(outside);
             Log(run, "Changed outside the repo: " + outside);
+        }
+        // the fast lane was not enough: the task moves to the developer's full setup and the step goes on there, in the
+        // same session (once - a full step cannot ask again)
+        if (fast && error == null && Line(answer, "NEEDS_FULL:") is { Length: > 0 } needsFull)
+        {
+            run.Lane = FactoryHarness.Full;
+            run.LaneWhy = "a step needed it: " + needsFull;
+            Log(run, $"Harness: full from here on - {title} needed {needsFull}");
+            return await TurnAsync(run, isNew: false, "You now have the developer's full setup (their plugins, skills and MCP servers). " +
+                "Go on with the step, exactly as asked before:\n\n" + asked, title + " (full)", cancel, publish);
         }
         // Claude needs something changed outside the folder: the developer decides
         if (error == null && Line(answer, "NEEDS_YOU:") is { Length: > 0 } need)
@@ -2777,20 +2951,24 @@ public static class Factory
     }
 
     // the claude arguments that bring that knowledge into a turn
-    private static List<string> KnowledgeArgs(FactoryRun run, string guard = "")
+    private static List<string> KnowledgeArgs(FactoryRun run, string guard = "", bool full = false)
     {
-        var args = new List<string>();
+        var args = new List<string>(LaneArgs(run, full));
+        bool fast = !full && run.Lane == FactoryHarness.Fast;
         string? dir = run.Home.Length > 0 ? KnowledgeDir(run.Home) : null;
+        string? rules = dir != null ? Path.Combine(dir, "rules.md") : null;
+        // the fast lane reads no CLAUDE.md on its own: the rules and the CLAUDE.md files go in as one file
+        string? context = fast ? FastContext(run, rules) : rules != null && File.Exists(rules) ? rules : null;
+        if (context != null) args.AddRange(["--append-system-prompt-file", context]);
         if (dir != null)
         {
-            string rules = Path.Combine(dir, "rules.md");
-            if (File.Exists(rules)) args.AddRange(["--append-system-prompt-file", rules]);
             string skills = Path.Combine(dir, "plugin", "skills");
             if (Directory.Exists(skills) && Directory.EnumerateDirectories(skills).Any()) args.AddRange(["--plugin-dir", Path.Combine(dir, "plugin")]);
         }
-        // one --settings: the hooks the factory learned for the repo, plus the guard for this kind of turn
+        // one --settings: the hooks the factory learned for the repo, the guard for this kind of turn, and - curated -
+        // the developer's plugins that are switched off
         string learned = dir != null ? Path.Combine(dir, "settings.json") : "";
-        if (GuardSettings(learned, guard) is { } settings) args.AddRange(["--settings", settings]);
+        if (GuardSettings(learned, guard, CuratedPlugins(run, full)) is { } settings) args.AddRange(["--settings", settings]);
         return args;
     }
 
@@ -2818,6 +2996,17 @@ public static class Factory
         }
         if ($tool -notin 'Bash', 'PowerShell') { exit 0 }
         $cmd = [string]$j.tool_input.command
+        # a step stops only what it started, by PID: a kill by name, command line or filter once stopped 7 of the
+        # developer's node processes along with the step's own two (every step, every mode)
+        $broadKill = '(?i)\|\s*(Stop-Process|spps|kill)\b|\bStop-Process\b[^|;&\n]*-(Name|InputObject)\b|\b(kill|spps)\s+-Name\b|\btaskkill\b[^|;&\n]*/(IM|FI)\b|\b(pkill|killall)\b|\bwmic\b[^|;&\n]*\b(delete|terminate)\b|Invoke-CimMethod[^|;\n]*Terminate|\.Kill\(\)'
+        # ... and a kill by PID that takes its PIDs from a process query (a loop over Get-CimInstance, pgrep, a port
+        # lookup) is the same broad kill - the incident's exact shape
+        $query = '(?i)\b(Get-CimInstance|gcim|Get-WmiObject|gwmi|Get-Process|gps|pgrep|pidof|tasklist|Get-NetTCPConnection|netstat|fuser)\b|\blsof\b[^|;&\n]*-t|\bps\s+(-|aux|ax)'
+        $killVerb = '(?i)\b(Stop-Process|spps|kill|taskkill|xargs\s+kill)\b|Terminate'
+        if ($cmd -match $broadKill -or ($cmd -match $query -and $cmd -match $killVerb)) {
+            [Console]::Error.WriteLine("Dev break factory: stop only the processes this step started, by their PID (Stop-Process -Id <pid>, kill <pid>, taskkill /PID <pid>) - a kill by name, command line or filter can hit the developer's own processes.")
+            exit 2
+        }
         # a step that may not push may not undo the push block or point a push elsewhere either
         if ($Mode -ne 'frozen' -and $cmd -match '(?i)GIT_CONFIG|\bpushurl\b|insteadof|\benv\s+(-u|--unset|-i)\b|\bunset\s+GIT|env:GIT_|\.git[\\/]config') {
             [Console]::Error.WriteLine("Dev break factory: changing where or whether git pushes is not allowed in this step."); exit 2
@@ -2839,9 +3028,9 @@ public static class Factory
         """;
 
     // a settings file for the turn: the learned hooks (if any) with the guard added; null when there is neither
-    private static string? GuardSettings(string learned, string guard)
+    private static string? GuardSettings(string learned, string guard, JsonObject? pluginsOff = null)
     {
-        if (guard.Length == 0) return learned.Length > 0 && File.Exists(learned) ? learned : null;
+        if (guard.Length == 0 && pluginsOff == null) return learned.Length > 0 && File.Exists(learned) ? learned : null;
         string home = Path.Combine(AppContext.BaseDirectory, "factory-guard");
         Directory.CreateDirectory(home);
         string script = Path.Combine(home, "guard.ps1");
@@ -2849,7 +3038,7 @@ public static class Factory
         JsonObject settings = learned.Length > 0 && File.Exists(learned) ? JsonNode.Parse(File.ReadAllText(learned))?.AsObject() ?? [] : [];
         if (settings["hooks"] is not JsonObject hooks) settings["hooks"] = hooks = [];
         if (hooks["PreToolUse"] is not JsonArray pre) hooks["PreToolUse"] = pre = [];
-        pre.Add(new JsonObject
+        if (guard.Length > 0) pre.Add(new JsonObject
         {
             ["matcher"] = "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|mcp__.*",
             ["hooks"] = new JsonArray(new JsonObject
@@ -2861,14 +3050,17 @@ public static class Factory
         // the guard reads command text, which an alias or an include in .git/config can hide; in a step that may
         // not push, git itself is told so: every push URL is rewritten to a scheme git has no helper for, so any
         // push fails before it reaches a remote (fetch is untouched)
-        if (guard != "frozen")
+        if (guard.Length > 0 && guard != "frozen")
         {
             if (settings["env"] is not JsonObject env) settings["env"] = env = [];
             env["GIT_CONFIG_COUNT"] = "1";
             env["GIT_CONFIG_KEY_0"] = "url.devbreak-push-blocked://.pushInsteadOf";
             env["GIT_CONFIG_VALUE_0"] = "";
         }
-        string file = Path.Combine(home, $"settings-{guard}-{Math.Abs(learned.GetHashCode()):x}.json");
+        // a curated turn: the developer's plugins it does not keep are off (a file of its own, so a full turn of the
+        // same repo never picks the list up)
+        if (pluginsOff != null) settings["enabledPlugins"] = pluginsOff;
+        string file = Path.Combine(home, $"settings-{guard}{(pluginsOff != null ? "-curated" : "")}-{Math.Abs(learned.GetHashCode()):x}.json");
         File.WriteAllText(file, settings.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         return file;
     }
