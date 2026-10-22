@@ -21,9 +21,42 @@ public partial class App : Application
     private DateTime? _lastShownHour;
     private DateTime? _snoozedUntil;
 
+    // one Dev break per app folder: two copies would each write factory.json over the other's (a test lost a finished
+    // task that way). A second copy asks the first to show its window, and exits.
+    private System.Threading.Mutex? _single;
+    private System.Threading.EventWaitHandle? _showSignal;
+
+    private bool FirstCopy()
+    {
+        string folder = AppContext.BaseDirectory.TrimEnd('\\').ToLowerInvariant();
+        string key = "DevBreak-" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(folder)))[..16];
+        _single = new System.Threading.Mutex(true, key + "-one", out bool first);
+        if (!first)
+        {
+            try
+            {
+                using var show = System.Threading.EventWaitHandle.OpenExisting(key + "-show");
+                show.Set();
+            }
+            catch (System.Threading.WaitHandleCannotBeOpenedException)
+            {
+                // the first copy is still starting: it shows itself when it is ready
+            }
+            return false;
+        }
+        _showSignal = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, key + "-show");
+        System.Threading.ThreadPool.RegisterWaitForSingleObject(_showSignal, (_, _) => Dispatcher.BeginInvoke(Ask), null, -1, executeOnlyOnce: false);
+        return true;
+    }
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (!FirstCopy())
+        {
+            Shutdown(0);
+            return;
+        }
         if (!Topics.IsSetUp)
         {
             // first run: Claude Code must work, then the user picks their topics

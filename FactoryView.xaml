@@ -61,6 +61,19 @@
                         </WrapPanel>
                         <TextBlock x:Name="DepartmentHint" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="2,0,0,14" />
 
+                        <TextBlock Text="Harness - how much of your Claude setup its steps load" Style="{StaticResource Caption}" Margin="2,0,0,4" />
+                        <WrapPanel>
+                            <RadioButton x:Name="AutoLane" Content="Auto" GroupName="Lane" Style="{StaticResource PillRadio}" IsChecked="True"
+                                         Checked="Lane_Checked" Margin="0,0,6,6" />
+                            <RadioButton x:Name="FastLane" Content="Fast lane" GroupName="Lane" Style="{StaticResource PillRadio}"
+                                         Checked="Lane_Checked" Margin="0,0,6,6" />
+                            <RadioButton x:Name="CuratedLane" Content="Curated" GroupName="Lane" Style="{StaticResource PillRadio}"
+                                         Checked="Lane_Checked" Margin="0,0,6,6" />
+                            <RadioButton x:Name="FullLane" Content="Full" GroupName="Lane" Style="{StaticResource PillRadio}"
+                                         Checked="Lane_Checked" Margin="0,0,6,6" />
+                        </WrapPanel>
+                        <TextBlock x:Name="LaneHint" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="2,0,0,14" />
+
                         <TextBlock Text="The task comes from" Style="{StaticResource Caption}" Margin="2,0,0,4" />
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                             <RadioButton x:Name="TypedSource" Content="Typed" GroupName="Source" Style="{StaticResource PillRadio}"
@@ -97,7 +110,8 @@
                             <TextBlock TextWrapping="Wrap" FontSize="13"><Run FontWeight="SemiBold" Text="Designed report" /><Run Text=" - a readable page of the result when it is done" /></TextBlock>
                         </CheckBox>
 
-                        <Expander x:Name="MoreOptions" Header="More options - base branch, verify command" Margin="0,12,0,0" FontSize="12.5">
+                        <Expander x:Name="MoreOptions" Header="More options - base branch, verify command, curated plugins" Margin="0,12,0,0" FontSize="12.5">
+                            <StackPanel>
                             <Grid Margin="0,8,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="200" />
@@ -114,6 +128,10 @@
                                              FontSize="12.5" AutomationProperties.Name="Verify command" />
                                 </StackPanel>
                             </Grid>
+                            <TextBlock Text="Curated keeps these plugins of yours (comma-separated; every other plugin is off for the task)" Style="{StaticResource Caption}"
+                                       Margin="2,10,0,4" TextWrapping="Wrap" />
+                            <TextBox x:Name="CuratedBox" Style="{StaticResource NotebookBox}" FontSize="12.5" AutomationProperties.Name="Curated plugins" />
+                            </StackPanel>
                         </Expander>
                         <TextBlock x:Name="FormError" Foreground="{StaticResource CoralInkBrush}" TextWrapping="Wrap" Margin="2,10,0,0"
                                    Visibility="Collapsed" />
@@ -212,6 +230,21 @@
                                 <TextBlock x:Name="NextTitle" FontWeight="Bold" FontSize="14" TextWrapping="Wrap" />
                                 <TextBox x:Name="NextText" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0"
                                          FontSize="13" MaxHeight="170" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0" AutomationProperties.Name="What it needs" />
+                                <!-- what the department manager proposes to change in the factory itself, for you to approve -->
+                                <Border x:Name="FixesBox" Visibility="Collapsed" BorderBrush="{StaticResource VioletBrush}" BorderThickness="1.5"
+                                        CornerRadius="10" Padding="10,6" Margin="0,8,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="The manager proposes these changes to the factory - for you to approve" FontWeight="SemiBold" FontSize="12.5" />
+                                        <TextBox x:Name="FixesText" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0"
+                                                 FontSize="12.5" MaxHeight="140" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0" AutomationProperties.Name="Proposed changes" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                            <Button x:Name="CopyFixesButton" Content="Copy" Style="{StaticResource SecondaryButton}" Height="30" Padding="12,0" Margin="0,0,8,0"
+                                                    Click="CopyFixes_Click" ToolTip="Copy them, to ask for them in a Claude session or a Development task" />
+                                            <Button x:Name="FixesSeenButton" Content="Got it" Style="{StaticResource SecondaryButton}" Height="30" Padding="12,0"
+                                                    Click="FixesSeen_Click" ToolTip="Put them away - they stay in the task's log" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
                                 <!-- what the task hands back (a curl, an answer, a link), ready to use -->
                                 <Border x:Name="ResultBox" Visibility="Collapsed" Background="{StaticResource MarkerBrush}" BorderBrush="{StaticResource InkBrush}"
                                         BorderThickness="1.5" CornerRadius="10" Padding="10,6" Margin="0,8,0,0">

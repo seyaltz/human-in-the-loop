@@ -117,6 +117,12 @@ and - since anything inside Claude's shell can be undone by Claude - before its 
 own code, that no branch of the remote got a commit made here during the run and that the remote settings are as the
 run found them; a safety stop (a secret, an unexpected push, a changed remote) always goes to you, never to the AI manager.
 
+**A fast lane**: pick how much of your Claude setup a task loads - **Fast lane** (none of your plugins, hooks or
+MCP servers; the factory's own guard and rules and the repo's CLAUDE.md - about 7 s per step to start instead of 19),
+**Curated** (your settings and connectors with only the plugins you list), **Full** (everything), or **Auto**: the
+gate reads the task and picks. A fast-lane step that needs your tools says so and the task moves to Full by itself.
+The review always runs lean; the draft PR step always runs on your full setup, so your own PR gate checks it.
+
 **A calm screen, like the best agent products**: on the left **+ New task**, **Floor** and an inbox of your tasks
 grouped **Needs you / Working / Done**. A task's page shows its **production line** - Gate, Workspace, Plan, Build,
 then the quality gates (◆) Verify, Review, Prove and Ship, then Learn - with the task on a belt under the station
