@@ -2968,7 +2968,7 @@ public static class Factory
         // one --settings: the hooks the factory learned for the repo, the guard for this kind of turn, and - curated -
         // the developer's plugins that are switched off
         string learned = dir != null ? Path.Combine(dir, "settings.json") : "";
-        if (GuardSettings(learned, guard, CuratedPlugins(run, full)) is { } settings) args.AddRange(["--settings", settings]);
+        if (GuardSettings(learned, guard, CuratedPlugins(run, full), fast ? OwnGuards() : null) is { } settings) args.AddRange(["--settings", settings]);
         return args;
     }
 
@@ -3028,15 +3028,46 @@ public static class Factory
         """;
 
     // a settings file for the turn: the learned hooks (if any) with the guard added; null when there is neither
-    private static string? GuardSettings(string learned, string guard, JsonObject? pluginsOff = null)
+    // the developer's own guards in their settings.json - its hooks and permission rules - which a fast-lane turn
+    // (no settings sources) would otherwise lose; plugins are not in it, so they stay off. Measured: these hooks cost
+    // nothing noticeable at start, unlike the plugins'.
+    private static JsonObject? OwnGuards()
     {
-        if (guard.Length == 0 && pluginsOff == null) return learned.Length > 0 && File.Exists(learned) ? learned : null;
+        try
+        {
+            string file = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json");
+            if (!File.Exists(file) || JsonNode.Parse(File.ReadAllText(file)) is not JsonObject user) return null;
+            var own = new JsonObject();
+            if (user["hooks"] is JsonObject hooks) own["hooks"] = hooks.DeepClone();
+            if (user["permissions"] is JsonObject permissions) own["permissions"] = permissions.DeepClone();
+            return own.Count > 0 ? own : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string? GuardSettings(string learned, string guard, JsonObject? pluginsOff = null, JsonObject? ownGuards = null)
+    {
+        if (guard.Length == 0 && pluginsOff == null && ownGuards == null) return learned.Length > 0 && File.Exists(learned) ? learned : null;
         string home = Path.Combine(AppContext.BaseDirectory, "factory-guard");
         Directory.CreateDirectory(home);
         string script = Path.Combine(home, "guard.ps1");
         if (!File.Exists(script) || File.ReadAllText(script) != GuardScript) File.WriteAllText(script, GuardScript);
         JsonObject settings = learned.Length > 0 && File.Exists(learned) ? JsonNode.Parse(File.ReadAllText(learned))?.AsObject() ?? [] : [];
         if (settings["hooks"] is not JsonObject hooks) settings["hooks"] = hooks = [];
+        // the fast lane: the developer's own hooks (each event's entries added) and permission rules come along
+        if (ownGuards?["hooks"] is JsonObject theirHooks)
+        {
+            foreach ((string ev, JsonNode? entries) in theirHooks)
+            {
+                if (entries is not JsonArray list) continue;
+                if (hooks[ev] is not JsonArray mine) hooks[ev] = mine = [];
+                foreach (JsonNode? entry in list) mine.Add(entry?.DeepClone());
+            }
+        }
+        if (ownGuards?["permissions"] is JsonObject theirPermissions && settings["permissions"] == null) settings["permissions"] = theirPermissions.DeepClone();
         if (hooks["PreToolUse"] is not JsonArray pre) hooks["PreToolUse"] = pre = [];
         if (guard.Length > 0) pre.Add(new JsonObject
         {
@@ -3060,7 +3091,7 @@ public static class Factory
         // a curated turn: the developer's plugins it does not keep are off (a file of its own, so a full turn of the
         // same repo never picks the list up)
         if (pluginsOff != null) settings["enabledPlugins"] = pluginsOff;
-        string file = Path.Combine(home, $"settings-{guard}{(pluginsOff != null ? "-curated" : "")}-{Math.Abs(learned.GetHashCode()):x}.json");
+        string file = Path.Combine(home, $"settings-{guard}{(pluginsOff != null ? "-curated" : "")}{(ownGuards != null ? "-fast" : "")}-{Math.Abs(learned.GetHashCode()):x}.json");
         File.WriteAllText(file, settings.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         return file;
     }
