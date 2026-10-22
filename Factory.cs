@@ -254,10 +254,12 @@ public sealed class FactoryRun
 }
 
 /// <summary>
-/// The software factory: a task goes plan → build → verify → review → draft PR, then what the run learned goes into
-/// the repo's Claude harness. Each run works in its own git worktree and branch, so the developer's checkout is never
-/// touched. Claude works with the developer's full setup and full access in that worktree (as in Sessions), but
-/// may not push or open a PR until the checks passed - that is the last step, done on purpose. The verify command
+/// The software factory: a task enters at the gate, which picks its department; Development goes plan → build →
+/// verify → review → prove → draft PR, the other departments investigate and hand over a checked answer and a
+/// report; then what the run learned goes into the repo's Claude harness. A run works in the developer's checkout on
+/// a new branch (or a separate worktree beside it), and the developer's own uncommitted files never ship. Claude works
+/// with the developer's full setup there (as in Sessions), but may not push or open a PR until the checks passed -
+/// that is the last step, done on purpose. The verify command
 /// is run by Dev break itself, and the reviewer is a fresh Claude that can only read.
 /// </summary>
 public static class Factory
@@ -1017,9 +1019,12 @@ public static class Factory
     }
 
     /// <summary>The developer accepts the run's work as it is; after rounds of changes, it learns what they meant.</summary>
-    public static Task AcceptAsync(FactoryRun run) => DriveAsync(run, learnAfter: run.Revision > 1, cancel =>
+    // accepting is the developer's verdict: the work is good - the run learns from it (and, after rounds of changes,
+    // from what the developer meant the first time)
+    public static Task AcceptAsync(FactoryRun run) => DriveAsync(run, learnAfter: true, cancel =>
     {
         run.Accepted = true;
+        run.Rating = "good";
         Log(run, run.Revision > 1 ? $"Accepted at revision {run.Revision}." : "Accepted.");
         End(run, FactoryStage.Done, run.Note);
         return Task.FromResult(false);
@@ -3131,14 +3136,14 @@ public static class Factory
         md.AppendLine($"- Task ({run.Source}): {run.Task.Replace("\n", " ")}");
         md.AppendLine($"- Folder: {run.Folder}  ·  repo: {run.Repo}  ·  branch: {run.Branch} from {run.BaseBranch}");
         md.AppendLine($"- Ended: {run.Stage} - {run.Note.Replace("\n", " ")}");
-        md.AppendLine($"- Cost: ${run.Cost:0.00}  ·  steps: {run.Steps}  ·  PR: {(run.PrUrl.Length > 0 ? run.PrUrl : "none")}");
+        md.AppendLine($"- Tokens: {run.Trace.Sum(t => t.InputTokens + t.OutputTokens):N0}  ·  steps: {run.Steps}  ·  PR: {(run.PrUrl.Length > 0 ? run.PrUrl : "none")}");
         if (run.Rating.Length > 0) md.AppendLine($"- Your rating: {run.Rating}{(run.RatingNote.Length > 0 ? " - " + run.RatingNote : "")}");
         foreach (FactoryFeedback f in run.Feedback) md.AppendLine($"- Your feedback ({f.At:HH:mm}): {f.Text.Replace("\n", " ")}");
         md.AppendLine().AppendLine("## Trace").AppendLine();
         foreach (FactorySpan s in run.Trace)
         {
             md.AppendLine($"### {s.Started:HH:mm:ss} · {s.Stage} · {s.Title}{(s.Error.Length > 0 ? " ✗ " + s.Error : "")}");
-            md.AppendLine($"{Duration(s)} · ${s.Cost:0.00} · {s.InputTokens:N0} in / {s.OutputTokens:N0} out tokens · {s.Tools.Count} tools{(s.Denied > 0 ? $", {s.Denied} denied" : "")}").AppendLine();
+            md.AppendLine($"{Duration(s)} · {s.InputTokens:N0} in / {s.OutputTokens:N0} out tokens · {s.Tools.Count} tools{(s.Denied > 0 ? $", {s.Denied} denied" : "")}").AppendLine();
             foreach (FactoryToolCall tool in s.Tools) md.AppendLine($"- `{tool.Name}` {tool.Detail} - {tool.Result}");
             if (s.Tools.Count > 0) md.AppendLine();
             md.AppendLine("Prompt:").AppendLine(Fence).AppendLine(s.Prompt.Trim()).AppendLine(Fence);

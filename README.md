@@ -117,13 +117,16 @@ and - since anything inside Claude's shell can be undone by Claude - before its 
 own code, that no branch of the remote got a commit made here during the run and that the remote settings are as the
 run found them; a safety stop (a secret, an unexpected push, a changed remote) always goes to you, never to the AI manager.
 
-**A real production line**: each run shows its line - Gate, Workspace, Plan, Build, then the quality gates (◆)
-Verify, Review, Prove and Ship, then Learn - with the item on a belt under the station working on it, the time each
-station took, and ↺ where a gate sent it back. Hover a station for what it does, the check it runs and why. The
-**Floor** tab shows the whole factory: every department's line and the items on it now, and what the managers are
-doing; **How the factory works** explains it in plain words.
+**A calm screen, like the best agent products**: on the left **+ New task**, **Floor** and an inbox of your tasks
+grouped **Needs you / Working / Done**. A task's page shows its **production line** - Gate, Workspace, Plan, Build,
+then the quality gates (◆) Verify, Review, Prove and Ship, then Learn - with the task on a belt under the station
+working on it, the time each station took, and ↺ where it came back. Hover a station for what it does, the check it
+runs and why. Under the line one card says what is happening or what it needs from you, with only the buttons that
+make sense now (Stop; Continue or a reply; Accept or Request changes); the rest is behind **⋯**. No money is shown -
+tokens and time instead. The **Floor** shows the whole factory: every department's line and the tasks on it now, and
+what the managers are doing; **How the factory works** explains it in plain words.
 
-**Review and revise**: when a run is done, a card on it asks you to review that revision - the decisions it took on
+**Review and revise**: when a task is done, its card asks you to review that revision - the decisions it took on
 its own are listed as ticked boxes; untick one and say how it should be. **Accept** closes it; **Request changes**
 sends it back to the factory as the next **revision** (pick what kind: wrong behaviour, missing, change design, bug).
 The run first says in a line what "done" now means and which earlier decision your request overturns, then changes
@@ -132,12 +135,13 @@ that belongs in another repo under your folder starts a linked Development run t
 saying what it understood and builds on your "ok". History shows the revision; a notification says when one is
 ready; and after changes, Accept teaches the factory what you meant.
 
-Tell it what you think: **send feedback to the run** ("also handle underscores") and it applies it, checks again and
-updates the draft PR; **rate the run** good or bad with a note; say **why** when you undo or dismiss a lesson. All of
-it goes into what the factory learns. Every run has a **Trace** - each step with its time, cost, tokens, every tool
-call and the exact prompt and answer - and **Export trace** saves it as JSON and Markdown.
+Tell it what you think: **Accept** is your "good" and the factory learns from it; **Request changes** ("also handle
+underscores") takes it round the line again and updates the draft PR; while a task waits for you, **reply** to it;
+say **why** when you undo or dismiss a lesson. All of it goes into what the factory learns. Every task has a
+**Trace** - each step with its time, tokens, every tool call and the exact prompt and answer - and **Export the
+trace** (in ⋯) saves it as JSON and Markdown.
 
-**Departments** - a **gate** reads each new item and chooses its department (**Auto**, the default; it says why in
+**Departments** - a **gate** reads each new task and chooses its department (**Auto**, the default; it says why in
 the log), or you pick one:
 - **Development**: build a change, as above, to a draft PR.
 - **Troubleshooting** (for the call center): a customer's or a site's problem. Claude reproduces it as reported,

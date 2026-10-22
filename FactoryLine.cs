@@ -10,7 +10,7 @@ using System.Windows.Shapes;
 namespace DevBreak;
 
 /// <summary>
-/// The factory as a production line: each department is a line of stations, an item (a run) moves along a belt
+/// The factory as a production line: each department is a line of stations, a task moves along a belt
 /// beneath them, and the stations marked ◆ are quality gates it passes only when their check is green.
 /// </summary>
 public static class FactoryLine
@@ -19,19 +19,19 @@ public static class FactoryLine
     public sealed record Station(string Name, FactoryStage[] Stages, bool Gate, string What, string Check, string Why);
 
     private static readonly Station GateStation = new("Gate", [FactoryStage.Locate], false,
-        "Reads the item and chooses its department (when you chose Auto), then finds the repo for it in the folder.",
-        "A department is chosen and the repo is found - or the item stops and says why.",
+        "Reads the task and chooses its department (when you chose Auto), then finds the repo for it in the folder.",
+        "A department is chosen and the repo is found - or the task stops and says why.",
         "Each kind of work has its own line: a change, a customer's problem, a question, a company matter.");
 
     private static readonly Station WorkspaceStation = new("Workspace", [FactoryStage.Worktree], false,
-        "Puts your checkout on a new branch for the item (or a separate worktree, if you chose one) and locks it.",
+        "Puts your checkout on a new branch for the task (or a separate worktree, if you chose one) and locks it.",
         "Your own uncommitted files are recorded, so they can never be part of what ships; no other run uses the checkout meanwhile.",
-        "The item works where you work, without touching what is yours.");
+        "The task works where you work, without touching what is yours.");
 
     private static readonly Station LearnStation = new("Learn", [FactoryStage.Learn], false,
-        "Looks back at the item: facts go into the repo's Claude memory, rules and skills into the factory's knowledge, lessons into Insights.",
+        "Looks back at the task: facts go into the repo's Claude memory, rules and skills into the factory's knowledge, lessons into Insights.",
         "Rules apply at once in autonomous mode; otherwise they wait for your OK.",
-        "The next item on this line starts from what this one learned.");
+        "The next task on this line starts from what this one learned.");
 
     /// <summary>Development: a change, from the task to a draft PR.</summary>
     public static readonly Station[] Development =
@@ -43,20 +43,20 @@ public static class FactoryLine
             "Autonomous: it takes the suggested answers. Otherwise you answer the questions first.",
             "A change is built against a plan, so the reviewer can check it did what it said."),
         new("Build", [FactoryStage.Build], false,
-            "Claude changes the code with its Edit and Write tools. Every item sent back by a gate (↺) is fixed here.",
+            "Claude changes the code with its Edit and Write tools. Every task sent back by a gate (↺) is fixed here.",
             "A stuck detector stops a turn that repeats the same call, so a loop cannot burn the run.",
             "The only station that changes the code."),
         new("Verify", [FactoryStage.Verify], true,
             "Runs the verify command - the build and the tests for what changed.",
-            "It must pass. Failing, the item goes back to Build with the output, and comes back here.",
+            "It must pass. Failing, the task goes back to Build with the output, and comes back here.",
             "Nothing is reviewed that does not build and pass its tests."),
         new("Review", [FactoryStage.Review], true,
             "A second, read-only Claude reads the diff against the plan and your feedback.",
-            "It must find nothing to fix. Findings send the item back to Build, then Verify again.",
+            "It must find nothing to fix. Findings send the task back to Build, then Verify again.",
             "A fresh pair of eyes that did not write the code."),
         new("Prove", [FactoryStage.Prove], true,
             "Runs the app with the change and keeps the evidence: screenshots, responses, log lines.",
-            "The change must work in the running app, not only in the tests. If proving it changed code, the item is reviewed again.",
+            "The change must work in the running app, not only in the tests. If proving it changed code, the task is reviewed again.",
             "Evidence you can open, instead of a claim."),
         new("Ship", [FactoryStage.PullRequest], true,
             "Commits the change, checks the commit in code, pushes exactly that commit and opens a draft PR.",
@@ -87,8 +87,8 @@ public static class FactoryLine
 
     public static Station[] LineOf(FactoryDepartment department) => department == FactoryDepartment.Development ? Development : Investigation;
 
-    // the stations an item of this run visits, for the line it is on (a Development item with nothing to change
-    // takes the answer path: Plan, then Prove checks the answer)
+    // the line a task is on, by its department (a Development task with nothing to change passes Plan, then Prove
+    // checks its answer - Build, Verify, Review and Ship show as skipped)
     public static Station[] LineOf(FactoryRun run) => LineOf(run.Department);
 
     public enum State { Waiting, Working, Passed, Stopped, Skipped }
@@ -162,8 +162,8 @@ public static class FactoryLine
             string label = here.State switch
             {
                 State.Working => "▣ here now",
-                State.Stopped => run.ManagerCase.Length > 0 ? "▣ needs a human" : "▣ waits for you",
-                _ => run.Stage == FactoryStage.Done ? (run.PrUrl.Length > 0 ? "▣ shipped" : "▣ done") : "▣",
+                State.Stopped => "▣ needs you",
+                _ => run.Stage == FactoryStage.Done ? (run.Accepted ? "▣ accepted" : run.PrUrl.Length > 0 ? "▣ draft PR" : run.ReportFile.Length > 0 ? "▣ report" : "▣ done") : "▣",
             };
             grid.Children.Add(Place(Item(label, here.State, brush), 2, columns[itemAt]));
         }
@@ -198,7 +198,7 @@ public static class FactoryLine
             Border item = Item("▣ " + title, state, brush);
             item.Margin = new Thickness(2, 2, 2, 0);
             item.Cursor = System.Windows.Input.Cursors.Hand;
-            item.ToolTip = $"{run.Title}\n{(run.Working ? "Working at " + line[i].Name : run.ManagerCase.Length > 0 ? "Needs a human" : "Waits for you")} - click to open it";
+            item.ToolTip = $"{run.Title}\n{(run.Working ? "Working at " + line[i].Name : "Needs you")} - click to open it";
             item.MouseLeftButtonUp += (_, _) => open(run);
             stands[i].Children.Add(item);
         }
@@ -311,17 +311,17 @@ public static class FactoryLine
 
     /// <summary>The whole factory in plain words, for the "How the factory works" panel.</summary>
     public const string HowItWorks = """
-        Every item - a typed task, a Jira issue or a spec - enters at the Gate. The Gate chooses its department, and each department is a production line of stations. The item moves along the belt from station to station; hover a station to see what it does, the check it runs and why it is there.
+        Every task - typed, a Jira issue or a spec - enters at the Gate. The Gate chooses its department, and each department is a production line of stations. The task moves along the belt from station to station; hover a station to see what it does, the check it runs and why it is there.
 
-        Development builds a change: Plan, Build, then three quality gates (◆) - Verify runs the tests, Review is a second Claude that did not write the code, Prove runs the app and keeps evidence. A gate that is not green sends the item back to Build (↺ counts the rework) and the item comes through the gates again. Ship is the last gate: the commit is checked in code before anything leaves the machine, and a draft PR opens.
+        Development builds a change: Plan, Build, then three quality gates (◆) - Verify runs the tests, Review is a second Claude that did not write the code, Prove runs the app and keeps evidence. A gate that is not green sends the task back to Build (↺ counts the rework) and the task comes through the gates again. Ship is the last gate: the commit is checked in code before anything leaves the machine, and a draft PR opens.
 
         Troubleshooting, Research and Management investigate instead of changing code: they gather facts, check the answer against the running system, and hand over a report.
 
-        Autonomous items run with no stops. When one stops, the department manager looks at it: it restarts what the AI can fix, and calls a human (a Windows notification) for what it cannot - a login, an access grant, a business decision. A safety stop always goes to a human.
+        Autonomous tasks run with no stops. When one stops, the department manager looks at it: it restarts what the AI can fix, and calls you (a Windows notification) for what it cannot - a login, an access grant, a business decision. A safety stop always goes to you.
 
         Safety on every line: your own uncommitted files never ship; a commit that looks like it holds a secret is held; a step that may not push cannot push (git itself refuses), and before its own push the factory checks that nothing reached the remote behind its back.
 
-        After each item the Learn station keeps what it taught: facts in the repo's memory, rules and skills for the next items, lessons in Insights. When a change is done you review it: Accept it, or Request changes - the item goes round the line again as the next revision.
+        After each task the Learn station keeps what it taught: facts in the repo's memory, rules and skills for the next tasks, lessons in Insights. When a change is done you review it: Accept it, or Request changes - the task goes round the line again as the next revision.
 
         ● working   ✓ passed (time spent)   ↺ sent back and redone   ✗ stopped   ◆ quality gate
         """;

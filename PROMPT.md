@@ -722,30 +722,59 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   feedback). Before deleting, a bar shows what goes and its size, and in coral what would be lost - uncommitted
   changes in the worktree, a branch never pushed - with **Delete it** / **Delete it anyway** and **Cancel**.
   **Clean up all** does it for every run that is not working, naming the runs whose work would be lost.
-- **View** (6th mode tab **Factory**): left three tabs - **New task** (the form, on the left, open by default),
-  **Floor** (the history list stays on the left; on the right the **factory floor**: "N items on the lines, N waiting,
-  N shipped", the open **How the factory works** panel, one line per department with "N working · N waiting · N done"
-  and under each station the items standing there now - working or waiting for a human, a station violet while one is
-  worked on and coral when they only wait; click an item to open its run - and the department managers' line: which
-  items need a human and how often they restarted stopped items; it refreshes every 5 seconds) and
-  **History (N)** (on the right; opened after starting a run): "N working · N to continue · N with a PR", **Clean up all**, and the runs
-  (light: green pulsing while working, red when it needs you or was stopped; repo · stage · cost). Right the run: title, repo · branch from base · steps · cost, the
-  note; **Stop**, **Continue**, **Clean up**, **Draft PR anyway** (after failed checks - the description says what failed), **Open PR**, **Open in
-  Sessions** (continue the run's session yourself), **Open worktree**; the item's **production line** (`FactoryLine`): a
-  card per station - Development: Gate, Workspace, Plan, Build, ◆ Verify, ◆ Review, ◆ Prove, ◆ Ship, Learn;
-  Troubleshooting, Research and Management: Gate, Workspace, Investigate, ◆ Check, Report, Learn (◆ = a quality gate,
-  square corners) - each with its state (● working with its time, violet; ✓ passed with the work time of its trace
-  spans; ✗ stopped, coral; – skipped; faded to come) and ↺N when a gate sent the item back N times; under the cards a
-  belt, and on it the item (▣ here now / needs a human / waits for you / shipped) under its station, pulsing while it
-  is worked on; hovering a station shows what it does, its check and why the line has it; a folded **How the factory
-  works** panel explains the whole factory in plain words with the legend; tabs **Log** (rendered like the chats) · **Evidence (N)** (the proof
-  chosen and what was not produced; a card per piece: kind, ✓ pass / ✗ fail / – skipped, what it proves, its numbers,
-  an image shown (click to open), **Open <file>** for a video, report or any file, a note when the file is missing) ·
-  **Trace (N)** (a fold per span:
-  "time title kind · duration · $cost · Nk in / Nk out · N tools · N denied · ✗ error", opening to its tool calls and
-  folded Prompt and Answer boxes to read and copy; opened spans stay open while it updates) · **Learned (N)** (the
-  lesson cards with their state, buttons and why), **Export trace**; at the bottom the rating row and the feedback box
-  with **Send to the run**.
+- **View** (6th mode tab **Factory**), laid out like the agent products it was compared with (Factory Missions,
+  Cursor, Devin, Jules, Copilot): one status, shown once; an inbox grouped by what each task needs; one primary action
+  per state, the rest behind ⋯; one way to give feedback; readable steps first, raw tool calls one click deeper. The
+  word is **task** everywhere (not run or item).
+  - **Left**: "task in, result out" · **Factory**, then **+ New task** (primary) and **Floor**; the **inbox** - tasks
+    grouped under **NEEDS YOU (N)** (waiting or stopped, coral header), **WORKING (N)** and **DONE (N)**, newest first in
+    each; a row: light (green pulsing working, red needs you), title, "[department ·][revision N ·] repo · status"
+    (the station while working - "Build…"; needs you / stopped; draft PR ready / report ready / answer ready /
+    accepted / done; "· cleaned up"); a task moving to another group rebuilds the list and keeps the selection.
+    Under it "N tasks · N working · N need you" and **Clean up all**.
+  - **Right** is one of three pages: the **New task** form at full width (max 820 px) - Department pills with a
+    one-line hint of what the chosen department does, "The task comes from" Typed / Jira / Spec doc, the task box,
+    the folder, **Autonomous** and **Designed report**, a folded **More options** (base branch, verify command),
+    **Start task**; the **Floor** (below); or the **selected task**. With no task selected: "Pick a task on the left,
+    or start a new one." and the How the factory works text. The form opens first when there are no tasks.
+  - **The task page**, top to bottom: the title with its light and **⋯** (Open in Sessions, Open folder, Open the
+    evidence folder, Export the trace | Clean up…, Delete… - each enabled only when it applies); one meta line
+    "department · repo (your checkout / separate worktree) · branch from base · revision N · time · tokens" (no
+    money: on a subscription `total_cost_usd` is only an API-price estimate - tokens and time instead, here, in the
+    trace and in the exported trace); a passing notice line (what a clean up freed, the exported file as a link); the
+    clean-up confirm bar ("Clean up" / "Clean up anyway") or the delete panel when asked; the **production line**
+    (`FactoryLine`) - the one place progress is shown; then the **next-step card**, one per state:
+    - **Working** (violet): "Working · <station> · <time at it>", the step and its latest tool call; **Stop**.
+    - **Needs you** (coral): "Needs you" (or "Stopped", or "Needs you - the department manager could not get it
+      going" with the manager's case); the whole reason; a **reply** box ("Send reply" - answers its question or says
+      what to do, through `FeedbackAsync`) when the task has a session; **Continue**, and only when they apply **Use a
+      separate worktree** and **Draft PR anyway** (Development, with a plan, no PR).
+    - **Done**: "Review revision N - the draft PR / report / answer is ready" (violet while it waits for the review),
+      or "Accepted - revision N"; the note; the **Result** (marker yellow, mono, **Copy**); the decisions it took on
+      its own as ticked boxes (unticking one opens "How should it be instead?" and the change box); **Accept**
+      (primary - `AcceptAsync` marks it accepted, records the rating good and learns from it) and **Request changes**
+      (shows the kinds - Wrong behaviour / Missing / Change design / Bug - and the box; **Send to the next revision**
+      sends the unticked decisions and the words, kind "change design" when only decisions were unticked); **Open PR**
+      / **Open report** (secondary next to Accept); **Fix it in Development** for a troubleshooting diagnosis.
+      There is no separate Good/Bad rating: Accept and Request changes are the verdict.
+    Then the tabs **Activity** (the log, rendered like the chats) · **Evidence (N)** (the proof chosen and what was
+    not produced; a card per piece: kind, ✓ pass / ✗ fail / – skipped, what it proves, its numbers, an image shown
+    (click to open), **Open <file>** for a video, report or any file, a note when the file is missing) · **Trace (N)**
+    (a fold per span: "time title kind · duration · Nk in / Nk out · N tools · N denied · ✗ error", opening to its tool
+    calls and folded Prompt and Answer boxes to read and copy; opened spans stay open while it updates) · **Learned
+    (N)** (the lesson cards with their state, buttons and why).
+  - **The production line** (`FactoryLine`): a card per station - Development: Gate, Workspace, Plan, Build, ◆ Verify,
+    ◆ Review, ◆ Prove, ◆ Ship, Learn; Troubleshooting, Research and Management: Gate, Workspace, Investigate, ◆ Check,
+    Report, Learn (◆ = a quality gate, square corners) - each with its state (● working with its time, violet; ✓
+    passed with the work time of its trace spans; ✗ stopped, coral; – skipped; faded to come) and ↺N when the task
+    came back to it N times; under the cards a belt, and on it the task (▣ here now / needs you / draft PR / report /
+    accepted / done) under its station, pulsing while it is worked on; hovering a station shows what it does, its
+    check and why the line has it.
+  - **The Floor**: "N tasks on the lines, N need you, N with a draft PR", a folded **How the factory works** panel
+    (the whole factory in plain words with the legend), one line per department with "N working · N need you · N
+    done" and under each station the tasks standing there now - a station violet while one is worked on and coral
+    when they only wait; click a task to open it - and the department managers' line: which tasks are stuck on
+    something only you can do and how often they restarted stopped tasks; it refreshes every 5 seconds.
 
 ## Tray app (`App.xaml.cs`)
 
