@@ -52,16 +52,27 @@ public static class AttachedFiles
         files.Count == 0 ? text
             : (text.Length > 0 ? text : "(see the attached files)") + "\n\n" + Header + "\n" + string.Join("\n", files.Select(f => "- " + f)) + "\n]";
 
-    /// <summary>A sent message split back into its text and its files (none when it lists no files).</summary>
+    /// <summary>
+    /// A sent message split back into its text and its files - only when it ends exactly as <see cref="Message"/> writes
+    /// it (the header on its own line, "- path" lines, "]" last); any other message, even one quoting the header, has none.
+    /// </summary>
     public static (string Text, List<string> Files) Split(string message)
     {
         int at = message.LastIndexOf(Header, StringComparison.Ordinal);
-        if (at < 0) return (message, []);
-        var files = message[(at + Header.Length)..].Split('\n')
-            .Select(l => l.Trim()).Where(l => l.StartsWith("- ", StringComparison.Ordinal)).Select(l => l[2..]).ToList();
+        if (at < 0 || (at > 0 && message[at - 1] != '\n')) return (message, []);
+        List<string> lines = message[(at + Header.Length)..].Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+        while (lines.Count > 0 && lines[^1].Trim().Length == 0) lines.RemoveAt(lines.Count - 1);
+        if (lines.Count < 3 || lines[0].Length != 0 || lines[^1] != "]") return (message, []);
+        List<string> list = lines[1..^1];
+        if (list.Any(l => !l.StartsWith("- ", StringComparison.Ordinal) || l.Length < 3)) return (message, []);
         string text = message[..at].Trim();
-        return (text == "(see the attached files)" ? "" : text, files);
+        return (text == "(see the attached files)" ? "" : text, list.Select(l => l[2..]).ToList());
     }
+
+    // a path on a local drive ("C:\..."): only these are looked at on disk - a network path (\\server\share\...) would
+    // make Windows connect to that server, and send it the user's credentials, just to draw a chip
+    private static bool IsLocal(string path) =>
+        path.Length >= 3 && char.IsAsciiLetter(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/');
 
     /// <summary>
     /// A file as a chip: a thumbnail for an image that still exists, else a badge with its type ("DIR" for a folder),
@@ -71,7 +82,8 @@ public static class AttachedFiles
     {
         Brush Res(string key) => (Brush)resources.FindResource(key);
         var row = new StackPanel { Orientation = Orientation.Horizontal };
-        if (IsImage(file) && File.Exists(file))
+        bool local = IsLocal(file);
+        if (local && IsImage(file) && File.Exists(file))
         {
             row.Children.Add(new Border
             {
@@ -81,7 +93,7 @@ public static class AttachedFiles
         }
         else
         {
-            bool folder = Directory.Exists(file);
+            bool folder = local && Directory.Exists(file);
             string kind = folder ? "DIR" : Path.GetExtension(file).TrimStart('.').ToUpperInvariant();
             row.Children.Add(new Border
             {

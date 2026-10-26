@@ -347,7 +347,11 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   for a folder, "FILE"), the name (180 px, trimmed), an ×, the path as tooltip (`AttachedFiles`). Sending works with
   files and no text. The message lists them after the text: "[Attached files - read them with your Read tool (a
   folder: list it):", "- <path>" per line, "]"; the You box shows the text and the files as chips (read back from
-  those lines, live and for a saved session). Picking another session for the pane drops the unsent files. Every opened session keeps its transcript, and a running turn
+  those lines, live and for a saved session - only when the message ends exactly that way: the header on its own line,
+  only "- <path>" lines, "]" last; a message that merely quotes the header shows no chips). Only a local drive path
+  ("C:\...") is looked at on disk for a chip (exists, folder, thumbnail); any other path - a network path
+  `\\server\share\...` would make Windows connect to that server and send it the user's credentials - gets a plain
+  badge. Picking another session for the pane drops the unsent files. Every opened session keeps its transcript, and a running turn
   keeps going while another session is on screen. After a new session's first turn the list refreshes.
 - **Lights**: a dot before the session in the list (9 px) and before the title in its pane (11 px): green `#2EB85C`,
   pulsing (opacity 1 - 0.35, 0.8 s, forever), while a turn runs; red `#E5482E` when its last turn ended with an error
