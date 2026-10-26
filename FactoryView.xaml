@@ -1,0 +1,326 @@
+<UserControl x:Class="DevBreak.FactoryView"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        >
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="330" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- left: a new task, the floor, and the inbox of tasks grouped by what they need -->
+        <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,16,4" Padding="14,14,8,10">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="0,0,6,10">
+                    <TextBlock Text="task in, result out" Style="{StaticResource HandNote}" FontSize="19" />
+                    <TextBlock Text="Factory" Style="{StaticResource Heading}" FontSize="22" Margin="0,2,0,10" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="NewButton" Content="+ New task" Style="{StaticResource PrimaryButton}" Height="38" Click="New_Click"
+                                ToolTip="Give the factory a task - typed, a Jira issue or a spec" />
+                        <Button x:Name="FloorButton" Grid.Column="1" Content="Floor" Style="{StaticResource SecondaryButton}" Height="38"
+                                Padding="14,0" Margin="8,0,0,0" Click="Floor_Click"
+                                ToolTip="The whole factory at once: every department's line and the tasks on it now" />
+                    </Grid>
+                </StackPanel>
+                <DockPanel DockPanel.Dock="Bottom" Margin="2,8,6,0">
+                    <Button x:Name="CleanAllButton" DockPanel.Dock="Right" Content="Clean up all" Style="{StaticResource SecondaryButton}"
+                            Height="30" Padding="10,0" Click="CleanAll_Click"
+                            ToolTip="Delete the worktrees, evidence and session files of every task that is not working - the records stay" />
+                    <TextBlock x:Name="RunsSummary" Style="{StaticResource Caption}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                </DockPanel>
+                <ListBox x:Name="RunList" BorderThickness="0" Background="Transparent" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         SelectionChanged="RunList_SelectionChanged" AutomationProperties.Name="Tasks" />
+            </DockPanel>
+        </Border>
+
+        <!-- right: the New task form, the floor, or the selected task -->
+        <ContentControl Grid.Column="1" Style="{StaticResource ShadowCard}" Padding="20,16,16,14">
+            <Grid>
+                <!-- the New task form, at full width -->
+                <ScrollViewer x:Name="FormArea" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                    <StackPanel Margin="0,0,8,8" MaxWidth="820" HorizontalAlignment="Left">
+                        <TextBlock Text="a new task for the factory" Style="{StaticResource HandNote}" FontSize="19" />
+                        <TextBlock Text="New task" Style="{StaticResource Heading}" FontSize="22" Margin="0,2,0,14" />
+
+                        <TextBlock Text="Department" Style="{StaticResource Caption}" Margin="2,0,0,4" />
+                        <WrapPanel>
+                            <RadioButton x:Name="AutoDept" Content="Auto" GroupName="Department" Style="{StaticResource PillRadio}"
+                                         IsChecked="True" Checked="Department_Checked" Margin="0,0,6,6" />
+                            <RadioButton x:Name="DevelopmentDept" Content="Development" GroupName="Department" Style="{StaticResource PillRadio}"
+                                         Checked="Department_Checked" Margin="0,0,6,6" />
+                            <RadioButton x:Name="TroubleshootingDept" Content="Troubleshooting" GroupName="Department" Style="{StaticResource PillRadio}"
+                                         Checked="Department_Checked" Margin="0,0,6,6" />
+                            <RadioButton x:Name="ResearchDept" Content="Research" GroupName="Department" Style="{StaticResource PillRadio}"
+                                         Checked="Department_Checked" Margin="0,0,6,6" />
+                            <RadioButton x:Name="ManagementDept" Content="Management" GroupName="Department" Style="{StaticResource PillRadio}"
+                                         Checked="Department_Checked" Margin="0,0,6,6" />
+                        </WrapPanel>
+                        <TextBlock x:Name="DepartmentHint" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="2,0,0,14" />
+
+                        <TextBlock Text="Harness - how much of your Claude setup its steps load" Style="{StaticResource Caption}" Margin="2,0,0,4" />
+                        <WrapPanel>
+                            <RadioButton x:Name="AutoLane" Content="Auto" GroupName="Lane" Style="{StaticResource PillRadio}" IsChecked="True"
+                                         Checked="Lane_Checked" Margin="0,0,6,6" />
+                            <RadioButton x:Name="FastLane" Content="Fast lane" GroupName="Lane" Style="{StaticResource PillRadio}"
+                                         Checked="Lane_Checked" Margin="0,0,6,6" />
+                            <RadioButton x:Name="CuratedLane" Content="Curated" GroupName="Lane" Style="{StaticResource PillRadio}"
+                                         Checked="Lane_Checked" Margin="0,0,6,6" />
+                            <RadioButton x:Name="FullLane" Content="Full" GroupName="Lane" Style="{StaticResource PillRadio}"
+                                         Checked="Lane_Checked" Margin="0,0,6,6" />
+                        </WrapPanel>
+                        <TextBlock x:Name="LaneHint" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="2,0,0,14" />
+
+                        <TextBlock Text="The task comes from" Style="{StaticResource Caption}" Margin="2,0,0,4" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <RadioButton x:Name="TypedSource" Content="Typed" GroupName="Source" Style="{StaticResource PillRadio}"
+                                         IsChecked="True" Checked="Source_Checked" />
+                            <RadioButton x:Name="JiraSource" Content="Jira" GroupName="Source" Style="{StaticResource PillRadio}"
+                                         Margin="6,0,0,0" Checked="Source_Checked" />
+                            <RadioButton x:Name="SpecSource" Content="Spec doc" GroupName="Source" Style="{StaticResource PillRadio}"
+                                         Margin="6,0,0,0" Checked="Source_Checked" />
+                        </StackPanel>
+                        <DockPanel Margin="2,0,0,4">
+                            <Button x:Name="BrowseSpecButton" DockPanel.Dock="Right" Content="Browse..." Style="{StaticResource SecondaryButton}"
+                                    Height="30" Padding="10,0" Visibility="Collapsed" Click="BrowseSpec_Click" />
+                            <TextBlock x:Name="TaskLabel" Text="What to build or fix" Style="{StaticResource Caption}" VerticalAlignment="Bottom" />
+                        </DockPanel>
+                        <TextBox x:Name="TaskBox" Style="{StaticResource NotebookBox}" Height="140" TextWrapping="Wrap" AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top" AutomationProperties.Name="Task" />
+
+                        <TextBlock Text="Folder - the repo, or the folder your repos are in (Claude finds the one for the task)" Style="{StaticResource Caption}"
+                                   Margin="2,14,0,4" TextWrapping="Wrap" />
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Content="Browse..." Style="{StaticResource SecondaryButton}" Height="40"
+                                    Padding="10,0" Margin="6,0,0,0" Click="BrowseRepo_Click" />
+                            <ComboBox x:Name="RepoBox" IsEditable="True" Height="40" VerticalContentAlignment="Center" FontSize="13"
+                                      AutomationProperties.Name="Folder" SelectionChanged="RepoBox_SelectionChanged"
+                                      LostKeyboardFocus="RepoBox_LostFocus" />
+                        </DockPanel>
+
+                        <CheckBox x:Name="AutonomousBox" Margin="2,14,0,0" IsChecked="True" AutomationProperties.Name="Autonomous"
+                                  ToolTip="No human in the loop: the plan's questions take the suggested answers, the task fixes what it needs outside the repo (backed up and listed), learned rules apply at once, and it stops only for what no tool can do - a login">
+                            <TextBlock TextWrapping="Wrap" FontSize="13"><Run FontWeight="SemiBold" Text="Autonomous" /><Run Text=" - no stops; it decides, fixes and learns on its own" /></TextBlock>
+                        </CheckBox>
+                        <CheckBox x:Name="ReportBox" Margin="2,6,0,0" AutomationProperties.Name="Designed report"
+                                  ToolTip="When the task is done, Claude turns its result into one readable HTML page - summary first, sections, tables, diagrams, decisions, what is not verified, the evidence">
+                            <TextBlock TextWrapping="Wrap" FontSize="13"><Run FontWeight="SemiBold" Text="Designed report" /><Run Text=" - a readable page of the result when it is done" /></TextBlock>
+                        </CheckBox>
+
+                        <Expander x:Name="MoreOptions" Header="More options - base branch, verify command, curated plugins" Margin="0,12,0,0" FontSize="12.5">
+                            <StackPanel>
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="200" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                    <TextBlock Text="Base branch" Style="{StaticResource Caption}" Margin="2,0,0,4"
+                                               ToolTip="Empty: the branch the repo has checked out" />
+                                    <TextBox x:Name="BaseBox" Style="{StaticResource NotebookBox}" FontSize="13" AutomationProperties.Name="Base branch" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="Verify command (empty: Claude proposes one)" Style="{StaticResource Caption}" Margin="2,0,0,4" />
+                                    <TextBox x:Name="VerifyBox" Style="{StaticResource NotebookBox}" FontFamily="{StaticResource MonoFont}"
+                                             FontSize="12.5" AutomationProperties.Name="Verify command" />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock Text="Curated keeps these plugins of yours (comma-separated; every other plugin is off for the task)" Style="{StaticResource Caption}"
+                                       Margin="2,10,0,4" TextWrapping="Wrap" />
+                            <TextBox x:Name="CuratedBox" Style="{StaticResource NotebookBox}" FontSize="12.5" AutomationProperties.Name="Curated plugins" />
+                            </StackPanel>
+                        </Expander>
+                        <TextBlock x:Name="FormError" Foreground="{StaticResource CoralInkBrush}" TextWrapping="Wrap" Margin="2,10,0,0"
+                                   Visibility="Collapsed" />
+                        <Button x:Name="StartButton" Content="Start task" Style="{StaticResource PrimaryButton}" Margin="0,16,0,0" Width="220"
+                                HorizontalAlignment="Left" Click="Start_Click"
+                                ToolTip="The task works in your checkout on a new branch, and moves along its department's line" />
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- the factory floor: every department's line, the tasks on it now, and how the factory works -->
+                <ScrollViewer x:Name="FloorArea" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                    <StackPanel Margin="0,0,8,0">
+                        <TextBlock Text="the factory floor" Style="{StaticResource HandNote}" FontSize="19" />
+                        <TextBlock Text="Production lines" Style="{StaticResource Heading}" FontSize="22" Margin="0,2,0,4" />
+                        <TextBlock x:Name="FloorSummary" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,10" />
+                        <Expander x:Name="FloorHow" Header="How the factory works" IsExpanded="False" Margin="0,0,0,14" FontWeight="SemiBold">
+                            <TextBlock x:Name="FloorHowText" TextWrapping="Wrap" FontSize="13" FontWeight="Normal" Margin="0,6,0,0" LineHeight="19" />
+                        </Expander>
+                        <StackPanel x:Name="FloorLines" />
+                        <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1.5,0,0" Padding="0,10,0,0">
+                            <TextBlock x:Name="FloorManager" TextWrapping="Wrap" FontSize="13" />
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- the selected task -->
+                <Grid x:Name="RunPage">
+                    <ScrollViewer x:Name="EmptyText" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="4" MaxWidth="900" HorizontalAlignment="Left">
+                            <TextBlock Text="Pick a task on the left, or start a new one." Style="{StaticResource Heading}" FontSize="18" Margin="0,0,0,10" />
+                            <TextBlock x:Name="EmptyHowText" TextWrapping="Wrap" FontSize="13" LineHeight="19" Foreground="{StaticResource InkSoftBrush}" />
+                        </StackPanel>
+                    </ScrollViewer>
+                    <DockPanel x:Name="RunArea" Visibility="Collapsed">
+                        <!-- the header: what the task is, where it works, and everything else behind ⋯ -->
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                            <Button x:Name="MoreButton" DockPanel.Dock="Right" Content="⋯" Style="{StaticResource SecondaryButton}" Height="36" Width="44"
+                                    FontSize="18" Padding="0,0,0,4" VerticalAlignment="Top" Click="More_Click" AutomationProperties.Name="More"
+                                    ToolTip="Open its folder or session, export the trace, clean up or delete the task">
+                                <Button.ContextMenu>
+                                    <ContextMenu x:Name="MoreMenu">
+                                        <MenuItem x:Name="SessionItem" Header="Open in Sessions" Click="Session_Click" ToolTip="Continue the task's Claude Code session yourself" />
+                                        <MenuItem x:Name="FolderItem" Header="Open folder" Click="Folder_Click" />
+                                        <MenuItem x:Name="ProofItem" Header="Open the evidence folder" Click="Proof_Click" />
+                                        <MenuItem x:Name="ExportItem" Header="Export the trace" Click="Export_Click" ToolTip="Saves the whole task as .json and .md in the traces folder next to Dev break" />
+                                        <Separator />
+                                        <MenuItem x:Name="CleanItem" Header="Clean up…" Click="Clean_Click" ToolTip="Delete the task's worktree, evidence and session files - the record stays" />
+                                        <MenuItem x:Name="DeleteItem" Header="Delete…" Click="Delete_Click" ToolTip="Delete the task for good - first Claude checks what is worth keeping (repo memory, global memory, Insights)" />
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
+                            <StackPanel>
+                                <DockPanel>
+                                    <Ellipse x:Name="Light" DockPanel.Dock="Left" Width="11" Height="11" Margin="0,0,9,0" VerticalAlignment="Center" />
+                                    <TextBlock x:Name="RunTitle" Style="{StaticResource Heading}" FontSize="20" TextWrapping="Wrap" />
+                                </DockPanel>
+                                <TextBlock x:Name="RunMeta" Style="{StaticResource Eyebrow}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                                <!-- a passing notice: what a clean up freed, where an export went -->
+                                <TextBlock x:Name="RunNote" FontSize="12.5" Foreground="{StaticResource VioletBrush}" Margin="0,4,0,0" TextWrapping="Wrap"
+                                           Visibility="Collapsed"><Run x:Name="RunNoteText" /><Hyperlink x:Name="ExportLink" Click="ExportLink_Click"><Run x:Name="ExportRun" /></Hyperlink></TextBlock>
+                            </StackPanel>
+                        </DockPanel>
+                        <!-- what a clean up would delete, before it does -->
+                        <Border x:Name="ConfirmBar" DockPanel.Dock="Top" Visibility="Collapsed" BorderBrush="{StaticResource CoralInkBrush}"
+                                BorderThickness="1.5" CornerRadius="12" Padding="12,8" Margin="0,0,0,10">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button x:Name="ConfirmButton" Content="Clean up" Style="{StaticResource PrimaryButton}" Height="34" Padding="14,0"
+                                            Margin="8,0,8,0" Click="Confirm_Click" />
+                                    <Button Content="Cancel" Style="{StaticResource SecondaryButton}" Height="34" Padding="12,0" Click="CancelConfirm_Click" />
+                                </StackPanel>
+                                <TextBlock x:Name="ConfirmText" TextWrapping="Wrap" FontSize="13" VerticalAlignment="Center" />
+                            </DockPanel>
+                        </Border>
+                        <!-- deleting a task: what the diagnosis suggests keeping (ticked to keep), then everything goes -->
+                        <Border x:Name="DeletePanel" DockPanel.Dock="Top" Visibility="Collapsed" BorderBrush="{StaticResource CoralInkBrush}"
+                                BorderThickness="1.5" CornerRadius="12" Padding="12,10" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock x:Name="DeleteText" TextWrapping="Wrap" FontSize="13" />
+                                <StackPanel x:Name="KeepList" Margin="0,8,0,0" />
+                                <CheckBox x:Name="RemoteBox" Margin="0,8,0,0" AutomationProperties.Name="Also remote">
+                                    <TextBlock x:Name="RemoteText" TextWrapping="Wrap" FontSize="13" />
+                                </CheckBox>
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="DeleteConfirmButton" Content="Keep the ticked and delete the task" Style="{StaticResource PrimaryButton}"
+                                            Height="34" Padding="14,0" Margin="0,0,8,0" Click="DeleteConfirm_Click" />
+                                    <Button Content="Cancel" Style="{StaticResource SecondaryButton}" Height="34" Padding="12,0" Click="DeleteCancel_Click" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        <!-- the task's production line: the one place its progress is shown -->
+                        <ContentControl x:Name="LineHost" DockPanel.Dock="Top" Margin="0,0,0,12" AutomationProperties.Name="Production line" />
+                        <!-- the next step: one card for the task's state, with what you can do now -->
+                        <Border x:Name="NextCard" DockPanel.Dock="Top" BorderThickness="2" CornerRadius="12" Padding="14,10,14,12" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock x:Name="NextTitle" FontWeight="Bold" FontSize="14" TextWrapping="Wrap" />
+                                <TextBox x:Name="NextText" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0"
+                                         FontSize="13" MaxHeight="170" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0" AutomationProperties.Name="What it needs" />
+                                <!-- what the department manager proposes to change in the factory itself, for you to approve -->
+                                <Border x:Name="FixesBox" Visibility="Collapsed" BorderBrush="{StaticResource VioletBrush}" BorderThickness="1.5"
+                                        CornerRadius="10" Padding="10,6" Margin="0,8,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="The manager proposes these changes to the factory - for you to approve" FontWeight="SemiBold" FontSize="12.5" />
+                                        <TextBox x:Name="FixesText" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0"
+                                                 FontSize="12.5" MaxHeight="140" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0" AutomationProperties.Name="Proposed changes" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                            <Button x:Name="CopyFixesButton" Content="Copy" Style="{StaticResource SecondaryButton}" Height="30" Padding="12,0" Margin="0,0,8,0"
+                                                    Click="CopyFixes_Click" ToolTip="Copy them, to ask for them in a Claude session or a Development task" />
+                                            <Button x:Name="FixesSeenButton" Content="Got it" Style="{StaticResource SecondaryButton}" Height="30" Padding="12,0"
+                                                    Click="FixesSeen_Click" ToolTip="Put them away - they stay in the task's log" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                                <!-- what the task hands back (a curl, an answer, a link), ready to use -->
+                                <Border x:Name="ResultBox" Visibility="Collapsed" Background="{StaticResource MarkerBrush}" BorderBrush="{StaticResource InkBrush}"
+                                        BorderThickness="1.5" CornerRadius="10" Padding="10,6" Margin="0,8,0,0">
+                                    <DockPanel>
+                                        <Button x:Name="CopyResultButton" DockPanel.Dock="Right" Content="Copy" Style="{StaticResource SecondaryButton}"
+                                                Height="30" Padding="12,0" Margin="8,0,0,0" VerticalAlignment="Top" Click="CopyResult_Click" />
+                                        <TextBox x:Name="ResultText" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent"
+                                                 FontFamily="{StaticResource MonoFont}" FontSize="12.5" MaxHeight="150" VerticalScrollBarVisibility="Auto"
+                                                 AutomationProperties.Name="Result" />
+                                    </DockPanel>
+                                </Border>
+                                <!-- the decisions it took on its own, to untick and change -->
+                                <TextBlock x:Name="ReviewDecisionsLabel" Text="Decisions it took on its own - untick one to change it, and say how:"
+                                           Style="{StaticResource Caption}" Margin="0,10,0,2" Visibility="Collapsed" />
+                                <StackPanel x:Name="ReviewDecisions" />
+                                <!-- your words to the task: a reply when it waits for you, the changes for its next revision when it is done -->
+                                <StackPanel x:Name="ReplyPanel" Margin="0,10,0,0" Visibility="Collapsed">
+                                    <WrapPanel x:Name="KindPanel" Margin="0,0,0,6">
+                                        <TextBlock Text="What kind of change:" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="2,0,8,0" />
+                                        <RadioButton x:Name="KindWrong" Content="Wrong behaviour" GroupName="Kind" Style="{StaticResource PillRadio}" />
+                                        <RadioButton x:Name="KindMissing" Content="Missing" GroupName="Kind" Style="{StaticResource PillRadio}" Margin="6,0,0,0" />
+                                        <RadioButton x:Name="KindDesign" Content="Change design" GroupName="Kind" Style="{StaticResource PillRadio}" Margin="6,0,0,0" />
+                                        <RadioButton x:Name="KindBug" Content="Bug" GroupName="Kind" Style="{StaticResource PillRadio}" Margin="6,0,0,0" />
+                                    </WrapPanel>
+                                    <DockPanel>
+                                        <Button x:Name="FeedbackButton" DockPanel.Dock="Right" Content="Send" Style="{StaticResource PrimaryButton}"
+                                                Height="40" Padding="16,0" Margin="8,0,0,0" VerticalAlignment="Top" Click="Feedback_Click" />
+                                        <TextBox x:Name="FeedbackBox" Style="{StaticResource NotebookBox}" FontSize="13" MinHeight="40" MaxHeight="110" Padding="10,7"
+                                                 TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                                                 AutomationProperties.Name="Your words to the task" />
+                                    </DockPanel>
+                                </StackPanel>
+                                <WrapPanel x:Name="NextButtons" Margin="0,10,0,0">
+                                    <Button x:Name="StopButton" Content="Stop" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="Stop_Click" />
+                                    <Button x:Name="ContinueButton" Content="Continue" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" Click="Continue_Click"
+                                            ToolTip="Pick up where the task stopped and go on along the line" />
+                                    <Button x:Name="AcceptButton" Content="Accept" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" Click="Accept_Click"
+                                            ToolTip="The work is right as it is - the factory learns from it" />
+                                    <Button x:Name="ChangesButton" Content="Request changes" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="Changes_Click"
+                                            ToolTip="Back to the factory: the next revision, with what you want changed" />
+                                    <Button x:Name="CancelChangeButton" Content="Cancel" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="CancelChange_Click"
+                                            ToolTip="Leave it as it is - no change is sent" />
+                                    <Button x:Name="OpenPrButton" Content="Open PR" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" Click="OpenPr_Click" />
+                                    <Button x:Name="ReportButton" Content="Open report" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" Click="Report_Click"
+                                            ToolTip="The designed report, in your browser" />
+                                    <Button x:Name="FixItButton" Content="Fix it in Development" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="FixIt_Click"
+                                            ToolTip="Start a Development task from this diagnosis: the root cause and the fix it named" />
+                                    <Button x:Name="WorktreeButton" Content="Use a separate worktree" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
+                                            Click="Worktree_Click" ToolTip="Leave your checkout as it is: the task goes on in its own worktree beside the repo" />
+                                    <Button x:Name="AnywayButton" Content="Draft PR anyway" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
+                                            Click="Anyway_Click" ToolTip="Open the draft PR even though a check failed - its description says what failed" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                        <!-- what happened: the activity, the evidence, the trace (each step with its tools), what it learned -->
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                            <RadioButton x:Name="LogTab" Content="Activity" GroupName="RunTab" Style="{StaticResource PillRadio}" IsChecked="True" Checked="RunTab_Checked" />
+                            <RadioButton x:Name="EvidenceTab" Content="Evidence" GroupName="RunTab" Style="{StaticResource PillRadio}" Margin="6,0,0,0" Checked="RunTab_Checked" />
+                            <RadioButton x:Name="TraceTab" Content="Trace" GroupName="RunTab" Style="{StaticResource PillRadio}" Margin="6,0,0,0" Checked="RunTab_Checked" />
+                            <RadioButton x:Name="LessonsTab" Content="Learned" GroupName="RunTab" Style="{StaticResource PillRadio}" Margin="6,0,0,0" Checked="RunTab_Checked" />
+                        </StackPanel>
+                        <Grid>
+                            <RichTextBox x:Name="LogBox" Style="{StaticResource ReadingBox}" FontSize="13.5" AutomationProperties.Name="Activity" />
+                            <ScrollViewer x:Name="TraceArea" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                                <StackPanel x:Name="TraceList" Margin="0,0,8,0" />
+                            </ScrollViewer>
+                            <ScrollViewer x:Name="EvidenceArea" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                                <StackPanel x:Name="EvidenceList" Margin="0,0,8,0" />
+                            </ScrollViewer>
+                            <ScrollViewer x:Name="LessonsArea" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                                <StackPanel x:Name="LessonList" Margin="0,0,8,0" />
+                            </ScrollViewer>
+                        </Grid>
+                    </DockPanel>
+                </Grid>
+            </Grid>
+        </ContentControl>
+    </Grid>
+</UserControl>

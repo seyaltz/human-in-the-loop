@@ -21,9 +21,42 @@ public partial class App : Application
     private DateTime? _lastShownHour;
     private DateTime? _snoozedUntil;
 
+    // one Dev break per app folder: two copies would each write factory.json over the other's (a test lost a finished
+    // task that way). A second copy asks the first to show its window, and exits.
+    private System.Threading.Mutex? _single;
+    private System.Threading.EventWaitHandle? _showSignal;
+
+    private bool FirstCopy()
+    {
+        string folder = AppContext.BaseDirectory.TrimEnd('\\').ToLowerInvariant();
+        string key = "DevBreak-" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(folder)))[..16];
+        _single = new System.Threading.Mutex(true, key + "-one", out bool first);
+        if (!first)
+        {
+            try
+            {
+                using var show = System.Threading.EventWaitHandle.OpenExisting(key + "-show");
+                show.Set();
+            }
+            catch (System.Threading.WaitHandleCannotBeOpenedException)
+            {
+                // the first copy is still starting: it shows itself when it is ready
+            }
+            return false;
+        }
+        _showSignal = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, key + "-show");
+        System.Threading.ThreadPool.RegisterWaitForSingleObject(_showSignal, (_, _) => Dispatcher.BeginInvoke(Ask), null, -1, executeOnlyOnce: false);
+        return true;
+    }
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (!FirstCopy())
+        {
+            Shutdown(0);
+            return;
+        }
         if (!Topics.IsSetUp)
         {
             // first run: Claude Code must work, then the user picks their topics
@@ -40,6 +73,7 @@ public partial class App : Application
         {
             _pool.FillAll(Level.At(DateTime.Now.TimeOfDay));
             LearnPath.PrepareAll();
+            Tldr.PrepareAll();
         };
 
         if (e.Args.Length > 0 && e.Args[0] == "--now")
@@ -70,6 +104,7 @@ public partial class App : Application
 
         _pool.FillAll(Level.At(DateTime.Now.TimeOfDay));
         LearnPath.PrepareAll();
+        Tldr.PrepareAll();
         _timer.Tick += (_, _) => Tick();
         _timer.Start();
     }
@@ -81,6 +116,27 @@ public partial class App : Application
     }
 
     public void Snooze() => _snoozedUntil = DateTime.Now.AddMinutes(SnoozeMinutes);
+
+    /// <summary>
+    /// A Windows notification (the tray balloon). Without the tray icon (started with --now) a short-lived one shows it.
+    /// </summary>
+    public static void Alert(string title, string text)
+    {
+        if (Current is App { _tray: { } tray })
+        {
+            tray.ShowBalloonTip(8000, title, text, Forms.ToolTipIcon.Warning);
+            return;
+        }
+        var once = new Forms.NotifyIcon { Icon = TrayIcon(), Text = "Dev break", Visible = true };
+        once.ShowBalloonTip(8000, title, text, Forms.ToolTipIcon.Warning);
+        var hide = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        hide.Tick += (_, _) =>
+        {
+            hide.Stop();
+            once.Dispose();
+        };
+        hide.Start();
+    }
 
     private void Tick()
     {
@@ -107,6 +163,8 @@ public partial class App : Application
     {
         if (_open != null)
         {
+            // back on top for the question (opening a report in the browser lets it drop behind)
+            _open.Topmost = true;
             _open.Activate();
             return;
         }

@@ -1,0 +1,42 @@
+<UserControl x:Class="DevBreak.SessionsView"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:DevBreak"
+        >
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="300" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- the sessions: a new one in a folder, or one to continue -->
+        <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,16,4" Padding="14,14,8,10">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="2,0,6,10">
+                    <TextBlock Text="your Claude Code, here" Style="{StaticResource HandNote}" FontSize="19" />
+                    <DockPanel Margin="0,2,0,10">
+                        <Button x:Name="AddPaneButton" DockPanel.Dock="Right" Content="+ Pane" Style="{StaticResource SecondaryButton}"
+                                Padding="11,0" ToolTip="Another session on screen: side by side, then a grid (4 as 2×2, up to 9)"
+                                Click="AddPane_Click" />
+                        <ToggleButton x:Name="GroupButton" DockPanel.Dock="Right" Content="By folder" Style="{StaticResource PillToggle}"
+                                      Margin="0,0,6,0" Padding="11,0" ToolTip="Group the sessions by their folder"
+                                      Checked="Group_Changed" Unchecked="Group_Changed" />
+                        <TextBlock Text="Sessions" Style="{StaticResource Heading}" FontSize="22" />
+                    </DockPanel>
+                    <DockPanel>
+                        <Button x:Name="RefreshListButton" DockPanel.Dock="Right" Content="Refresh" Style="{StaticResource SecondaryButton}"
+                                Margin="8,0,0,0" Click="RefreshList_Click" />
+                        <Button x:Name="NewButton" Content="New session..." Style="{StaticResource PrimaryButton}"
+                                Padding="14,0" Click="New_Click" ToolTip="Pick a folder and start a Claude Code session in it" />
+                    </DockPanel>
+                </StackPanel>
+                <ListBox x:Name="SessionList" BorderThickness="0" Background="Transparent"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="SessionList_SelectionChanged"
+                         AutomationProperties.Name="Sessions" />
+            </DockPanel>
+        </Border>
+
+        <!-- one pane, or several: side by side up to 3, then a grid (SessionsView.Layout) -->
+        <Grid x:Name="Panes" Grid.Column="1" />
+    </Grid>
+</UserControl>

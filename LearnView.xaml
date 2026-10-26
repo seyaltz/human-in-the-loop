@@ -46,6 +46,14 @@
                     <DockPanel DockPanel.Dock="Bottom" Margin="0,14,0,0" LastChildFill="False">
                         <Button x:Name="PreviousButton" DockPanel.Dock="Left" Content="Previous" Style="{StaticResource SecondaryButton}"
                                 Click="Previous_Click" />
+                        <Button x:Name="DiscussButton" DockPanel.Dock="Left" Style="{StaticResource SecondaryButton}" Margin="10,0,0,0"
+                                AutomationProperties.Name="Discuss with Claude" IsEnabled="False" Click="Discuss_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Data="{StaticResource ChatIcon}" Style="{StaticResource IconPath}" StrokeThickness="1.8"
+                                      Margin="0,0,8,0" />
+                                <TextBlock Text="Discuss with Claude" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
                         <Button x:Name="NextButton" DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" AutomationProperties.Name="Next lesson"
                                 Click="Next_Click">
                             <StackPanel Orientation="Horizontal">

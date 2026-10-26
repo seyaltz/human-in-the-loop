@@ -12,6 +12,9 @@ public partial class QuestionWindow : Window
 {
     private const double CollapsedHeight = 680;
     private const double WideWidth = 1180;
+
+    // the window's starting width (QuestionWindow.xaml), which the quiz is laid out for
+    private const double QuizWidth = 900;
     private const double WideHeight = 820;
 
     /// <summary>What one topic holds: its question (null while generating), error, typed answer and whether the answer is shown.</summary>
@@ -28,7 +31,7 @@ public partial class QuestionWindow : Window
         public bool IsScoring { get; set; }
         public Score? Score { get; set; }
         public string? ScoreError { get; set; }
-        public ChatWindow? Chat { get; set; }
+        public ChatPanel? Chat { get; set; }
     }
 
     private readonly Dictionary<Category, TabState> _tabs = [];
@@ -42,6 +45,12 @@ public partial class QuestionWindow : Window
         _pool = pool;
         InitializeComponent();
         AddTopicChips();
+        // a factory run's session continues in Sessions
+        FactoryView.OpenSessionRequested += info =>
+        {
+            SessionsMode.IsChecked = true;
+            SessionsView.Open(info);
+        };
 
         Game.Awarded += OnAwarded;
         DevBreak.Topics.Changed += OnTopicsChanged;
@@ -51,6 +60,14 @@ public partial class QuestionWindow : Window
             DevBreak.Topics.Changed -= OnTopicsChanged;
         };
         UpdateHud();
+        TldrView.ChatChanged += panel =>
+        {
+            if (TldrMode.IsChecked == true) ShowChat(panel);
+        };
+        LearnView.ChatChanged += panel =>
+        {
+            if (LearnMode.IsChecked == true) ShowChat(panel);
+        };
 
         Loaded += (_, _) =>
         {
@@ -80,6 +97,7 @@ public partial class QuestionWindow : Window
         int index = Category.All.ToList().FindIndex(c => c == selected);
         Topics.SelectedIndex = Math.Max(0, index);
         LearnView.Reload();
+        TldrView.Reload();
     }
 
     private void Topics_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -149,6 +167,19 @@ public partial class QuestionWindow : Window
         UpdatePlaceholder();
         ShowScore(state);
         SetAnswerVisible(state.IsAnswerShown);
+        if (QuizMode.IsChecked == true) ShowChat(state.Chat);
+    }
+
+    /// <summary>Shows a side panel (a discussion, or saving to Claude) on the right of the window, growing it to fit; null hides it.</summary>
+    private void ShowChat(UserControl? panel)
+    {
+        ChatHost.Content = panel;
+        ChatHost.Visibility = panel != null ? Visibility.Visible : Visibility.Collapsed;
+        if (panel == null) return;
+        Rect area = SystemParameters.WorkArea;
+        double content = QuizMode.IsChecked == true ? QuizWidth : WideWidth;
+        Width = Math.Max(Width, Math.Min(content + ChatHost.Width + ChatHost.Margin.Left, area.Width - 32));
+        PlaceBottomRight(Height);
     }
 
     private void ShowScore(TabState state)
@@ -240,13 +271,16 @@ public partial class QuestionWindow : Window
         TabState state = _tabs[Current];
         if (state.Chat == null)
         {
-            state.Chat = new ChatWindow(state.Topic, state.Question!, state.Mine);
-            state.Chat.Closed += (_, _) => state.Chat = null;
-            state.Chat.Left = Math.Max(SystemParameters.WorkArea.Left + 16, Left - state.Chat.Width - 12);
-            state.Chat.Top = Top;
-            state.Chat.Show();
+            ChatPanel chat = new(state.Topic, state.Question!, () => state.Mine, () => state.Score);
+            chat.CloseRequested += () =>
+            {
+                state.Chat = null;
+                if (ChatHost.Content == chat) ShowChat(null);
+            };
+            state.Chat = chat;
         }
-        state.Chat.Activate();
+        ShowChat(state.Chat);
+        state.Chat.FocusInput();
     }
 
     /// <summary>Switches to the learn path.</summary>
@@ -254,25 +288,44 @@ public partial class QuestionWindow : Window
 
     private void Mode_Checked(object sender, RoutedEventArgs e)
     {
-        if (LearnView == null || StatsView == null || QuizView == null) return;
+        if (LearnView == null || StatsView == null || TldrView == null || SessionsView == null || FactoryView == null || InsightsView == null || QuizView == null) return;
         bool learn = LearnMode.IsChecked == true;
         bool stats = StatsMode.IsChecked == true;
-        QuizView.Visibility = learn || stats ? Visibility.Collapsed : Visibility.Visible;
+        bool tldr = TldrMode.IsChecked == true;
+        bool sessions = SessionsMode.IsChecked == true;
+        bool factory = FactoryMode.IsChecked == true;
+        bool insights = InsightsMode.IsChecked == true;
+        QuizView.Visibility = learn || stats || tldr || sessions || factory || insights ? Visibility.Collapsed : Visibility.Visible;
         LearnView.Visibility = learn ? Visibility.Visible : Visibility.Collapsed;
         StatsView.Visibility = stats ? Visibility.Visible : Visibility.Collapsed;
-        if (learn || stats)
+        TldrView.Visibility = tldr ? Visibility.Visible : Visibility.Collapsed;
+        SessionsView.Visibility = sessions ? Visibility.Visible : Visibility.Collapsed;
+        FactoryView.Visibility = factory ? Visibility.Visible : Visibility.Collapsed;
+        InsightsView.Visibility = insights ? Visibility.Visible : Visibility.Collapsed;
+        if (learn || stats || tldr || sessions || factory || insights)
         {
-            Title = learn ? "Dev break - learn path" : "Dev break - stats";
-            // courses and stats need room; grow once, never shrink
+            Title = learn ? "Dev break - learn path" : stats ? "Dev break - stats" : tldr ? "Dev break - TL;DR"
+                : factory ? "Dev break - factory" : insights ? "Dev break - insights" : "Dev break - sessions";
+            // courses, stats, the TL;DR and sessions need room; grow once, never shrink
             Rect area = SystemParameters.WorkArea;
             Width = Math.Max(Width, Math.Min(WideWidth, area.Width - 32));
             PlaceBottomRight(Math.Min(WideHeight, area.Height - 32));
             if (learn) LearnView.Start();
-            else StatsView.Refresh();
+            else if (stats) StatsView.Refresh();
+            else if (tldr) TldrView.Start();
+            else if (factory) FactoryView.Start();
+            else if (insights) InsightsView.Refresh();
+            else SessionsView.Start();
+            // each mode keeps its own discussion: the lesson's and the TL;DR's come back; stats and sessions have none
+            ShowChat(tldr ? TldrView.CurrentChat : learn ? LearnView.CurrentChat : null);
         }
         else if (Topics.SelectedItem != null && _tabs.ContainsKey(Current))
         {
             ShowTab();
+        }
+        else
+        {
+            ShowChat(null);
         }
     }
 
@@ -313,6 +366,20 @@ public partial class QuestionWindow : Window
             knowledge.Items.Add(item);
         }
         menu.Items.Add(knowledge);
+
+        // discussions run with full access to this machine; this picks whose Claude setup they load
+        var setup = new MenuItem { Header = "Claude in discussions" };
+        foreach ((ClaudeSetup choice, string label) in new[]
+                 {
+                     (ClaudeSetup.Clean, "Clean - my profile only"),
+                     (ClaudeSetup.Mine, "My Claude setup - CLAUDE.md, memory, skills, hooks (slower)"),
+                 })
+        {
+            var item = new MenuItem { Header = label, IsCheckable = true, IsChecked = QuestionGenerator.DiscussSetup == choice };
+            item.Click += (_, _) => QuestionGenerator.SetDiscussSetup(choice);
+            setup.Items.Add(item);
+        }
+        menu.Items.Add(setup);
 
         var topics = new MenuItem { Header = "Topics..." };
         topics.Click += (_, _) => new TopicsWindow(isFirstRun: false) { Owner = this }.ShowDialog();

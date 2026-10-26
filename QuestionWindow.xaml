@@ -14,9 +14,14 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
+        <!-- the discussion opens on the right of the quiz or the TL;DR -->
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
 
         <!-- top bar: logo and modes on the left, the game on the right -->
-        <DockPanel Grid.Row="0" Margin="0,0,0,16">
+        <DockPanel Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,16">
             <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                 <Image Source="{StaticResource LogoImage}" Width="34" Height="34" Margin="0,0,14,0" />
                 <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource InkBrush}" BorderThickness="1.5"
@@ -27,6 +32,14 @@
                         <RadioButton x:Name="LearnMode" Content="Learn" GroupName="Mode" Margin="4,0,0,0"
                                      Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
                         <RadioButton x:Name="StatsMode" Content="Stats" GroupName="Mode" Margin="4,0,0,0"
+                                     Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
+                        <RadioButton x:Name="TldrMode" Content="TL;DR" GroupName="Mode" Margin="4,0,0,0"
+                                     Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
+                        <RadioButton x:Name="SessionsMode" Content="Sessions" GroupName="Mode" Margin="4,0,0,0"
+                                     Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
+                        <RadioButton x:Name="FactoryMode" Content="Factory" GroupName="Mode" Margin="4,0,0,0"
+                                     Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
+                        <RadioButton x:Name="InsightsMode" Content="Insights" GroupName="Mode" Margin="4,0,0,0"
                                      Style="{StaticResource ModeTab}" Checked="Mode_Checked" />
                     </StackPanel>
                 </Border>
@@ -65,6 +78,12 @@
 
         <local:LearnView x:Name="LearnView" Grid.Row="1" Visibility="Collapsed" />
         <local:StatsView x:Name="StatsView" Grid.Row="1" Visibility="Collapsed" />
+        <local:TldrView x:Name="TldrView" Grid.Row="1" Visibility="Collapsed" />
+        <local:SessionsView x:Name="SessionsView" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed" />
+        <local:FactoryView x:Name="FactoryView" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed" />
+        <local:InsightsView x:Name="InsightsView" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed" />
+        <ContentControl x:Name="ChatHost" Grid.Row="1" Grid.Column="1" Width="420" Margin="20,0,0,0" Focusable="False"
+                        Visibility="Collapsed" />
 
         <!-- quiz -->
         <Grid x:Name="QuizView" Grid.Row="1">
@@ -201,7 +220,7 @@
         </Grid>
 
         <!-- celebration toast: +XP, badges, rank up -->
-        <Border x:Name="Toast" Grid.RowSpan="2" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,58,0,0"
+        <Border x:Name="Toast" Grid.RowSpan="2" Grid.ColumnSpan="2" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,58,0,0"
                 CornerRadius="14" Padding="20,12" Background="{StaticResource InkBrush}"
                 BorderBrush="{StaticResource MarkerBrush}" BorderThickness="2"
                 IsHitTestVisible="False" Opacity="0" Visibility="Collapsed">
