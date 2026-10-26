@@ -26,6 +26,18 @@ public sealed class SessionState
     internal Block? ReplyStart { get; set; }
     internal StepGroup? Group { get; set; }
 
+    // the turn on screen, folded to one line when the next one starts: where it starts, what was asked, how it ended
+    internal Block? TurnStart { get; set; }
+    internal string TurnQuestion { get; set; } = "";
+    internal string TurnResult { get; set; } = "";
+    internal string TurnDone { get; set; } = "";
+    internal bool TurnFailed { get; set; }
+
+    /// <summary>When the running turn started, and the last note Claude wrote in it (its progress) and when.</summary>
+    public DateTime TurnStartedAt { get; set; }
+    public string LastNote { get; set; } = "";
+    public DateTime LastNoteAt { get; set; }
+
     /// <summary>The pane showing this session, if any.</summary>
     internal SessionPane? ShownIn { get; set; }
 

@@ -15,8 +15,9 @@
                 <StackPanel DockPanel.Dock="Top" Margin="2,0,6,10">
                     <TextBlock Text="your Claude Code, here" Style="{StaticResource HandNote}" FontSize="19" />
                     <DockPanel Margin="0,2,0,10">
-                        <ToggleButton x:Name="SplitButton" DockPanel.Dock="Right" Content="Split" Style="{StaticResource PillToggle}"
-                                      ToolTip="Two sessions side by side" Checked="Split_Changed" Unchecked="Split_Changed" />
+                        <Button x:Name="AddPaneButton" DockPanel.Dock="Right" Content="+ Pane" Style="{StaticResource SecondaryButton}"
+                                Padding="11,0" ToolTip="Another session on screen: side by side, then a grid (4 as 2×2, up to 9)"
+                                Click="AddPane_Click" />
                         <ToggleButton x:Name="GroupButton" DockPanel.Dock="Right" Content="By folder" Style="{StaticResource PillToggle}"
                                       Margin="0,0,6,0" Padding="11,0" ToolTip="Group the sessions by their folder"
                                       Checked="Group_Changed" Unchecked="Group_Changed" />
@@ -35,14 +36,7 @@
             </DockPanel>
         </Border>
 
-        <!-- one pane, or two side by side -->
-        <Grid x:Name="Panes" Grid.Column="1">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition x:Name="SecondColumn" Width="0" />
-            </Grid.ColumnDefinitions>
-            <local:SessionPane x:Name="PaneA" Grid.Column="0" />
-            <local:SessionPane x:Name="PaneB" Grid.Column="1" Margin="14,0,0,0" Visibility="Collapsed" />
-        </Grid>
+        <!-- one pane, or several: side by side up to 3, then a grid (SessionsView.Layout) -->
+        <Grid x:Name="Panes" Grid.Column="1" />
     </Grid>
 </UserControl>

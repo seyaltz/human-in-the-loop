@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -9,17 +10,25 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace DevBreak;
 
 /// <summary>
 /// One session on screen: its header (a status light, title, folder, Setup, Copy resume, Open folder), its
-/// transcript and the message box. The Sessions view has one pane, or two side by side when the screen is split.
+/// transcript and the message box with the files added to it. The Sessions view shows one pane or several.
 /// </summary>
 public partial class SessionPane : UserControl
 {
     private SessionState? _state;
+
+    // files added to the message being written
+    private readonly List<string> _pending = [];
+
+    // ticks the live box (how long the turn has run, how old its last note is) while a turn runs
+    private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(1) };
 
     /// <summary>The pane was clicked or typed in: it becomes the active one.</summary>
     public event Action<SessionPane>? Activated;
@@ -45,13 +54,20 @@ public partial class SessionPane : UserControl
             InputBox.CaretIndex = text.Length;
             InputBox.Focus();
         };
+        _clock.Tick += (_, _) => UpdateLive();
+        SizeChanged += (_, _) =>
+        {
+            bool narrow = ActualWidth < 760;
+            DockPanel.SetDock(HeaderButtons, narrow ? Dock.Bottom : Dock.Right);
+            HeaderButtons.Margin = new Thickness(0, narrow ? 10 : 0, 0, 0);
+        };
     }
 
-    /// <summary>Marks this pane as the active one (outlined) when the screen is split.</summary>
-    public void SetActive(bool active, bool split)
+    /// <summary>Marks this pane as the active one (outlined) when more than one pane is on screen.</summary>
+    public void SetActive(bool active, bool several)
     {
-        Outline.BorderBrush = active && split ? (Brush)FindResource("VioletBrush") : Brushes.Transparent;
-        ClosePaneButton.Visibility = split ? Visibility.Visible : Visibility.Collapsed;
+        Outline.BorderBrush = active && several ? (Brush)FindResource("VioletBrush") : Brushes.Transparent;
+        ClosePaneButton.Visibility = several ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>Shows a session here, taking it from the pane that had it; loads its transcript the first time.</summary>
@@ -105,6 +121,10 @@ public partial class SessionPane : UserControl
         _state = null;
         // a FlowDocument can belong to one RichTextBox: give this one back before another pane takes it
         Transcript.Document = new FlowDocument();
+        // the files were for that session's next message
+        _pending.Clear();
+        Attachments.Children.Clear();
+        Attachments.Visibility = Visibility.Collapsed;
     }
 
     private void OnChanged(SessionState state) => Update();
@@ -113,15 +133,34 @@ public partial class SessionPane : UserControl
     private void Update()
     {
         bool running = _state?.Working == true;
-        InputBox.IsEnabled = _state != null;
+        InputBox.IsEnabled = AddFilesButton.IsEnabled = _state != null;
         SendButton.IsEnabled = _state != null && !running;
         StopButton.IsEnabled = running;
-        WorkingText.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
-        if (running) WorkingText.Text = $"Claude is working... ({_state!.Steps} step{(_state.Steps == 1 ? "" : "s")})";
+        if (running) WorkingText.Visibility = Visibility.Collapsed;
+        UpdateLive();
+        if (running) _clock.Start();
+        else _clock.Stop();
         // the title may come later (Claude writes one for an untitled session)
         if (_state != null) SessionTitle.Text = _state.Info.Title;
         Lights.Set(Light, _state, this);
     }
+
+    // the live box: "Working · 3 min 10 s · 41 steps", the last note Claude wrote on the way, and how old it is
+    private void UpdateLive()
+    {
+        SessionState? state = _state;
+        LiveBox.Visibility = state?.Working == true ? Visibility.Visible : Visibility.Collapsed;
+        if (state?.Working != true) return;
+        LiveTitle.Text = $"● Working · {Span(DateTime.Now - state.TurnStartedAt)} · {state.Steps} step{(state.Steps == 1 ? "" : "s")}";
+        bool note = state.LastNote.Length > 0;
+        LiveNote.Visibility = LiveAge.Visibility = note ? Visibility.Visible : Visibility.Collapsed;
+        if (!note) return;
+        LiveNote.Text = state.LastNote;
+        LiveAge.Text = $"Claude wrote this {Span(DateTime.Now - state.LastNoteAt)} ago";
+    }
+
+    private static string Span(TimeSpan span) =>
+        span.TotalMinutes < 1 ? $"{(int)span.TotalSeconds} s" : $"{(int)span.TotalMinutes} min {span.Seconds} s";
 
     private void ShowLatest()
     {
@@ -147,6 +186,76 @@ public partial class SessionPane : UserControl
             e.Handled = true;
             Send();
         }
+        else if (e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && PasteFiles())
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>Ctrl+V with a screenshot or copied files on the clipboard adds them; plain text pastes as usual.</summary>
+    private bool PasteFiles()
+    {
+        if (Clipboard.ContainsFileDropList())
+        {
+            string[] files = Clipboard.GetFileDropList().Cast<string>().ToArray();
+            foreach (string file in files) Attach(file);
+            return files.Length > 0;
+        }
+        if (Clipboard.ContainsImage() && Clipboard.GetImage() is BitmapSource image)
+        {
+            Attach(AttachedFiles.SaveImage(image));
+            return true;
+        }
+        return false;
+    }
+
+    private void AddFiles_Click(object sender, RoutedEventArgs e)
+    {
+        if (_state == null) return;
+        var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Add files to your message", Multiselect = true };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
+        foreach (string file in dialog.FileNames) Attach(file);
+        InputBox.Focus();
+    }
+
+    private void ChatArea_PreviewDragOver(object sender, DragEventArgs e)
+    {
+        if (_state == null || !e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+        e.Effects = DragDropEffects.Copy;
+        e.Handled = true;
+        DropOverlay.Visibility = Visibility.Visible;
+    }
+
+    private void ChatArea_PreviewDragLeave(object sender, DragEventArgs e)
+    {
+        // moving from one part of the pane to another also leaves: hide only when the pointer left the pane
+        Point at = e.GetPosition(ChatArea);
+        if (at.X <= 0 || at.Y <= 0 || at.X >= ChatArea.ActualWidth || at.Y >= ChatArea.ActualHeight) DropOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    private void ChatArea_PreviewDrop(object sender, DragEventArgs e)
+    {
+        DropOverlay.Visibility = Visibility.Collapsed;
+        if (_state == null || e.Data.GetData(DataFormats.FileDrop) is not string[] files) return;
+        foreach (string file in files) Attach(file);
+        e.Handled = true;
+        InputBox.Focus();
+    }
+
+    /// <summary>Adds a file to the next message: a chip above the box, with an × that takes it out again.</summary>
+    private void Attach(string file)
+    {
+        if (_pending.Contains(file, StringComparer.OrdinalIgnoreCase)) return;
+        _pending.Add(file);
+        FrameworkElement? chip = null;
+        chip = AttachedFiles.Chip(file, this, () =>
+        {
+            _pending.Remove(file);
+            Attachments.Children.Remove(chip);
+            Attachments.Visibility = _pending.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        });
+        Attachments.Children.Add(chip);
+        Attachments.Visibility = Visibility.Visible;
     }
 
     private void Send_Click(object sender, RoutedEventArgs e) => Send();
@@ -155,20 +264,33 @@ public partial class SessionPane : UserControl
     {
         SessionState? state = _state;
         string text = InputBox.Text.Trim();
-        if (state == null || state.Working || text.Length == 0) return;
+        if (state == null || state.Working || (text.Length == 0 && _pending.Count == 0)) return;
+        // Claude gets the files' paths in the message (it reads them itself; the transcript shows them as chips), and
+        // the note asking for the answer's shape and for progress notes on long work (hidden in the transcript)
+        string message = SessionAnswers.WithShape(AttachedFiles.Message(text, _pending));
         InputBox.Clear();
-        Add(state, new SessionEntry(SessionEntryKind.You, text));
+        _pending.Clear();
+        Attachments.Children.Clear();
+        Attachments.Visibility = Visibility.Collapsed;
+        Add(state, new SessionEntry(SessionEntryKind.You, message));
         state.Running = new CancellationTokenSource();
         state.Steps = 0;
         state.Failed = false;
+        state.TurnStartedAt = DateTime.Now;
+        state.LastNote = "";
         state.Notify();
         bool wasNew = state.IsNew;
         try
         {
-            await ClaudeSessions.RunTurnAsync(state.Info.Folder, state.Info.Id, state.IsNew, text, entry =>
+            await ClaudeSessions.RunTurnAsync(state.Info.Folder, state.Info.Id, state.IsNew, message, entry =>
                 Dispatcher.Invoke(() =>
                 {
                     if (entry.Kind == SessionEntryKind.Tool) state.Steps++;
+                    if (entry.Kind == SessionEntryKind.Note)
+                    {
+                        state.LastNote = SessionAnswers.FirstLine(entry.Text);
+                        state.LastNoteAt = DateTime.Now;
+                    }
                     Add(state, entry);
                     state.Notify();
                 }), state.Running.Token);
@@ -202,8 +324,9 @@ public partial class SessionPane : UserControl
     private void ClosePane_Click(object sender, RoutedEventArgs e) => CloseRequested?.Invoke(this);
 
     /// <summary>
-    /// Adds a step of a session to its transcript: the developer's message in its box; one "Claude" label per turn
-    /// with only the turn's answer under it; the work on the way folded into one line; the done line. When the session
+    /// Adds a step of a session to its transcript: the developer's message in its box, with its files as chips; one
+    /// "Claude" label per turn with only the turn's answer under it (its decisions boxed, its details folded); the work on
+    /// the way folded into one line; the done line. A new message folds the turn before it to one line. When the session
     /// is on screen (in whichever pane), the view goes to the start of the reply once and then stays.
     /// </summary>
     private void Add(SessionState state, SessionEntry entry)
@@ -214,7 +337,16 @@ public partial class SessionPane : UserControl
         switch (entry.Kind)
         {
             case SessionEntryKind.You:
-                Turns.Add(document, isMine: true, entry.Text, this);
+                FoldTurn(state);
+                (string text, List<string> files) = AttachedFiles.Split(SessionAnswers.WithoutShape(entry.Text));
+                state.TurnStart = Turns.Add(document, isMine: true, text.Length > 0 ? text : "(files)", this);
+                state.TurnQuestion = text.Length > 0 ? text : string.Join(", ", files.Select(f => System.IO.Path.GetFileName(f.TrimEnd('\\', '/'))));
+                if (files.Count > 0)
+                {
+                    var chips = new WrapPanel();
+                    foreach (string file in files) chips.Children.Add(AttachedFiles.Chip(file, this));
+                    ((Section)state.TurnStart).Blocks.Add(new BlockUIContainer(chips) { Margin = new Thickness(0, 4, 0, 6) });
+                }
                 state.ReplyStart = null;
                 state.Group = null;
                 shown?.ScrollToEnd();
@@ -233,10 +365,12 @@ public partial class SessionPane : UserControl
             case SessionEntryKind.Answer:
                 StartReply(state, shown);
                 state.Group?.DropNote(entry.Text);
-                CodeRenderer.Append(document, entry.Text);
+                SessionAnswers.Append(document, entry.Text, this);
+                state.TurnResult = SessionAnswers.ResultLine(entry.Text);
                 state.Group = null;
                 return;
             case SessionEntryKind.Done:
+                state.TurnDone = entry.Text;
                 state.Group = null;
                 document.Blocks.Add(new Paragraph(new Run("✓ done · " + entry.Text))
                 {
@@ -246,12 +380,24 @@ public partial class SessionPane : UserControl
             case SessionEntryKind.Error:
                 state.Group = null;
                 state.Failed = true;
+                state.TurnFailed = true;
+                if (state.TurnResult.Length == 0) state.TurnResult = entry.Text;
                 document.Blocks.Add(new Paragraph(new Run(entry.Text))
                 {
                     Foreground = Res("CoralInkBrush"), Margin = new Thickness(0, 4, 0, 8),
                 });
                 return;
         }
+    }
+
+    // the turn on screen, finished, becomes one line; the new turn starts fresh
+    private void FoldTurn(SessionState state)
+    {
+        if (state.TurnStart != null && state.TurnStart.Parent == state.Document)
+            new TurnFold(state.Document, state.TurnStart, state.TurnQuestion, state.TurnResult, state.TurnDone, state.TurnFailed, this);
+        state.TurnStart = null;
+        state.TurnQuestion = state.TurnResult = state.TurnDone = "";
+        state.TurnFailed = false;
     }
 
     // the "Claude" label, once per turn; on screen, the view goes to it the first time

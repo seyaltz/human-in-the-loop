@@ -9,6 +9,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using static DevBreak.AttachedFiles;
 
 namespace DevBreak;
 
@@ -105,22 +106,6 @@ public partial class ChatPanel : UserControl
         e.Handled = true;
     }
 
-    private static bool IsImage(string path) =>
-        new[] { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp" }.Contains(Path.GetExtension(path).ToLowerInvariant());
-
-    // a pasted screenshot is saved where the discussion may read it (its working folder is the temp folder)
-    private static string SaveImage(BitmapSource image)
-    {
-        string dir = Path.Combine(Path.GetTempPath(), "devbreak-images");
-        Directory.CreateDirectory(dir);
-        string file = Path.Combine(dir, $"pasted-{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}.png");
-        var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(image));
-        using FileStream stream = File.Create(file);
-        encoder.Save(stream);
-        return file;
-    }
-
     /// <summary>Adds an image to the next message: a thumbnail above the box, with a button that takes it out again.</summary>
     private void Attach(string file)
     {
@@ -148,19 +133,6 @@ public partial class ChatPanel : UserControl
         };
         Attachments.Children.Add(thumb);
         Attachments.Visibility = Visibility.Visible;
-    }
-
-    // read without keeping the file locked, scaled down for the screen
-    private static BitmapImage Load(string file, int width)
-    {
-        var bitmap = new BitmapImage();
-        bitmap.BeginInit();
-        bitmap.CacheOption = BitmapCacheOption.OnLoad;
-        bitmap.DecodePixelWidth = width;
-        bitmap.UriSource = new Uri(file);
-        bitmap.EndInit();
-        bitmap.Freeze();
-        return bitmap;
     }
 
     private void Send_Click(object sender, RoutedEventArgs e) => Send();

@@ -307,7 +307,16 @@ started in a folder or continued, worked in like the CLI, and continuable with `
 - **A turn** (`RunTurnAsync`): `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions`
   and `--session-id <new id>` for a new session or `--resume <id>`, working directory = the session's folder, the
   message on stdin. No `--setting-sources`: the user's full setup loads (CLAUDE.md, memory, skills, plugins, hooks,
-  MCP servers). Full access is the user's choice: `-p` cannot stop to ask. Each streamed `assistant` line adds its
+  MCP servers). Full access is the user's choice: `-p` cannot stop to ask.
+- **Answer shape** (`SessionAnswers`): every message sent from a pane ends with one note, after a blank line:
+  "[Dev break - answer shape: use these markdown headings, in this order, leaving out one with nothing under it:
+  ## Result (one or two lines: what came out) / ## What I did (the important actions, short bullets) / ## Worth
+  knowing (what to learn: traps found, why something works the way it does) / ## Decisions for you (what I must decide
+  for the next step, numbered questions) / ## Details (tables, logs, command output, long detail - last). A short
+  reply to a short question needs no headings. On work longer than a minute, write a one-line "Now: ... · Done so
+  far: ..." note between steps about once a minute.]". In the message, not `--append-system-prompt`: measured, the
+  same words as an appended system prompt were not followed (2 of 2 answers without headings), the note was. The
+  transcript hides the note (cut from the last "[Dev break - answer shape:"), live and when a saved session is read. Each streamed `assistant` line adds its
   text and tool steps as they come; the `result` line adds "✓ done · <seconds> s · $<cost>" or its error. No timeout;
   **Stop** kills the process tree ("Stopped.").
 - **View** (5th mode tab **Sessions**, wide): left a card "your Claude Code, here" / Sessions with **New session...**
@@ -315,23 +324,43 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   and the list (title, folder name · "N min/h/d ago", the folder as tooltip). Right: the title, "<folder> · session
   <id>", **Copy resume command** (`cd "<folder>"; claude --resume <id>`) and **Open folder**; the transcript as in
   every chat (`Turns`): one CLAUDE label per turn with **only the turn's answer** under it - the `result` text of the
-  stream (for a saved session, each turn's last text); the work on the way - tool steps and the notes Claude wrote
+  stream (for a saved session, each turn's last text). The answer is cut at its markdown headings (not inside code
+  blocks): "Decisions for you" in a box (coral tint `CoralTintBrush`, a 3 px `CoralInkBrush` left edge), "Details" -
+  and everything after it - folded in an `Expander` "Details" (bold violet, closed), the rest rendered as usual. **Only
+  the newest turn is open**: when a message is added, the turn before it (its You box to the end of the document) is
+  taken out and replaced by one line in a rounded box (`PaperBrush`, `RuleBrush` edge) - an `Expander` whose header
+  is "You: <first line of the message, 90 chars>  ·  Claude: <the result, 140 chars>  ·  <done line>" (the result:
+  the first line under "Result", else the answer's first line, markdown marks taken off; an error in coral); opening
+  it puts the turn back under the line, closing takes it out again. The work on the way - tool steps and the notes Claude wrote
   while working - folded into one `Expander` line per turn, "⚙ N steps · M notes · last: <tool> <detail>", that opens
   to list it all in order (steps in mono with the tool name in violet, notes rendered small and faded with a left
   rule; the last note equal to the answer is dropped from the fold); the done line; errors in coral. While a turn runs on screen the view goes to the start of the reply once and stays; a
-  session opens at the start of its latest reply; the input (Enter sends), Send, Stop, "Claude is working... (N steps)" and the note "Claude
-  may edit files and run commands in this folder.". Every opened session keeps its transcript, and a running turn
+  session opens at the start of its latest reply; the input (Enter sends), Send, Stop, and the note "Enter to send,
+  Shift+Enter for a new line. Ctrl+V, drop or + to add files. Claude may edit files and run commands in this folder.".
+  **Live box** above the input while a turn runs (violet tint, rounded): "● Working · <41 s | 3 min 10 s> · N steps",
+  then the first line of the last text Claude wrote on the way and "Claude wrote this <time> ago", ticking every
+  second (`DispatcherTimer`); gone when the turn ends.
+  **Files**: a "+" button left of the input (a multi-select `OpenFileDialog`), Ctrl+V (copied files or folders; else a
+  screenshot, saved as `%TEMP%\devbreak-images\pasted-<time>-<id>.png`; plain text pastes as usual) and dropping
+  files or folders anywhere on the pane (an overlay "Drop to add the files to your message" while dragging) add them
+  to the next message as chips above the input: an image's thumbnail, or a badge with its type ("LOG", "PDF", "DIR"
+  for a folder, "FILE"), the name (180 px, trimmed), an ×, the path as tooltip (`AttachedFiles`). Sending works with
+  files and no text. The message lists them after the text: "[Attached files - read them with your Read tool (a
+  folder: list it):", "- <path>" per line, "]"; the You box shows the text and the files as chips (read back from
+  those lines, live and for a saved session). Picking another session for the pane drops the unsent files. Every opened session keeps its transcript, and a running turn
   keeps going while another session is on screen. After a new session's first turn the list refreshes.
 - **Lights**: a dot before the session in the list (9 px) and before the title in its pane (11 px): green `#2EB85C`,
   pulsing (opacity 1 - 0.35, 0.8 s, forever), while a turn runs; red `#E5482E` when its last turn ended with an error
   or was stopped; none when idle. Tooltip "Claude is working (N steps)" / "The last turn failed or was stopped".
-- **Split** (a pill toggle next to "Sessions"): two panes side by side (`SessionPane`, equal width), each with its own
-  header, Setup, transcript, input, Send and Stop; turns run in both at once. The active pane has a violet outline;
+- **+ Pane** (a button next to "Sessions"): one more pane (`SessionPane`), up to 9, each with its own header, Setup,
+  transcript, input, Send and Stop; turns run in all at once. Layout (`SessionsView.Layout`): 1 to 3 panes side by
+  side; 4 as 2×2; 5 to 9 in rows of 3 (3×2, 3×3); equal sizes, 14 px between. The active pane has a violet outline;
   clicking or typing in a pane makes it active, and the list selection follows it. Picking a session opens it in the
   active pane; if it is already in a pane, that pane becomes active (a session is in at most one pane - its
-  `FlowDocument` can belong to one `RichTextBox`). Turning Split on widens the window to the work area. Each pane has a
-  close button (split only): one pane again, keeping the other pane's session. Turning Split off keeps the active
-  pane's session.
+  `FlowDocument` can belong to one `RichTextBox`). Adding a pane widens the window to the work area, and makes it the
+  work area's height once there are 2 rows. Each pane has a close button (when there are 2 or more): the pane goes, its
+  session keeps running and stays in the list. A pane under 760 px wide puts Setup / Copy resume / Open folder under
+  its title.
 - **By folder** (a pill toggle before Split): the list grouped by folder - a header per folder (its name, bold, and
   "· N" sessions; the full path as tooltip; not selectable; a violet ▾ / ▸ before it - a click folds or unfolds its
   sessions, remembered while the app runs), the folder with the newest session first, and its
@@ -347,7 +376,8 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   in the background, each showing in its row and pane as it comes; a session with no prompt, or a failed call, is
   skipped until the next run. Sessions with an `ai-title` keep it.
 - State (`SessionState`): per session - transcript document, running turn, steps, failed, reply start, step group, the
-  pane showing it - with a `Changed` event the panes and the list lights follow.
+  turn on screen (where it starts, its message, result, done line, failed), when the running turn started, its last
+  note and when, the pane showing it - with a `Changed` event the panes and the list lights follow.
 
 ### Setup (`CliSetup.cs`, `SetupPanel`)
 
@@ -1054,5 +1084,11 @@ hide them, close removes them; asked for a repo's real versions and latest commi
 `git -C <repo> log` and both match the repo; a Gradle `dependencyInsight` runs; asked to create a file it cannot (the
 file never appears); gear → Claude in discussions keeps both settings in `settings.json`. + my Claude, pointed at a
 sandbox with `DEVBREAK_CLAUDE_PROJECTS`: suggestions name sandbox projects, Save writes memory notes in the existing
-format and a `MEMORY.md` line, a second save of the same name gets `-2`. Drive every test from a throwaway copy of the
+format and a `MEMORY.md` line, a second save of the same name gets `-2`. Sessions: a saved session with several
+turns opens with every turn but the newest as one "You: ... · Claude: ..." line, and opening a line shows that turn;
++ Pane three times gives 2×2 and a fifth pane 3×2, the window grows to the work area; in a test folder's session,
+Ctrl+V with copied files and a folder and then with a screenshot gives LOG / DIR / thumbnail chips, a turn sent with
+them shows the chips in the You box (not the paths, not the shape note), a turn of more than 30 s shows the live box
+with Claude's "Now: ..." note, and the answer comes back with Result / What I did / Worth knowing, Decisions for you in
+its box and Details folded. Drive every test from a throwaway copy of the
 exe (its own `game.json`) and capture the window itself, never the screen.

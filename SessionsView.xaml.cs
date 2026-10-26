@@ -12,7 +12,8 @@ namespace DevBreak;
 
 /// <summary>
 /// The Sessions view: the user's own Claude Code sessions - start one in a folder or continue one - worked in here
-/// like in their CLI. One pane, or two side by side (Split); a session picked in the list opens in the active pane.
+/// like in their CLI. One pane or several (+ Pane: side by side up to 3, then a grid - 4 as 2×2, up to 9); a session
+/// picked in the list opens in the active pane.
 /// Every session keeps its transcript and keeps running whichever pane shows it, and its light in the list shows
 /// whether Claude is working on it (green) or its last turn failed (red).
 /// </summary>
@@ -25,21 +26,19 @@ public partial class SessionsView : UserControl
     private readonly Dictionary<string, TextBlock> _titles = [];
     private readonly HashSet<string> _untitled = [];
     private bool _writingTitles;
+    private readonly List<SessionPane> _panes = [];
     private SessionPane _active;
-    private bool _split;
     private bool _started;
+
+    // more than this and a pane is too small to read
+    private const int MaxPanes = 9;
 
     public SessionsView()
     {
         InitializeComponent();
-        _active = PaneA;
-        foreach (SessionPane pane in new[] { PaneA, PaneB })
-        {
-            pane.Activated += Activate;
-            pane.CloseRequested += Close;
-            pane.SessionSaved += RefreshList;
-        }
-        Activate(PaneA);
+        _active = NewPane();
+        Layout();
+        Activate(_active);
     }
 
     /// <summary>Lists the sessions the first time the view is shown.</summary>
@@ -53,64 +52,74 @@ public partial class SessionsView : UserControl
     private void Activate(SessionPane pane)
     {
         _active = pane;
-        PaneA.SetActive(pane == PaneA, _split);
-        PaneB.SetActive(pane == PaneB, _split);
+        foreach (SessionPane p in _panes) p.SetActive(p == pane, _panes.Count > 1);
         // the list follows the active pane
         SessionList.SelectionChanged -= SessionList_SelectionChanged;
         SessionList.SelectedItem = RowOf(pane.State?.Info.Id);
         SessionList.SelectionChanged += SessionList_SelectionChanged;
     }
 
-    private void Split_Changed(object sender, RoutedEventArgs e) => SetSplit(SplitButton.IsChecked == true);
-
-    private void SetSplit(bool split)
+    private SessionPane NewPane()
     {
-        if (_split == split) return;
-        _split = split;
-        SplitButton.IsChecked = split;
-        SecondColumn.Width = split ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
-        PaneB.Visibility = split ? Visibility.Visible : Visibility.Collapsed;
-        if (!split)
-        {
-            // one pane again: it keeps the active pane's session
-            if (_active == PaneB && PaneB.State != null)
-            {
-                SessionState state = PaneB.State;
-                PaneB.Clear();
-                PaneA.Show(state);
-            }
-            else
-            {
-                PaneB.Clear();
-            }
-            Activate(PaneA);
-        }
-        else
-        {
-            if (PaneB.State == null) PaneB.Clear();
-            Activate(PaneB);
-        }
-        // a split needs the room: the window grows to the work area's width
-        if (split && Window.GetWindow(this) is Window window)
+        var pane = new SessionPane();
+        pane.Activated += Activate;
+        pane.CloseRequested += Close;
+        pane.SessionSaved += RefreshList;
+        _panes.Add(pane);
+        Panes.Children.Add(pane);
+        return pane;
+    }
+
+    private void AddPane_Click(object sender, RoutedEventArgs e)
+    {
+        if (_panes.Count >= MaxPanes) return;
+        SessionPane pane = NewPane();
+        pane.Clear();
+        Layout();
+        Activate(pane);
+        // more panes need the room: the window grows to the work area's width, and its height once they are in rows
+        if (Window.GetWindow(this) is Window window)
         {
             Rect area = SystemParameters.WorkArea;
             window.Width = Math.Max(window.Width, area.Width - 32);
             window.Left = area.Left + 16;
+            if (Panes.RowDefinitions.Count > 1)
+            {
+                window.Height = Math.Max(window.Height, area.Height - 32);
+                window.Top = area.Top + 16;
+            }
         }
     }
 
+    // a pane closes; its session keeps running and stays in the list
     private void Close(SessionPane pane)
     {
-        if (!_split) return;
-        if (pane == PaneA && PaneB.State != null)
+        if (_panes.Count < 2) return;
+        pane.Clear();
+        _panes.Remove(pane);
+        Panes.Children.Remove(pane);
+        Layout();
+        Activate(_active == pane ? _panes[0] : _active);
+    }
+
+    // side by side up to 3; then rows of 2 for 4 (2×2), rows of 3 for 5 to 9
+    private void Layout()
+    {
+        int n = _panes.Count;
+        int columns = n <= 3 ? n : n == 4 ? 2 : 3;
+        int rows = (n + columns - 1) / columns;
+        Panes.ColumnDefinitions.Clear();
+        Panes.RowDefinitions.Clear();
+        for (int c = 0; c < columns; c++) Panes.ColumnDefinitions.Add(new ColumnDefinition());
+        for (int r = 0; r < rows; r++) Panes.RowDefinitions.Add(new RowDefinition());
+        for (int i = 0; i < n; i++)
         {
-            // closing the left pane: the right one's session moves over
-            SessionState state = PaneB.State;
-            PaneB.Clear();
-            PaneA.Show(state);
+            int row = i / columns, column = i % columns;
+            Grid.SetRow(_panes[i], row);
+            Grid.SetColumn(_panes[i], column);
+            _panes[i].Margin = new Thickness(column > 0 ? 14 : 0, row > 0 ? 14 : 0, 0, 0);
         }
-        _active = PaneA;
-        SetSplit(false);
+        AddPaneButton.IsEnabled = n < MaxPanes;
     }
 
     private async void RefreshList()
@@ -293,7 +302,7 @@ public partial class SessionsView : UserControl
         if (SessionList.SelectedItem is not ListBoxItem { Tag: SessionInfo info }) return;
         SessionState state = StateOf(info);
         // already on screen in a pane: that pane becomes the active one; otherwise it opens in the active pane
-        if (state.ShownIn != null && (_split || state.ShownIn == PaneA)) Activate(state.ShownIn);
+        if (state.ShownIn != null) Activate(state.ShownIn);
         else _active.Show(state);
     }
 }
