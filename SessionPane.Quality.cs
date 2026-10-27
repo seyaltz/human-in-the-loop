@@ -163,10 +163,6 @@ public partial class SessionPane
         state.Document.Blocks.InsertAfter(done, line);
     }
 
-    // the grader keeps finding the same thing in this folder: Task 6's lessons turn it into a rule card
-    private void RepeatedViolation(SessionState state, string criterion, string evidence, int times) =>
-        Log($"grade: repeated '{criterion}' x{times} - {evidence}");
-
     // a card under a turn's done line (or at the end); its content panel
     private StackPanel Card(SessionState state, TurnLog log, string title)
     {

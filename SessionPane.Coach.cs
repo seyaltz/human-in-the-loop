@@ -286,6 +286,7 @@ public partial class SessionPane
             });
         }
         CheckQuality(state);
+        LessonsAfterTurn(state);
     }
 
     private void AiCheckButton_Click(object sender, RoutedEventArgs e)

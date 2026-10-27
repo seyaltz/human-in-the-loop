@@ -2664,7 +2664,7 @@ public static class Factory
     }
 
     // one note per file in the memory folder, listed in its MEMORY.md
-    private static string SaveMemory(string dir, FactoryLesson lesson)
+    internal static string SaveMemory(string dir, FactoryLesson lesson)
     {
         Directory.CreateDirectory(dir);
         string file = Path.Combine(dir, lesson.Name + ".md");

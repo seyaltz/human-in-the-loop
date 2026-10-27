@@ -353,7 +353,10 @@ public partial class SessionPane : UserControl
         state.Stopping = false;
         state.TurnStartedAt = DateTime.Now;
         state.LastNote = "";
-        if (state.Log != null) state.PastLogs.Add(state.Log);
+        TurnLog? previous = state.Log;
+        if (previous != null) state.PastLogs.Add(previous);
+        LessonsOnMessage(state, previous, message, state.LastStopped);
+        state.LastStopped = false;
         state.Log = new TurnLog(message);
         state.ToldWaiting = false;
         state.WaitToldFor = "";
@@ -369,6 +372,7 @@ public partial class SessionPane : UserControl
             SessionProcess process = await ProcessFor(state);
             bool finished = await process.TurnAsync(message);
             if (!finished && state.Stopping) Add(state, new SessionEntry(SessionEntryKind.Error, "Stopped."));
+            state.LastStopped = state.Stopping;
             if (finished || ClaudeSessions.FileOf(state.Info.Id) != null)
             {
                 state.IsNew = false;

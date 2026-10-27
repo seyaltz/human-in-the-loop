@@ -108,6 +108,9 @@ public sealed class SessionState
     /// <summary>Each turn's done line, where its grade and review go when they come back later.</summary>
     public Dictionary<TurnLog, Block> DoneLines { get; } = [];
     public bool Grading { get; set; }
+
+    /// <summary>The last turn was stopped by the user: a new message then is asking again (a lesson may be in it).</summary>
+    public bool LastStopped { get; set; }
     public int AiChecks { get; set; }
     public int AiCheckSteps { get; set; }
     public DateTime AiCheckAt { get; set; }

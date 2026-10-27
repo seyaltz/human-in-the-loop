@@ -28,6 +28,7 @@ public static class Selftest
             WaitCases();
             FlagCases();
             QualityCases();
+            LessonCases();
         }
         catch (Exception ex)
         {
@@ -144,12 +145,14 @@ public static class Selftest
     private static void QualityCases()
     {
         TurnLog edited = LogOf(("Read", "a.py", false, "x"));
-        edited.Changed.Add(@"C:.py");
+        edited.Changed.Add(@"C:
+.py");
         edited.Steps.Add(new TurnStep("e", "Write", "a.py", "Write", DateTime.Now, false) { End = DateTime.Now, Result = "ok" });
         Check(Watch.Unverified(edited, "Done - a.py prints 1.") is { } nudge && nudge.Contains("pytest"),
             "Unverified: a .py written, \"Done\", nothing run after - nudge names pytest");
         TurnLog checkedLog = LogOf(("Read", "a.py", false, "x"));
-        checkedLog.Changed.Add(@"C:.cs");
+        checkedLog.Changed.Add(@"C:
+.cs");
         checkedLog.Steps.Add(new TurnStep("e", "Edit", "a.cs", "Edit", DateTime.Now, false) { End = DateTime.Now, Result = "ok" });
         checkedLog.Steps.Add(new TurnStep("b", "Bash", "dotnet build", "dotnet build", DateTime.Now, false) { Command = "cd r && dotnet build -c Release", End = DateTime.Now, Result = "ok" });
         Check(Watch.Unverified(checkedLog, "Fixed, builds clean.") == null, "Unverified: a dotnet build after the edit is a check");
@@ -162,6 +165,44 @@ public static class Selftest
         Check(Rubric.Parse("```json\n" + raw + "\n```") is { Count: 1 }, "Rubric.Parse: a fenced array is read");
         Check(Rubric.Parse("The turn looks fine to me.") == null, "Rubric.Parse: prose is not a verdict (null)");
         Check(Rubric.Parse("[]") is { Count: 0 }, "Rubric.Parse: an empty array is clean");
+    }
+
+    private static void LessonCases()
+    {
+        TurnLog retried = LogOf(("Bash", "npm i", true, "e1"), ("Bash", "npm ci", true, "e2"), ("Bash", "npm install --legacy", false, "ok"));
+        Check(SessionLessons.ShouldPropose(retried, null, false), "Lessons: 2 failed calls of a tool, then it worked - propose");
+        Check(!SessionLessons.ShouldPropose(LogOf(("Bash", "a", true, "e"), ("Read", "b", false, "x")), null, false), "Lessons: one failure, never fixed - no");
+        Check(SessionLessons.ShouldPropose(LogOf(("Read", "b", false, "x")), "no, use the other config file", false), "Lessons: the next message corrects - propose");
+        Check(SessionLessons.ShouldPropose(LogOf(("Read", "b", false, "x")), "thanks", true), "Lessons: stopped and asked again - propose");
+        Check(!SessionLessons.ShouldPropose(LogOf(("Read", "b", false, "x")), "now add a test", false), "Lessons: a normal next message - no");
+
+        List<FactoryLesson> parsed = SessionLessons.Parse(
+            "Here you go:\n[{\"kind\":\"skill\",\"name\":\"Deploy Preview!\",\"description\":\"d\",\"content\":\"c\"},{\"kind\":\"weird\",\"name\":\"x\",\"description\":\"d\",\"content\":\"c\"}]");
+        Check(parsed.Count == 1 && parsed[0].Kind == "skill" && parsed[0].Name == "deploy-preview", "Lessons.Parse: a kind it knows, its name made a slug; others dropped");
+        Check(SessionLessons.Parse("No lessons this time.").Count == 0, "Lessons.Parse: prose is no lessons");
+
+        string home = Path.Combine(Path.GetTempPath(), "devbreak-home-" + Guid.NewGuid().ToString("N")[..8]);
+        string memory = Path.Combine(home, "memory");
+        Directory.CreateDirectory(Path.Combine(home, ".claude"));
+        File.WriteAllText(Path.Combine(home, ".claude", "CLAUDE.md"), "# my rules\n- keep it\n");
+        try
+        {
+            foreach (string kind in new[] { "memory", "skill", "rule" })
+            {
+                var lesson = new FactoryLesson { Kind = kind, Name = "test-" + kind, Description = "a " + kind, Content = "Do the thing the proven way." };
+                string file = SessionLessons.Save(lesson, memory, home);
+                bool written = File.Exists(file) && File.ReadAllText(file).Contains("proven way");
+                SessionLessons.Undo(lesson);
+                bool gone = kind == "rule"
+                    ? File.ReadAllText(file) == "# my rules\n- keep it\n"
+                    : !File.Exists(file) && (kind != "memory" || !File.ReadAllText(Path.Combine(memory, "MEMORY.md")).Contains("test-memory"));
+                Check(written && gone, $"Lessons: save then undo a {kind} leaves things as they were ({file})");
+            }
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
     }
 
     private static void WaitCases()

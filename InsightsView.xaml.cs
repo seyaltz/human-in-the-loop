@@ -50,6 +50,7 @@ public partial class InsightsView : UserControl
             string name = repo.Key.Length > 0 ? Path.GetFileName(repo.Key.TrimEnd('\\', '/')) : "(no repo)";
             Body.Children.Add(Card(name, $"{Count(repo.Count(), "insight")} · {repo.Key}", list));
         }
+        AddSessionLessons();
     }
 
     private static string Count(int n, string what) => $"{n} {what}{(n == 1 ? "" : "s")}";
