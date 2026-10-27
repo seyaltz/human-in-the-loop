@@ -93,6 +93,7 @@ public partial class SessionPane : UserControl
         ShowSetup(false);
         Update();
         UpdateQueued();
+        UpdateCoach();
         LoadCommands(state.Info.Folder);
         if (!state.Loaded)
         {
@@ -168,6 +169,7 @@ public partial class SessionPane : UserControl
         SessionState? state = _state;
         LiveBox.Visibility = state?.Working == true ? Visibility.Visible : Visibility.Collapsed;
         UpdateWait();
+        if (state != null) WatchTurn(state);
         if (state?.Working != true) return;
         LiveTitle.Text = $"● Working · {Span(DateTime.Now - state.TurnStartedAt)} · {state.Steps} step{(state.Steps == 1 ? "" : "s")}";
         bool note = state.LastNote.Length > 0;
@@ -355,6 +357,11 @@ public partial class SessionPane : UserControl
         state.Log = new TurnLog(message);
         state.ToldWaiting = false;
         state.WaitToldFor = "";
+        state.Coach = null;
+        state.CoachDismissed.Clear();
+        state.AiChecks = state.AiCheckSteps = 0;
+        state.AiCheckAt = DateTime.Now;
+        UpdateCoach();
         state.Notify();
         bool wasNew = state.IsNew;
         try
@@ -376,6 +383,7 @@ public partial class SessionPane : UserControl
         state.Running = null;
         state.Stopping = false;
         CloseCards(state, "No longer asked - the turn ended.");
+        AfterTurn(state);
         CallBack(state, "Claude finished: " + SessionAnswers.FirstLine(state.TurnQuestion));
         state.Notify();
         if (wasNew && !state.IsNew) SessionSaved?.Invoke();

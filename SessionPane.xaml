@@ -66,6 +66,10 @@
                     <Button x:Name="EffortButton" Style="{StaticResource BarButton}" Click="EffortButton_Click"
                             ToolTip="How hard Claude thinks - applies from the next message" />
                     <Button x:Name="ContextButton" Style="{StaticResource BarButton}" Click="ContextButton_Click" Visibility="Collapsed" />
+                    <Button x:Name="AiCheckButton" Style="{StaticResource BarButton}" Click="AiCheckButton_Click"
+                            ToolTip="On long turns, a small model checks once a minute whether Claude is on track" />
+                    <Button x:Name="GradeButton" Style="{StaticResource BarButton}" Click="GradeButton_Click"
+                            ToolTip="After a turn, a small model grades its ending against the rubric (what it claims next to what it did)" />
                     <TextBlock x:Name="CostText" FontSize="12" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"
                                Margin="4,0,8,0" ToolTip="What the turns of this session cost since Dev break started" />
                     <WrapPanel x:Name="TaskChips" VerticalAlignment="Center" />

@@ -10,6 +10,9 @@ namespace DevBreak;
 /// and the pane it is on (at most one - a document can be shown in one place). A turn keeps running whichever pane,
 /// if any, shows it; <see cref="Changed"/> tells the panes and the list lights.
 /// </summary>
+/// <summary>What the coach shows: why, the steps that show it, the nudge it suggests (editable), the rule it came from.</summary>
+public sealed record CoachFlag(string Reason, List<string> Evidence, string Nudge, string Rule);
+
 public sealed class SessionState
 {
     public required SessionInfo Info { get; set; }
@@ -97,6 +100,14 @@ public sealed class SessionState
     /// <summary>This turn told the user (tray) it waits: it tells them again when it needs them. The step it was about.</summary>
     public bool ToldWaiting { get; set; }
     public string WaitToldFor { get; set; } = "";
+
+    /// <summary>The coach's card for this session (null: none), the reasons dismissed this turn, its AI check's bookkeeping.</summary>
+    public CoachFlag? Coach { get; set; }
+    public HashSet<string> CoachDismissed { get; } = [];
+    public int AiChecks { get; set; }
+    public int AiCheckSteps { get; set; }
+    public DateTime AiCheckAt { get; set; }
+    public bool AiChecking { get; set; }
 
     /// <summary>The running (or last) turn's tool calls, read from the process's lines.</summary>
     public TurnLog? Log { get; set; }

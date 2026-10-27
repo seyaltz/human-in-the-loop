@@ -26,6 +26,7 @@ public static class Selftest
             TurnLogCases();
             StatsCases();
             WaitCases();
+            FlagCases();
         }
         catch (Exception ex)
         {
@@ -84,6 +85,59 @@ public static class Selftest
             Lines.Add($"real: week {w.Start:yyyy-MM-dd} active {w.ActiveH:0.0} h, wait {w.WaitH:0.0}, tools {w.ToolH:0.0}, model {w.ModelH:0.0}, you {w.UserH:0.0}, calls {w.Calls}, failed {w.Failed}, interrupts {w.Interrupts}, corrections {w.Corrections}");
         }
         Lines.Add($"real: families in 3+ sessions: {data.Families(3).Count}");
+    }
+
+    // a log of finished calls: (tool, summary, error, result), a second apart, starting 10 minutes ago
+    private static TurnLog LogOf(params (string Tool, string Summary, bool Error, string Result)[] calls)
+    {
+        var log = new TurnLog("fix the build");
+        DateTime t = DateTime.Now.AddMinutes(-10);
+        int n = 0;
+        foreach ((string tool, string summary, bool error, string result) in calls)
+        {
+            n++;
+            log.Steps.Add(new TurnStep("s" + n, tool, summary, tool, t, false) { End = t.AddSeconds(1), Error = error, Result = result });
+            t = t.AddSeconds(2);
+        }
+        return log;
+    }
+
+    private static void FlagCases()
+    {
+        DateTime now = DateTime.Now;
+        var failing = ("Bash", "npm run build", true, "error TS2304");
+        Check(Watch.Flag(LogOf(failing, failing, failing), now.AddMinutes(-9.9), false)?.StartsWith("the same Bash call failed 3 times in a row") == true,
+            "Flag: the same call failing 3 times");
+        Check(Watch.Flag(LogOf(failing, ("Read", "a.cs", false, "x"), failing), now.AddMinutes(-9.9), false) == null, "Flag: not 3 in a row is not stuck");
+        var same = ("Bash", "git status", false, "clean");
+        Check(Watch.Flag(LogOf(same, same, same, same), now.AddMinutes(-9.9), false)?.StartsWith("it ran the same Bash call 4 times in a row") == true,
+            "Flag: the same call 4 times");
+        Check(Watch.Flag(LogOf(("Bash", "a", true, "e1"), ("Read", "b", false, "r1"), ("Bash", "c", true, "e2"), ("Read", "d", false, "r2"),
+                ("Bash", "e", true, "e3"), ("Read", "f", false, "r3"), ("Bash", "g", true, "e4"), ("Bash", "h", true, "e5")), now.AddMinutes(-9.9), false)
+            ?.StartsWith("5 of its last 10 tool calls failed") == true, "Flag: 5 failed of the last 10");
+        Check(Watch.Flag(LogOf(("PowerShell", "head -5 x", true, "head : The term 'head' is not recognized as the name of a cmdlet")), now.AddMinutes(-9.9), false)
+            ?.StartsWith("a command written for another shell") == true, "Flag: a wrong-shell-dialect error");
+        Check(Watch.Flag(LogOf(("Read", "a.cs", false, "x")), now, false)?.StartsWith("no new step for 5 minutes") == true, "Flag: silent 5 minutes");
+        Check(Watch.Flag(LogOf(("Read", "a.cs", false, "x")), now, true) == null, "Flag: silent while a command runs is waiting, not stuck");
+        var again = Enumerable.Range(0, 13).Select(i => ("Grep", "pattern " + i, false, "No matches found")).ToArray();
+        Check(Watch.Flag(LogOf(again), now.AddMinutes(-9.9), false)?.StartsWith("12 steps without progress") == true,
+            "Flag: 12 steps after the last new result (no-progress counter)");
+        var fresh = Enumerable.Range(0, 12).Select(i => ("Read", "f" + i, false, "content " + i)).ToArray();
+        Check(Watch.Flag(LogOf(fresh), now.AddMinutes(-9.9), false) == null, "Flag: 12 reads of new content is progress");
+
+        Check(SessionPane.Drifting("on track") == null, "AI check: \"on track\" raises nothing");
+        Check(SessionPane.Drifting("drifting: it edits the wrong file\nnudge: edit src/a.cs instead") is ("it edits the wrong file", "edit src/a.cs instead"),
+            "AI check: drifting with its why and nudge");
+        Check(SessionPane.Drifting("Sure! Here is my analysis: drifting: maybe") == null, "AI check: an answer out of shape is ignored");
+        Check(SessionPane.Drifting("Drifting: loops on npm install") is ("loops on npm install", null), "AI check: drifting without a nudge line");
+
+        TurnLog slow = LogOf(("Read", "a.cs", false, "x"));
+        slow.Steps.Add(new TurnStep("w", "Bash", "npm run deploy", "npm run", now.AddMinutes(-6), false)
+            { Command = "npm run deploy", End = now.AddMinutes(-3), Result = "ok" });
+        string? diagnosis = Watch.Diagnosis(slow, TimeSpan.FromMinutes(10));
+        Check(diagnosis != null && diagnosis.Contains("npm run deploy ran 3 min in the foreground - run it in the background next time"),
+            "Diagnosis: a 3-minute foreground command - got: " + diagnosis);
+        Check(Watch.Diagnosis(slow, TimeSpan.FromSeconds(90)) == null, "Diagnosis: none for a turn under 2 minutes");
     }
 
     private static void WaitCases()

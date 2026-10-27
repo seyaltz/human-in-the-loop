@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 
 namespace DevBreak;
@@ -10,6 +12,82 @@ namespace DevBreak;
 public static class Watch
 {
     private static readonly Regex LeadingCd = new(@"^\s*cd\s+[^&;]+(&&|;)\s*", RegexOptions.Compiled);
+
+    private static readonly Regex Dialect = new(
+        @"is not recognized as|unexpected EOF|ParserError|Unexpected token|command not found", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly TimeSpan Silent = TimeSpan.FromMinutes(5);
+    private const int NoProgress = 12;
+
+    /// <summary>
+    /// Why a running turn looks stuck, or null. The first two are the Factory's (OpenHands' thresholds: repeats in a
+    /// row, so a long turn may run `git status` four times); the rest: an error run, a command written for another
+    /// shell, silence with nothing running, and published loop-detection practice's no-progress counter (exact repeats
+    /// miss the slow loop where each try is a different command with a different error). A subagent's steps are its
+    /// own work, not the turn's: they are left out.
+    /// </summary>
+    /// <param name="busy">a command or a background task is running: silence is waiting, not being stuck</param>
+    public static string? Flag(TurnLog log, DateTime now, bool busy)
+    {
+        List<TurnStep> done = [.. log.Steps.Where(s => !s.Sub && s.End != null)];
+        if (done.Count > 0)
+        {
+            TurnStep last = done[^1];
+            bool Same(int n, Func<TurnStep, bool> also) => done.Count >= n &&
+                done.TakeLast(n).All(s => s.Tool == last.Tool && s.Summary == last.Summary && s.Error == last.Error && also(s));
+            if (Same(3, s => s.Error)) return $"the same {last.Tool} call failed 3 times in a row: {last.Summary}";
+            if (Same(4, _ => true)) return $"it ran the same {last.Tool} call 4 times in a row: {last.Summary}";
+            if (done.TakeLast(10).Count(s => s.Error) >= 5) return "5 of its last 10 tool calls failed";
+            if (last.Error && Dialect.IsMatch(last.Result)) return "a command written for another shell: " + Short(last.Result, 90);
+        }
+        DateTime lastMove = log.Steps.Where(s => !s.Sub).Select(s => s.End ?? s.Start).DefaultIfEmpty(log.Start).Max();
+        if (!busy && now - lastMove >= Silent) return "no new step for 5 minutes, and nothing is running";
+        int since = 0;
+        var seen = new HashSet<string>();
+        var errors = new HashSet<string>();
+        foreach (TurnStep s in done)
+        {
+            bool progress = s.Error
+                ? errors.Add(Short(s.Result, 60))
+                : s.Tool is "Edit" or "Write" or "NotebookEdit" or "MultiEdit" || seen.Add(s.Result);
+            since = progress ? 0 : since + 1;
+        }
+        return since >= NoProgress ? $"{since} steps without progress: no file written, no new result, no new error" : null;
+    }
+
+    /// <summary>
+    /// Where a finished turn's time went - "waiting 0:40 · tools 1:10 · model 2:05" - and the one thing that would have
+    /// saved the most, when there is one; null for a turn under 2 minutes.
+    /// </summary>
+    public static string? Diagnosis(TurnLog log, TimeSpan total)
+    {
+        if (total < TimeSpan.FromMinutes(2)) return null;
+        List<TurnStep> own = [.. log.Steps.Where(s => !s.Sub && s.End != null)];
+        double Seconds(TurnStep s) => (s.End!.Value - s.Start).TotalSeconds;
+        bool Waits(TurnStep s) => s.Tool == "Monitor" || SessionStats.WaitCommand.IsMatch(s.Command);
+        double waiting = own.Where(Waits).Sum(Seconds);
+        double tools = own.Where(s => !Waits(s)).Sum(Seconds);
+        double model = Math.Max(0, total.TotalSeconds - waiting - tools);
+        string text = $"waiting {Clock(waiting)} · tools {Clock(tools)} · model {Clock(model)}";
+        TurnStep? slow = own.Where(s => s.IsShell && !Waits(s)).OrderByDescending(Seconds).FirstOrDefault();
+        if (slow != null && Seconds(slow) >= 120)
+        {
+            return text + $" - {Short(LeadingCd.Replace(slow.Command, ""), 50)} ran {(int)Math.Round(Seconds(slow) / 60)} min in the foreground - run it in the background next time";
+        }
+        if (own.Where(s => s.Error && s.IsShell).GroupBy(s => s.Key).OrderByDescending(g => g.Count()).FirstOrDefault() is { } fails && fails.Count() >= 3)
+        {
+            return text + $" - {fails.Key} failed {fails.Count()} times - a skill for it would save the retries";
+        }
+        return text;
+    }
+
+    private static string Clock(double seconds) => $"{(int)(seconds / 60)}:{(int)(seconds % 60):00}";
+
+    private static string Short(string text, int max)
+    {
+        string line = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return line.Length <= max ? line : line[..(max - 1)] + "…";
+    }
 
     /// <summary>The wait chip: "⧗ waiting on npm run build · 3:20 · usually ~6 min" (the command without a leading cd).</summary>
     public static string WaitText(TurnStep step, DateTime now, TimeSpan? usual)
