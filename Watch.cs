@@ -147,4 +147,17 @@ public static class Watch
         if (usual is { } u) text += $" · usually ~{Math.Max(1, (int)Math.Round(u.TotalMinutes))} min";
         return text;
     }
+
+    /// <summary>What a fresh session starts from instead of the whole history.</summary>
+    public const string HandoverQuestion =
+        "Write a handover of this conversation for a new session that will not see it. Plain text, under 300 words: " +
+        "the goal in the user's words; what is done, with file paths; decisions made and why; what is left, in order; " +
+        "commands that work here; anything that failed and must not be retried. No preamble.";
+
+    /// <summary>
+    /// The footer's context: every step re-sends the whole conversation, so the size in tokens is what each step costs -
+    /// a percent of a 1M window hid that (51% was 511k re-read per step). Heavy from 150k, or 80% full.
+    /// </summary>
+    public static (string Text, bool Heavy) ContextLabel(double tokens, int percent) =>
+        ($"{Math.Round(tokens / 1000):0}k context", tokens >= 150_000 || percent >= 80);
 }

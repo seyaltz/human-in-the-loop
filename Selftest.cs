@@ -31,6 +31,7 @@ public static class Selftest
             LessonCases();
             LearnCases();
             ReviewFixCases();
+            ContextCases();
             Check(Watch.IsQuickStep("commit and push"), "Quick step: \"commit and push\"");
             Check(Watch.IsQuickStep("rebuild and restart dev break"), "Quick step: \"rebuild and restart dev break\"");
             Check(!Watch.IsQuickStep("design a watcher that coaches long turns"), "Quick step: a design ask is not one");
@@ -109,6 +110,16 @@ public static class Selftest
             t = t.AddSeconds(2);
         }
         return log;
+    }
+
+    // the footer says what each step re-reads, in tokens; past 150k (or 80% full) it turns coral
+    private static void ContextCases()
+    {
+        Check(Watch.ContextLabel(511_400, 51) == ("511k context", true), "Context: 511,400 tokens of 1M -> \"511k context\", heavy (51% hid it)");
+        Check(Watch.ContextLabel(26_834, 13) == ("27k context", false), "Context: 26,834 tokens -> \"27k context\", light");
+        Check(Watch.ContextLabel(149_999, 74).Heavy == false, "Context: just under 150k is light");
+        Check(Watch.ContextLabel(150_000, 75).Heavy, "Context: 150k is heavy");
+        Check(Watch.ContextLabel(120_000, 80).Heavy, "Context: 80% full is heavy even under 150k");
     }
 
     private static void FlagCases()

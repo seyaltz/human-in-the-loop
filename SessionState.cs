@@ -69,6 +69,9 @@ public sealed class SessionState
     /// <summary>How full the context was after the last turn (percent), or -1 before it is known.</summary>
     public int ContextPercent { get; set; } = -1;
 
+    /// <summary>The context's size in tokens after the last turn - what every step of the next turn re-sends.</summary>
+    public double ContextTokens { get; set; }
+
     /// <summary>The categories behind <see cref="ContextPercent"/>, one per line.</summary>
     public string ContextDetail { get; set; } = "";
 

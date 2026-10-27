@@ -408,8 +408,11 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   only) - switched live with `set_permission_mode`; "Model: <name>" - the models of the `initialize` reply (`value`,
   `displayName`, `description`), switched live with `set_model` (measured: the next answer's model changed);
   "Effort: auto | <level>" - the model's `supportedEffortLevels`, applied as `--effort` when the next message restarts
-  the process; "N% context" after each turn (`get_context_usage`: `percentage`, `totalTokens`, `maxTokens`,
-  `categories`; tooltip and menu list them, coral from 80%, the menu offers "/compact "); "$x.xx this run"; and a
+  the process; "Nk context" after each turn - the size in tokens, since every step re-sends all of it and a percent
+  of a 1M window hid that (`get_context_usage`: `totalTokens`, `maxTokens`, `percentage`, `autoCompactThreshold`,
+  `categories`; tooltip and menu list them, coral from 150k or 80%; the menu offers "/compact " and "Fresh session
+  from a handover": a side question writes a short handover, and a new session in the folder starts with it in the
+  box, unsent); "$x.xx this run"; and a
   "⧗ <what>  ×" chip per background task (`task_started`, gone at `task_notification` / `task_updated` with a final
   status; × sends `stop_task`). Mode, model and effort are kept per session in `session-settings.json` next to the app
   (the user's data); a session never set starts in Bypass with the CLI's default model and effort.
