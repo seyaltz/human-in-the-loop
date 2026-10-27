@@ -104,6 +104,10 @@ public sealed class SessionState
     /// <summary>The coach's card for this session (null: none), the reasons dismissed this turn, its AI check's bookkeeping.</summary>
     public CoachFlag? Coach { get; set; }
     public HashSet<string> CoachDismissed { get; } = [];
+
+    /// <summary>Each turn's done line, where its grade and review go when they come back later.</summary>
+    public Dictionary<TurnLog, Block> DoneLines { get; } = [];
+    public bool Grading { get; set; }
     public int AiChecks { get; set; }
     public int AiCheckSteps { get; set; }
     public DateTime AiCheckAt { get; set; }

@@ -81,6 +81,45 @@ public static class Watch
         return text;
     }
 
+    private static readonly Regex Completion = new(@"\b(done|fixed|works|passes|implemented|ready|all set)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // a step that checks work: a test runner, a build, the app, a localhost call, or a changed file run directly
+    private static readonly Regex CheckCommand = new(
+        @"\bdotnet\s+(build|test|run)\b|\b(npm|pnpm|yarn)\s+(test|run|build)\b|\bnpx\s+(jest|vitest|playwright)\b|\bpytest\b|\bgradlew|\bmvn\b" +
+        @"|\bgo\s+(test|build)\b|\bcargo\s+(test|build)\b|\bcurl\b.*(localhost|127\.0\.0\.1)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// A turn that changed files and says it is finished, with nothing after the last change that checks it: the nudge
+    /// to send ("Run dotnet build and show the output"), or null. A claim and a record are different kinds of fact, and
+    /// only the record can be checked - "it works" next to a record with no run in it is a claim.
+    /// </summary>
+    public static string? Unverified(TurnLog log, string answer)
+    {
+        if (log.Changed.Count == 0 || !Completion.IsMatch(answer)) return null;
+        List<TurnStep> own = [.. log.Steps.Where(s => !s.Sub)];
+        int lastChange = own.FindLastIndex(s => s.Tool is "Edit" or "Write" or "NotebookEdit" or "MultiEdit");
+        IEnumerable<string> names = log.Changed.Select(f => System.IO.Path.GetFileName(f)).Where(n => n.Length > 0);
+        bool Checks(TurnStep s) =>
+            (s.IsShell && (CheckCommand.IsMatch(s.Command) || names.Any(n => s.Command.Contains(n, StringComparison.OrdinalIgnoreCase))))
+            || s.Tool.Contains("playwright", StringComparison.OrdinalIgnoreCase) || s.Tool.Contains("chrome", StringComparison.OrdinalIgnoreCase)
+            || s.Tool.Contains("browser", StringComparison.OrdinalIgnoreCase);
+        if (own.Skip(lastChange + 1).Any(Checks)) return null;
+        return $"You said it is finished, but nothing ran after the last change. Run {CheckFor(log.Changed)} and show the output.";
+    }
+
+    // the check that fits the changed files
+    private static string CheckFor(IEnumerable<string> files)
+    {
+        string[] ext = [.. files.Select(f => System.IO.Path.GetExtension(f).ToLowerInvariant())];
+        if (ext.Any(e => e is ".cs" or ".csproj" or ".xaml")) return "dotnet build (and its tests if there are any)";
+        if (ext.Any(e => e is ".ts" or ".tsx" or ".js" or ".jsx")) return "npm test (or the build)";
+        if (ext.Contains(".py")) return "pytest, or the changed script itself";
+        if (ext.Any(e => e is ".java" or ".kt")) return "gradlew test";
+        if (ext.Contains(".go")) return "go test";
+        if (ext.Contains(".rs")) return "cargo test";
+        return "the app or the changed file";
+    }
+
     private static string Clock(double seconds) => $"{(int)(seconds / 60)}:{(int)(seconds % 60):00}";
 
     private static string Short(string text, int max)

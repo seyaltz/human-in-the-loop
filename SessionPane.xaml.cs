@@ -383,7 +383,15 @@ public partial class SessionPane : UserControl
         state.Running = null;
         state.Stopping = false;
         CloseCards(state, "No longer asked - the turn ended.");
-        AfterTurn(state);
+        try
+        {
+            AfterTurn(state);
+        }
+        catch (Exception ex)
+        {
+            // the coach's after-turn work must never cost the turn its wrap-up (the queue, the context, the stamp)
+            Log("after turn failed: " + ex);
+        }
         CallBack(state, "Claude finished: " + SessionAnswers.FirstLine(state.TurnQuestion));
         state.Notify();
         if (wasNew && !state.IsNew) SessionSaved?.Invoke();
@@ -440,6 +448,7 @@ public partial class SessionPane : UserControl
             if (state.Process != process) return;
             if (state.Stopping && entry.Kind == SessionEntryKind.Error) entry = entry with { Text = "Stopped." };
             if (entry.Kind == SessionEntryKind.Tool) state.Steps++;
+            if (entry.Kind == SessionEntryKind.Answer && state.Log != null) state.Log.Answer = entry.Text;
             if (entry.Kind == SessionEntryKind.Note)
             {
                 state.LastNote = SessionAnswers.FirstLine(entry.Text);
@@ -608,6 +617,11 @@ public partial class SessionPane : UserControl
                     rewind.Click += (_, _) => OpenRewind(mark);
                     done.Inlines.Add(new Run("   "));
                     done.Inlines.Add(rewind);
+                }
+                if (state.Log is { } turnLog)
+                {
+                    state.DoneLines[turnLog] = done;
+                    AddReview(state, turnLog, done);
                 }
                 document.Blocks.Add(done);
                 return;

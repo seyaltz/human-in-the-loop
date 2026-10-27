@@ -82,7 +82,7 @@ public partial class SessionPane
         if (setting.AiCheck && !state.AiChecking && state.Coach == null && state.AiChecks < AiChecksPerTurn
             && DateTime.Now - log.Start >= AiCheckAfter && DateTime.Now - state.AiCheckAt >= AiCheckEvery && steps > state.AiCheckSteps)
         {
-            _ = AiCheck(state, log, steps);
+            Logged(AiCheck(state, log, steps), "ai check");
         }
     }
 
@@ -188,8 +188,8 @@ public partial class SessionPane
         CoachBody.Children.Add(ideas);
         CoachBody.Children.Add(Buttons(
             CardButton(state.Working ? "Send nudge" : "Send", true, () => SendNudge(state, nudge.Text)),
-            CardButton("Think differently", false, () => _ = ThinkDifferently(state, flag, nudge, ideas)),
-            CardButton("Fresh start", false, () => _ = FreshStart(state, flag)),
+            CardButton("Think differently", false, () => Logged(ThinkDifferently(state, flag, nudge, ideas), "think differently")),
+            CardButton("Fresh start", false, () => Logged(FreshStart(state, flag), "fresh start")),
             CardButton("Dismiss", false, () =>
             {
                 state.CoachDismissed.Add(flag.Rule);
@@ -282,9 +282,10 @@ public partial class SessionPane
         {
             state.Document.Blocks.Add(new Paragraph(new Run("⏱ " + diagnosis))
             {
-                FontSize = 11.5, Foreground = (Brush)FindResource("InkSoftBrush"), Margin = new Thickness(0, -4, 0, 8),
+                FontSize = 11.5, Foreground = (Brush)FindResource("InkSoftBrush"), Margin = new Thickness(0, 0, 0, 8),
             });
         }
+        CheckQuality(state);
     }
 
     private void AiCheckButton_Click(object sender, RoutedEventArgs e)
@@ -296,14 +297,40 @@ public partial class SessionPane
         UpdateBar();
     }
 
+    // grading on or off for this session, and the rubric: the built-in one, plus the user's own file
     private void GradeButton_Click(object sender, RoutedEventArgs e)
     {
         if (_state == null) return;
         SessionSetting setting = SessionSettings.Of(_state.Info.Id);
-        setting.Grade = !setting.Grade;
-        SessionSettings.Save();
-        UpdateBar();
+        var menu = new ContextMenu();
+        var toggle = new MenuItem { Header = "Grade each turn of 5+ steps against the rubric", IsCheckable = true, IsChecked = setting.Grade };
+        toggle.Click += (_, _) =>
+        {
+            setting.Grade = !setting.Grade;
+            SessionSettings.Save();
+            UpdateBar();
+        };
+        menu.Items.Add(toggle);
+        string? file = AppSettings.Get(Rubric.FileSetting);
+        var choose = new MenuItem { Header = string.IsNullOrEmpty(file) ? "Add my own rubric file..." : "My rubric: " + file + " (change...)" };
+        choose.Click += (_, _) =>
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog { Title = "A rubric: plain text, one criterion per line", Filter = "Text or Markdown|*.md;*.txt|All files|*.*" };
+            if (dialog.ShowDialog(Window.GetWindow(this)) == true) AppSettings.Set(Rubric.FileSetting, dialog.FileName);
+        };
+        menu.Items.Add(choose);
+        if (!string.IsNullOrEmpty(file))
+        {
+            var builtIn = new MenuItem { Header = "Built-in rubric only" };
+            builtIn.Click += (_, _) => AppSettings.Set(Rubric.FileSetting, "");
+            menu.Items.Add(builtIn);
+        }
+        Open(menu, GradeButton);
     }
+
+    // work started from a click or a timer and not awaited: a failure is logged, not lost
+    private static void Logged(Task task, string what) =>
+        task.ContinueWith(t => Log($"{what} failed: {t.Exception?.GetBaseException()}"), TaskContinuationOptions.OnlyOnFaulted);
 
     // what the coach did, for checking it afterwards (next to the exe, git-ignored)
     internal static void Log(string line)

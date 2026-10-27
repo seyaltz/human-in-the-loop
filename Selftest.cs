@@ -27,6 +27,7 @@ public static class Selftest
             StatsCases();
             WaitCases();
             FlagCases();
+            QualityCases();
         }
         catch (Exception ex)
         {
@@ -138,6 +139,29 @@ public static class Selftest
         Check(diagnosis != null && diagnosis.Contains("npm run deploy ran 3 min in the foreground - run it in the background next time"),
             "Diagnosis: a 3-minute foreground command - got: " + diagnosis);
         Check(Watch.Diagnosis(slow, TimeSpan.FromSeconds(90)) == null, "Diagnosis: none for a turn under 2 minutes");
+    }
+
+    private static void QualityCases()
+    {
+        TurnLog edited = LogOf(("Read", "a.py", false, "x"));
+        edited.Changed.Add(@"C:.py");
+        edited.Steps.Add(new TurnStep("e", "Write", "a.py", "Write", DateTime.Now, false) { End = DateTime.Now, Result = "ok" });
+        Check(Watch.Unverified(edited, "Done - a.py prints 1.") is { } nudge && nudge.Contains("pytest"),
+            "Unverified: a .py written, \"Done\", nothing run after - nudge names pytest");
+        TurnLog checkedLog = LogOf(("Read", "a.py", false, "x"));
+        checkedLog.Changed.Add(@"C:.cs");
+        checkedLog.Steps.Add(new TurnStep("e", "Edit", "a.cs", "Edit", DateTime.Now, false) { End = DateTime.Now, Result = "ok" });
+        checkedLog.Steps.Add(new TurnStep("b", "Bash", "dotnet build", "dotnet build", DateTime.Now, false) { Command = "cd r && dotnet build -c Release", End = DateTime.Now, Result = "ok" });
+        Check(Watch.Unverified(checkedLog, "Fixed, builds clean.") == null, "Unverified: a dotnet build after the edit is a check");
+        Check(Watch.Unverified(edited, "I wrote a.py; I have not run it yet.") == null, "Unverified: no completion claim, no flag");
+        Check(Watch.Unverified(LogOf(("Read", "a.py", false, "x")), "Done.") == null, "Unverified: nothing changed, no flag");
+
+        string raw = "[{\"criterion\":\"claims match the record\",\"verdict\":\"violated\",\"evidence\":\"says tests pass, ran none\"}," +
+                     "{\"criterion\":\"unknowns as facts\",\"verdict\":\"ok\",\"evidence\":\"\"}]";
+        Check(Rubric.Parse(raw) is [("claims match the record", "says tests pass, ran none")], "Rubric.Parse: the violated criterion with its evidence");
+        Check(Rubric.Parse("```json\n" + raw + "\n```") is { Count: 1 }, "Rubric.Parse: a fenced array is read");
+        Check(Rubric.Parse("The turn looks fine to me.") == null, "Rubric.Parse: prose is not a verdict (null)");
+        Check(Rubric.Parse("[]") is { Count: 0 }, "Rubric.Parse: an empty array is clean");
     }
 
     private static void WaitCases()
