@@ -500,6 +500,60 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   messages written (for ↑ / Ctrl+R), a branch's source and a rewind's resume point, the pane showing it - with a
   `Changed` event the panes and the list lights follow.
 
+### Watching the turn, learning from it (`TurnLog`, `Watch`, `SessionPane.Coach/Quality/Lessons`, `SessionLessons`, `SessionStats`)
+
+Measured on the author's own sessions (30 days, 119 h of turns): about a third of the time was waiting on builds,
+deploys and background tasks, 5% of tool calls failed, the same command families were worked out again in 20-30
+sessions, and about one turn in ten was interrupted or corrected. So a pane watches its turn, checks the result and
+keeps what went wrong as a lesson - nothing blocks or slows a turn, and nothing is written without a click.
+- `TurnLog`: the process's every stream line (`SessionProcess.Line`) gives each tool call its start, end, error and
+  result (300 characters), a shell command its family (`KeyOf`: the first two words after a leading `cd ... &&`), the
+  files Edit/Write changed and how many lines; a subagent's steps (`parent_tool_use_id`) are logged but are not the
+  turn's own work.
+- Waits: while a shell command runs, the footer shows `⧗ waiting on <command> · m:ss · usually ~N min` - "usually" is
+  the median of that family in the user's own sessions (3+ runs). When the window is not in front, a long wait (usual
+  over 2 min, or a background task with nothing else running) gives a tray balloon once, and a second when Claude
+  needs the user again (the turn ended, a card, a coach flag). The answer-shape note also says: run long commands in
+  the background, never wait in a sleep loop.
+- The coach (`Watch.Flag`, checked every 2 s): the same call failing 3 times in a row; the same call 4 times; 5 of the
+  last 10 calls failed; an error from a command written for another shell; no new step for 5 minutes with nothing
+  running; 12 steps without progress (no file written, no new result, no new error). On turns past 2 minutes, a Haiku
+  check once a minute (only when steps grew, at most 10, footer toggle **AI check**) answers `on track` or
+  `drifting: why` + `nudge: ...`; an answer for a turn that ended meanwhile is dropped. A flag is a card above the
+  box: the reason, the last 5 steps, an editable nudge, **Send nudge** (into the running turn), **Think differently**
+  (Haiku proposes 2-3 other approaches; a click puts one in the nudge), **Fresh start** (stop, rewind the conversation
+  to before the turn, the message back in the box with "What did not work last time: ..."), **Dismiss** (not again
+  this turn). A turn of 2+ minutes ends with `⏱ waiting m:ss · tools m:ss · model m:ss` and, when one stands out, the
+  biggest saving (a foreground command of 2+ minutes, a family that failed 3+ times).
+- Quality: a turn that changed files and says done / fixed / works / passes / implemented / ready / all set with no
+  check after the last change (a build, a test runner, a localhost call, a changed file run, a browser tool) gets the
+  coach card "Claims done, not verified after the last change" with a nudge naming the check for its files. The done
+  line of a turn that changed files has **review** (**⚑ review suggested** past 3 files or 150 lines): a separate
+  clean claude in the folder with Read/Grep/Glob, the ask, the file list and `git diff` (60,000 characters; none
+  outside a repo), asked for real defects only as `path:line - problem - why`; its card has **Send to Claude** and
+  **Dismiss**. A turn of 5+ steps is graded after it ends (Haiku, footer **Grade** with its menu: on/off and the user's
+  own rubric file appended to the built-in one, `Rubric.cs`): the ending's claims against the record of calls, as a
+  JSON array; the line `✓ graded: clean` / `⚠ graded: N issues` (click: the criteria and evidence) / `grade
+  unavailable`. The same criterion broken in 3 graded turns of a folder becomes a rule lesson.
+- Lessons: after a turn with 2+ failed calls that later worked, a next message that corrects it, or a stopped turn
+  asked again, the user's default model drafts 0-2 lessons (memory, skill or rule; the folder's dismissed ones with
+  their reasons are in the prompt). A card under the turn: **Save** (memory → the folder's project memory as the CLI
+  reports it, with its `MEMORY.md` line, the Factory's writer; skill → `~/.claude/skills/<name>/SKILL.md`; rule → the
+  end of `~/.claude/CLAUDE.md`), **Edit...** and **Dismiss...** (with a reason) in the panel above the box - a text box
+  inside the read-only transcript takes no keys. A saved lesson can be undone (the file and index line, the skill
+  folder, the appended text). Kept in `session-lessons.json` next to the exe with the per-folder grade counts.
+- Effort hint: a message of up to 80 characters with commit / push / merge / restart / rebuild / deploy / run /
+  status / pull / rebase / tag, effort not low: "A quick step · **Effort low** would answer faster"; the link sets low
+  until changed (effort restarts the process, about 12 s, so not "for one message").
+- `SessionStats` reads `~/.claude/projects` (files of the last 5 weeks; terminal, desktop and `-p` sessions; not the
+  automated "You are grading..." kind) with the audit's rules: active time from `turn_duration` (else gaps under 15
+  minutes; a pane's own turns are timed exactly in `pane-turns.json`), waiting, tools, model, the user's time
+  (question and plan cards), calls, failures, interruptions and corrections per week, durations and examples per
+  command family. Cached per file by size and time in `session-stats.json`; read at start in the background (measured:
+  526 files in 5 s).
+- Model calls run through `ClaudeOnce` (clean: `--setting-sources ""`, no MCP, no session saved). Every background
+  task logs a failure to `devbreak.log` next to the exe; so do balloons, flags, checks, grades, reviews and lessons.
+
 ### Setup (`CliSetup.cs`, `SetupPanel`)
 
 **Setup** in a session's header shows, in place of the chat, what Claude Code has in that folder - as the CLI sees it:
@@ -1021,6 +1075,14 @@ Score?, Xp, Lesson?)`), earned `Badges` (`record EarnedBadge(Id, At)`) and `Goal
   path), newest run first. Each shows its kind (MEMORY, RULE, SKILL, HOOK), name, state, description, content and
   `from "<run title>" · <date>`. It refreshes when a run changes while it is shown. Nothing kept yet: a line that says
   what will show up there.
+- First, **Where your Claude Code time goes** (`SessionStats`, the user's own sessions): a row per week for the last
+  4 - "Week of <date> · N h active · N% of N calls failed · N stops · N corrections", a bar of waiting / tools /
+  model / you, their hours - and the latest week's top 5 waits and top 5 failing families. **Learn from my sessions**:
+  the command families run in 3+ sessions, minus those an installed skill names and inline scripts or basic shell
+  words, top 8 with examples, failures and folders, to the user's default model for skill drafts; each draft is
+  editable here with **Save** (`~/.claude/skills`) and **Dismiss**.
+- Last, **From Sessions**: the lessons Sessions panes proposed (saved or waiting), per folder, with **Undo** for a
+  saved one.
 
 ## Main window (`QuestionWindow`): Quiz, Learn, Stats, TL;DR, Sessions, Factory and Insights in one window
 
@@ -1148,6 +1210,13 @@ unanswered message from history.
   (word before `(`) `#DCDCAA`, plain `#D4D4D4`. Token regexes for C-like languages (java, js/ts, c#, kotlin...),
   SQL (case-insensitive keywords, `--` comments) and hash-comment languages (bash, python, yaml...).
 - Inline `` `code` `` → code font in `#C7254E`. Everything else plain text.
+- Tables: a `| a | b |` header row followed by a `|---|` rule (`:--`, `:-:`, `--:` set left / center / right) → a
+  real table: bold header on a violet tint, thin cell borders, inline Markdown in cells, as many cells per row as the
+  header has (extra dropped, missing empty); `\|` is a bar inside a cell.
+- A path to an image or video on a local drive (`C:\...\x.png|jpg|jpeg|gif|webp|bmp|mp4|m4v|mov|webm|mkv|avi`, also
+  inside `` `code` ``, where it may have spaces) that exists becomes a link that opens it in Windows' own app; an
+  image also shows as a thumbnail (up to 360×220) that opens it. A network path or a mapped network drive stays plain
+  text (looking at it would make Windows connect to that server), so does a missing file.
 - Fenced code is a **code card** (a `BlockUIContainer`): a header with "<language> · N lines", **Copy** (copies the
   code; "Copied ✓") and, for code over 12 lines, **Show all N lines** / **Hide**; such code starts folded to its
   first 6 lines with a fade at the bottom. The buttons are plain text on the dark card (their label is their
@@ -1224,5 +1293,17 @@ opens a pane whose process has `--fork-session --session-id` and answers from th
 the list; /clear opens a new session; "?" opens the sheet and its /compact button fills the box; "/" opens the command list (the CLI's, with descriptions and tags) within seconds,
 "/brain" narrows it to the brainstorming skill, ↓ moves, Tab puts "/<name> " in the box with its hint line above, a
 click on a row does the same, Esc closes the list - and a test never presses Enter on a command in a real session
-(it runs there). Drive every test from a throwaway copy of the
-exe (its own `game.json`) and capture the window itself, never the screen.
+(it runs there). Watching and learning: `DevBreak.exe -selftest` writes `selftest.txt` next to the exe with every
+rule case PASS and "ALL PASS" (exit code 0) - the turn log, `SessionStats` on a temp folder with a half-written last
+line, the wait text, each coach rule with a case that must not fire, the diagnosis line, "done" without proof, the
+rubric parser on JSON, fenced JSON and prose, the lesson triggers and parser, Save then Undo of each lesson kind in a
+temp home leaving the files as they were, the Learn filter, the quick-step words; `-selftest real` adds a timed read
+of the real sessions folder whose totals match an independent count. In a throwaway folder's session: a foreground
+`ping` shows the wait chip with its running time; with the window minimized a background task gives the two balloons
+(`devbreak.log`); a failing command repeated gives the coach card, and Send nudge reaches the running turn; a turn past
+2 minutes logs an AI check; five files written and "Done" unrun gives the "Claims done" card, the grade line, and a
+review that finds the real defect; a correction gives a lesson card whose Edit... takes typed keys and whose
+Dismiss... keeps the reason; Insights shows 4 week rows and Learn returns drafts; "commit and push" typed (not sent)
+shows the effort hint whose link sets Effort: low. The test scripts type only into a pane whose folder is the
+throwaway one, check the pane shows the session they picked, and never press Enter elsewhere. Drive every test from a
+throwaway copy of the exe (its own `game.json`) and capture the window itself, never the screen.

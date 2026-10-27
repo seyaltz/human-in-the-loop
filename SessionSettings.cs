@@ -12,6 +12,12 @@ public sealed class SessionSetting
     public string? Model { get; set; }
     public string? Effort { get; set; }
 
+    /// <summary>The coach's AI check on long turns (a small model, once a minute): on unless turned off in the footer.</summary>
+    public bool AiCheck { get; set; } = true;
+
+    /// <summary>Grading each substantial turn against the rubric, after it ends: on unless turned off in the footer.</summary>
+    public bool Grade { get; set; } = true;
+
     /// <summary>
     /// The conversation rewinds made here: the message cut from and the line the session went on from (null: its
     /// start). The file keeps the cut branch; reading the session back leaves it out.

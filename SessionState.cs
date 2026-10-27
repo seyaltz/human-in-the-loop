@@ -10,6 +10,9 @@ namespace DevBreak;
 /// and the pane it is on (at most one - a document can be shown in one place). A turn keeps running whichever pane,
 /// if any, shows it; <see cref="Changed"/> tells the panes and the list lights.
 /// </summary>
+/// <summary>What the coach shows: why, the steps that show it, the nudge it suggests (editable), the rule it came from.</summary>
+public sealed record CoachFlag(string Reason, List<string> Evidence, string Nudge, string Rule);
+
 public sealed class SessionState
 {
     public required SessionInfo Info { get; set; }
@@ -94,6 +97,34 @@ public sealed class SessionState
     internal List<string> History { get; } = [];
 
     /// <summary>Working, failed or idle changed, or a step was counted.</summary>
+    /// <summary>This turn told the user (tray) it waits: it tells them again when it needs them. The step it was about.</summary>
+    public bool ToldWaiting { get; set; }
+    public string WaitToldFor { get; set; } = "";
+
+    /// <summary>The coach's card for this session (null: none), the reasons dismissed this turn, its AI check's bookkeeping.</summary>
+    public CoachFlag? Coach { get; set; }
+    public HashSet<string> CoachDismissed { get; } = [];
+
+    /// <summary>Each turn's done line, where its grade and review go when they come back later.</summary>
+    public Dictionary<TurnLog, Block> DoneLines { get; } = [];
+    public bool Grading { get; set; }
+
+    /// <summary>The last turn was stopped by the user: a new message then is asking again (a lesson may be in it).</summary>
+    public bool LastStopped { get; set; }
+
+    /// <summary>The next message is one a card sent (a nudge, a review): it is not the user correcting Claude.</summary>
+    public bool FromCard { get; set; }
+    public int AiChecks { get; set; }
+    public int AiCheckSteps { get; set; }
+    public DateTime AiCheckAt { get; set; }
+    public bool AiChecking { get; set; }
+
+    /// <summary>The running (or last) turn's tool calls, read from the process's lines.</summary>
+    public TurnLog? Log { get; set; }
+
+    /// <summary>The turns of this run, oldest first: the lessons look back at them.</summary>
+    public List<TurnLog> PastLogs { get; } = [];
+
     public event Action<SessionState>? Changed;
 
     public void Notify() => Changed?.Invoke(this);

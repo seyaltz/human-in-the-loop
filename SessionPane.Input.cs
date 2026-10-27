@@ -320,6 +320,23 @@ public partial class SessionPane
             CommandHint.Inlines.Add(new Run("ultrathink") { FontWeight = FontWeights.Bold, Foreground = violet });
             CommandHint.Inlines.Add(new Run("  ·  Claude thinks harder on this message"));
         }
+        else if (show && _state is { } state && !text.StartsWith('/') && Watch.IsQuickStep(text)
+                 && SessionSettings.Of(state.Info.Id) is { Effort: not "low" } setting)
+        {
+            // a suggestion only: effort changes by restarting the process (about 12 s), so it stays low until changed back
+            CommandHint.Inlines.Add(new Run("A quick step") { FontWeight = FontWeights.Bold, Foreground = violet });
+            CommandHint.Inlines.Add(new Run("  ·  "));
+            var low = new Hyperlink(new Run("Effort low")) { Foreground = violet, ToolTip = "Sets this session's effort to low until you change it (the footer shows it)" };
+            low.Click += (_, _) =>
+            {
+                setting.Effort = "low";
+                SessionSettings.Save();
+                UpdateBar();
+                UpdateHint(true);
+            };
+            CommandHint.Inlines.Add(low);
+            CommandHint.Inlines.Add(new Run(" would answer faster"));
+        }
         else if (show && _state?.PendingShell.Count > 0)
         {
             CommandHint.Inlines.Add(new Run("! " + _state.PendingShell.Count + " shell result" + (_state.PendingShell.Count == 1 ? "" : "s")) { FontWeight = FontWeights.Bold, Foreground = violet });

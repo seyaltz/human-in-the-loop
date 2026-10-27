@@ -93,6 +93,7 @@ public partial class SessionPane : UserControl
         ShowSetup(false);
         Update();
         UpdateQueued();
+        UpdateCoach();
         LoadCommands(state.Info.Folder);
         if (!state.Loaded)
         {
@@ -167,6 +168,8 @@ public partial class SessionPane : UserControl
     {
         SessionState? state = _state;
         LiveBox.Visibility = state?.Working == true ? Visibility.Visible : Visibility.Collapsed;
+        UpdateWait();
+        if (state != null) WatchTurn(state);
         if (state?.Working != true) return;
         LiveTitle.Text = $"● Working · {Span(DateTime.Now - state.TurnStartedAt)} · {state.Steps} step{(state.Steps == 1 ? "" : "s")}";
         bool note = state.LastNote.Length > 0;
@@ -350,6 +353,18 @@ public partial class SessionPane : UserControl
         state.Stopping = false;
         state.TurnStartedAt = DateTime.Now;
         state.LastNote = "";
+        TurnLog? previous = state.Log;
+        if (previous != null) state.PastLogs.Add(previous);
+        LessonsOnMessage(state, previous, message, state.LastStopped);
+        state.LastStopped = false;
+        state.Log = new TurnLog(message);
+        state.ToldWaiting = false;
+        state.WaitToldFor = "";
+        state.Coach = null;
+        state.CoachDismissed.Clear();
+        state.AiChecks = state.AiCheckSteps = 0;
+        state.AiCheckAt = DateTime.Now;
+        UpdateCoach();
         state.Notify();
         bool wasNew = state.IsNew;
         try
@@ -357,6 +372,7 @@ public partial class SessionPane : UserControl
             SessionProcess process = await ProcessFor(state);
             bool finished = await process.TurnAsync(message);
             if (!finished && state.Stopping) Add(state, new SessionEntry(SessionEntryKind.Error, "Stopped."));
+            state.LastStopped = state.Stopping;
             if (finished || ClaudeSessions.FileOf(state.Info.Id) != null)
             {
                 state.IsNew = false;
@@ -371,6 +387,16 @@ public partial class SessionPane : UserControl
         state.Running = null;
         state.Stopping = false;
         CloseCards(state, "No longer asked - the turn ended.");
+        try
+        {
+            AfterTurn(state);
+        }
+        catch (Exception ex)
+        {
+            // the coach's after-turn work must never cost the turn its wrap-up (the queue, the context, the stamp)
+            Log("after turn failed: " + ex);
+        }
+        CallBack(state, "Claude finished: " + SessionAnswers.FirstLine(state.TurnQuestion));
         state.Notify();
         if (wasNew && !state.IsNew) SessionSaved?.Invoke();
         Stamp(state);
@@ -417,11 +443,16 @@ public partial class SessionPane : UserControl
     private void Wire(SessionState state, SessionProcess process)
     {
         WireControls(state, process);
+        process.Line += line => Dispatcher.Invoke(() =>
+        {
+            if (state.Process == process) state.Log?.Read(line);
+        });
         process.Entry += entry => Dispatcher.Invoke(() =>
         {
             if (state.Process != process) return;
             if (state.Stopping && entry.Kind == SessionEntryKind.Error) entry = entry with { Text = "Stopped." };
             if (entry.Kind == SessionEntryKind.Tool) state.Steps++;
+            if (entry.Kind == SessionEntryKind.Answer && state.Log != null) state.Log.Answer = entry.Text;
             if (entry.Kind == SessionEntryKind.Note)
             {
                 state.LastNote = SessionAnswers.FirstLine(entry.Text);
@@ -432,6 +463,10 @@ public partial class SessionPane : UserControl
         });
         process.Result += root => Dispatcher.Invoke(() =>
         {
+            if (root.TryGetProperty("duration_ms", out System.Text.Json.JsonElement ms) && ms.ValueKind == System.Text.Json.JsonValueKind.Number)
+            {
+                SessionStats.RecordPaneTurn(state.Info.Id, state.TurnStartedAt, ms.GetDouble() / 1000);
+            }
             state.Cost += process.LastTurnCost;
             state.Notify();
         });
@@ -586,6 +621,11 @@ public partial class SessionPane : UserControl
                     rewind.Click += (_, _) => OpenRewind(mark);
                     done.Inlines.Add(new Run("   "));
                     done.Inlines.Add(rewind);
+                }
+                if (state.Log is { } turnLog)
+                {
+                    state.DoneLines[turnLog] = done;
+                    AddReview(state, turnLog, done);
                 }
                 document.Blocks.Add(done);
                 return;

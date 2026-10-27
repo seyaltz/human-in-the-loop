@@ -335,7 +335,7 @@ public static class QuestionGenerator
             """;
     }
 
-    private static async Task<string> RunAsync(IEnumerable<string> args, string prompt, string workingDirectory, TimeSpan timeout)
+    internal static async Task<string> RunAsync(IEnumerable<string> args, string prompt, string workingDirectory, TimeSpan timeout)
     {
         var start = new ProcessStartInfo("claude")
         {

@@ -52,6 +52,11 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (e.Args.Length > 0 && e.Args[0] == "-selftest")
+        {
+            Shutdown(Selftest.Run(e.Args.Length > 1 && e.Args[1] == "real"));
+            return;
+        }
         if (!FirstCopy())
         {
             Shutdown(0);
@@ -105,6 +110,7 @@ public partial class App : Application
         _pool.FillAll(Level.At(DateTime.Now.TimeOfDay));
         LearnPath.PrepareAll();
         Tldr.PrepareAll();
+        _ = SessionStats.RefreshAsync();
         _timer.Tick += (_, _) => Tick();
         _timer.Start();
     }

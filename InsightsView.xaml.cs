@@ -25,8 +25,10 @@ public partial class InsightsView : UserControl
         {
             _listening = true;
             Factory.Changed += _ => Dispatcher.BeginInvoke(() => { if (IsVisible) Refresh(); });
+            SessionStats.Changed += () => Dispatcher.BeginInvoke(() => { if (IsVisible) Refresh(); });
         }
         Body.Children.Clear();
+        AddTime();
         // the live runs' kept lessons, and the insights kept from runs that were deleted
         var kept = Factory.Runs
             .SelectMany(run => run.Lessons.Where(l => l.Status is "saved" or "applied" or "pending")
@@ -50,6 +52,7 @@ public partial class InsightsView : UserControl
             string name = repo.Key.Length > 0 ? Path.GetFileName(repo.Key.TrimEnd('\\', '/')) : "(no repo)";
             Body.Children.Add(Card(name, $"{Count(repo.Count(), "insight")} · {repo.Key}", list));
         }
+        AddSessionLessons();
     }
 
     private static string Count(int n, string what) => $"{n} {what}{(n == 1 ? "" : "s")}";

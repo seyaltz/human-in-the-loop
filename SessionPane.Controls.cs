@@ -36,6 +36,8 @@ public partial class SessionPane
         ContextButton.Foreground = state.ContextPercent >= 80 ? (Brush)FindResource("CoralInkBrush") : (Brush)FindResource("InkBrush");
         ContextButton.ToolTip = state.ContextDetail.Length > 0 ? state.ContextDetail : null;
         CostText.Text = state.Cost > 0 ? $"${state.Cost:0.00} this run" : "";
+        AiCheckButton.Content = "AI check: " + (setting.AiCheck ? "on" : "off");
+        GradeButton.Content = "Grade: " + (setting.Grade ? "on" : "off");
         TaskChips.Children.Clear();
         foreach ((string id, string what) in state.Tasks)
         {
@@ -319,6 +321,7 @@ public partial class SessionPane
         }
 
         state.OpenCards.Add((ask, Close));
+        CallBack(state, "Claude needs you: " + (ask.Tool == "ExitPlanMode" ? "approve the plan" : ask.Tool == "AskUserQuestion" ? "a question" : "allow " + ask.Tool));
         state.LastNote = "Waiting for you: " + (ask.Tool == "ExitPlanMode" ? "approve the plan" : ask.Tool == "AskUserQuestion" ? "Claude asks you" : "allow " + ask.Tool + "?");
         state.LastNoteAt = DateTime.Now;
         state.Notify();

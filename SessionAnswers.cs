@@ -29,7 +29,8 @@ public static class SessionAnswers
         "## Worth knowing (what to learn: traps found, why something works the way it does) / " +
         "## Decisions for you (what I must decide for the next step, numbered questions) / " +
         "## Details (tables, logs, command output, long detail - last). A short reply to a short question needs no headings. " +
-        "On work longer than a minute, write a one-line \"Now: ... · Done so far: ...\" note between steps about once a minute.]";
+        "On work longer than a minute, write a one-line \"Now: ... · Done so far: ...\" note between steps about once a minute. " +
+        "Run long commands (builds, deploys, test suites) in the background and keep doing independent work; never wait in a sleep loop.]";
 
     /// <summary>A message with the shape note at its end.</summary>
     public static string WithShape(string message) => message + "\n\n" + Shape;
