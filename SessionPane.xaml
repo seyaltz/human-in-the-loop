@@ -69,6 +69,20 @@
                                    Visibility="Collapsed" />
                         <!-- files pasted, dropped or picked, sent with the next message -->
                         <WrapPanel x:Name="Attachments" Margin="0,0,0,2" Visibility="Collapsed" />
+                        <!-- "/" at the start of the message: the CLI's commands and skills, narrowed as you type -->
+                        <Border x:Name="CommandMenu" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource VioletRingBrush}"
+                                BorderThickness="1" CornerRadius="10" Padding="4" Margin="48,0,0,6" Visibility="Collapsed">
+                            <DockPanel>
+                                <TextBlock x:Name="CommandKeys" DockPanel.Dock="Bottom" FontSize="11.5" Foreground="{StaticResource MutedBrush}"
+                                           Margin="8,4,8,2" TextWrapping="Wrap" />
+                                <ScrollViewer x:Name="CommandScroll" MaxHeight="264" VerticalScrollBarVisibility="Auto" Focusable="False">
+                                    <StackPanel x:Name="CommandList" />
+                                </ScrollViewer>
+                            </DockPanel>
+                        </Border>
+                        <!-- the picked command's arguments and what it does, while its message is written -->
+                        <TextBlock x:Name="CommandHint" FontSize="12" Foreground="{StaticResource InkSoftBrush}" Margin="50,0,0,4"
+                                   TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
                         <DockPanel>
                             <Button x:Name="AddFilesButton" DockPanel.Dock="Left" Style="{StaticResource IconButton}" Width="40" Height="40"
                                     Margin="0,0,8,0" VerticalAlignment="Top" IsEnabled="False" Click="AddFiles_Click"
@@ -78,9 +92,10 @@
                             <TextBox x:Name="InputBox" Style="{StaticResource NotebookBox}" MinHeight="64" MaxHeight="160"
                                      TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
                                      VerticalContentAlignment="Top" IsEnabled="False" AutomationProperties.Name="Your message"
-                                     PreviewKeyDown="InputBox_PreviewKeyDown" />
+                                     PreviewKeyDown="InputBox_PreviewKeyDown" TextChanged="InputBox_TextChanged"
+                                     SelectionChanged="InputBox_SelectionChanged" LostKeyboardFocus="InputBox_LostKeyboardFocus" GotKeyboardFocus="InputBox_GotKeyboardFocus" />
                         </DockPanel>
-                        <TextBlock Text="Enter to send, Shift+Enter for a new line. Ctrl+V, drop or + to add files. Claude may edit files and run commands in this folder."
+                        <TextBlock Text="Enter to send, Shift+Enter for a new line. / for commands and skills. Ctrl+V, drop or + to add files. Claude may edit files and run commands in this folder."
                                    Style="{StaticResource Caption}" FontSize="11.5" Margin="2,6,0,0" TextWrapping="Wrap" />
                     </StackPanel>
                 </DockPanel>

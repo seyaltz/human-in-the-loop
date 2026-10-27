@@ -315,7 +315,9 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   for the next step, numbered questions) / ## Details (tables, logs, command output, long detail - last). A short
   reply to a short question needs no headings. On work longer than a minute, write a one-line "Now: ... · Done so
   far: ..." note between steps about once a minute.]". In the message, not `--append-system-prompt`: measured, the
-  same words as an appended system prompt were not followed (2 of 2 answers without headings), the note was. The
+  same words as an appended system prompt were not followed (2 of 2 answers without headings), the note was. A
+  message starting with "/" gets no note: measured, the CLI passes everything after the command name to it as its
+  arguments (`<command-args>...</command-args>` in the session file), the note included. The
   transcript hides the note (cut from the last "[Dev break - answer shape:"), live and when a saved session is read. Each streamed `assistant` line adds its
   text and tool steps as they come; the `result` line adds "✓ done · <seconds> s · $<cost>" or its error. No timeout;
   **Stop** kills the process tree ("Stopped.").
@@ -336,7 +338,26 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   to list it all in order (steps in mono with the tool name in violet, notes rendered small and faded with a left
   rule; the last note equal to the answer is dropped from the fold); the done line; errors in coral. While a turn runs on screen the view goes to the start of the reply once and stays; a
   session opens at the start of its latest reply; the input (Enter sends), Send, Stop, and the note "Enter to send,
-  Shift+Enter for a new line. Ctrl+V, drop or + to add files. Claude may edit files and run commands in this folder.".
+  Shift+Enter for a new line. / for commands and skills. Ctrl+V, drop or + to add files. Claude may edit files and run
+  commands in this folder.".
+  **"/" menu** (`SlashCommands`), like the CLI's: the commands the user's CLI takes in the session's folder - built-ins,
+  the user's and the project's skills and commands, plugins' - read when a session is shown, once per folder while the
+  app runs (again after a failed read): `claude -p --input-format stream-json --output-format stream-json --verbose`
+  in the folder, the `initialize` control request, the `commands` of its reply (`name`, `description`,
+  `argumentHint`, `aliases`, `builtin`), then the process tree is killed. Measured: 247 commands in 1.8 s, no model
+  call, no session file. Left out: `doctor`, `color`, `focus`, `reload-plugins` (a turn's init line lists them as
+  `terminal_slash_commands`). While the message starts with "/" and the caret is in its first word, a box above the
+  input (card white, `VioletRingBrush` edge, rounded, up to 264 px, scrolls) lists the matches: a name or alias that
+  starts with the typed word first, then a plugin command whose part after "plugin:" does, then a name holding it, then
+  a description holding it (A-Z within each); up to 60 shown. A row: "/name" (bold mono) and its argument hint (muted),
+  a tag on the right - "built-in", the plugin's name or "yours" - and the description on one trimmed line (in full as
+  tooltip); the chosen row in violet tint. Under the list: "↑ ↓ move · Tab or Enter pick · Esc close · N of M" (" - type
+  more to narrow" over 60); no match: "No command or skill matches /<word> - Enter sends it as it is · Esc close"; before
+  the list is read: "Reading the CLI's commands...". ↑ ↓ move (round), Tab or Enter (or a click) puts "/name " in place
+  of the word, keeping the rest of the message; Enter on a command already written in full sends it; Esc closes the
+  box until the message no longer starts with "/". Focus going to another control closes it; another window in front
+  leaves it open. Once a known command (or alias) starts the message and the box is closed, a line above the input
+  shows "/name <argument hint> · <description>" (trimmed, the description as tooltip).
   **Live box** above the input while a turn runs (violet tint, rounded): "● Working · <41 s | 3 min 10 s> · N steps",
   then the first line of the last text Claude wrote on the way and "Claude wrote this <time> ago", ticking every
   second (`DispatcherTimer`); gone when the turn ends.
@@ -351,7 +372,7 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   only "- <path>" lines, "]" last; a message that merely quotes the header shows no chips). Only a local drive path
   ("C:\...") is looked at on disk for a chip (exists, folder, thumbnail); any other path - a network path
   `\\server\share\...` would make Windows connect to that server and send it the user's credentials - gets a plain
-  badge. Picking another session for the pane drops the unsent files. Every opened session keeps its transcript, and a running turn
+  badge. Picking another session for the pane drops the unsent files and that folder's "/" list. Every opened session keeps its transcript, and a running turn
   keeps going while another session is on screen. After a new session's first turn the list refreshes.
 - **Lights**: a dot before the session in the list (9 px) and before the title in its pane (11 px): green `#2EB85C`,
   pulsing (opacity 1 - 0.35, 0.8 s, forever), while a turn runs; red `#E5482E` when its last turn ended with an error
@@ -1094,5 +1115,8 @@ turns opens with every turn but the newest as one "You: ... · Claude: ..." line
 Ctrl+V with copied files and a folder and then with a screenshot gives LOG / DIR / thumbnail chips, a turn sent with
 them shows the chips in the You box (not the paths, not the shape note), a turn of more than 30 s shows the live box
 with Claude's "Now: ..." note, and the answer comes back with Result / What I did / Worth knowing, Decisions for you in
-its box and Details folded. Drive every test from a throwaway copy of the
+its box and Details folded; "/" opens the command list (the CLI's, with descriptions and tags) within seconds,
+"/brain" narrows it to the brainstorming skill, ↓ moves, Tab puts "/<name> " in the box with its hint line above, a
+click on a row does the same, Esc closes the list - and a test never presses Enter on a command in a real session
+(it runs there). Drive every test from a throwaway copy of the
 exe (its own `game.json`) and capture the window itself, never the screen.
