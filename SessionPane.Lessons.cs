@@ -26,7 +26,9 @@ public partial class SessionPane
     // a new message: does it correct the turn before it, or ask again what was stopped
     private void LessonsOnMessage(SessionState state, TurnLog? previous, string message, bool stopped)
     {
-        if (previous == null) return;
+        bool fromCard = state.FromCard;
+        state.FromCard = false;
+        if (previous == null || fromCard) return;
         string text = AttachedFiles.Split(SessionAnswers.WithoutShape(message)).Text;
         bool reasked = stopped && text.Trim().Length > 0;
         if (SessionLessons.ShouldPropose(previous, text, reasked) && (reasked || SessionStats.Correction.IsMatch(text)))
@@ -133,6 +135,7 @@ public partial class SessionPane
 
     private async Task SaveLesson(SessionState state, FactoryLesson lesson, StackPanel body, string name, string description, string content)
     {
+        if (!SessionLessons.TryBeginSave(lesson)) return;
         lesson.Name = name.Trim().Length > 0 ? name.Trim() : lesson.Name;
         lesson.Description = description.Trim();
         lesson.Content = content.Trim();
@@ -153,6 +156,7 @@ public partial class SessionPane
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.IO.IOException or UnauthorizedAccessException or TimeoutException)
         {
+            lesson.Status = "pending";
             body.Children.Add(Say("Could not save: " + ex.Message, false));
         }
     }

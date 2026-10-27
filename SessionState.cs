@@ -111,6 +111,9 @@ public sealed class SessionState
 
     /// <summary>The last turn was stopped by the user: a new message then is asking again (a lesson may be in it).</summary>
     public bool LastStopped { get; set; }
+
+    /// <summary>The next message is one a card sent (a nudge, a review): it is not the user correcting Claude.</summary>
+    public bool FromCard { get; set; }
     public int AiChecks { get; set; }
     public int AiCheckSteps { get; set; }
     public DateTime AiCheckAt { get; set; }

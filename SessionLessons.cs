@@ -186,6 +186,20 @@ public static class SessionLessons
         return file;
     }
 
+    /// <summary>
+    /// Marks a lesson as being saved; false when it already is, or is saved - a second click while the first save waits
+    /// (finding the memory folder starts claude, up to 90 s) would write a second file that Undo cannot reach.
+    /// </summary>
+    public static bool TryBeginSave(FactoryLesson lesson)
+    {
+        lock (Gate)
+        {
+            if (lesson.Status is "saving" or "saved") return false;
+            lesson.Status = "saving";
+            return true;
+        }
+    }
+
     /// <summary>Takes a saved lesson back out: the memory file and its index line, the skill's folder, the rule's text.</summary>
     public static void Undo(FactoryLesson lesson)
     {

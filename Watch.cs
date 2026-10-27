@@ -27,7 +27,10 @@ public static class Watch
     /// own work, not the turn's: they are left out.
     /// </summary>
     /// <param name="busy">a command or a background task is running: silence is waiting, not being stuck</param>
-    public static string? Flag(TurnLog log, DateTime now, bool busy)
+    public static string? Flag(TurnLog log, DateTime now, bool busy) => FlagRule(log, now, busy)?.Reason;
+
+    /// <summary>The flag with a fixed id for its rule (a reason can carry a live count; Dismiss keys on the id).</summary>
+    public static (string Rule, string Reason)? FlagRule(TurnLog log, DateTime now, bool busy)
     {
         List<TurnStep> done = [.. log.Steps.Where(s => !s.Sub && s.End != null)];
         if (done.Count > 0)
@@ -35,13 +38,13 @@ public static class Watch
             TurnStep last = done[^1];
             bool Same(int n, Func<TurnStep, bool> also) => done.Count >= n &&
                 done.TakeLast(n).All(s => s.Tool == last.Tool && s.Summary == last.Summary && s.Error == last.Error && also(s));
-            if (Same(3, s => s.Error)) return $"the same {last.Tool} call failed 3 times in a row: {last.Summary}";
-            if (Same(4, _ => true)) return $"it ran the same {last.Tool} call 4 times in a row: {last.Summary}";
-            if (done.TakeLast(10).Count(s => s.Error) >= 5) return "5 of its last 10 tool calls failed";
-            if (last.Error && Dialect.IsMatch(last.Result)) return "a command written for another shell: " + Short(last.Result, 90);
+            if (Same(3, s => s.Error)) return ("failed-3", $"the same {last.Tool} call failed 3 times in a row: {last.Summary}");
+            if (Same(4, _ => true)) return ("same-4", $"it ran the same {last.Tool} call 4 times in a row: {last.Summary}");
+            if (done.TakeLast(10).Count(s => s.Error) >= 5) return ("errors", "5 of its last 10 tool calls failed");
+            if (last.Error && Dialect.IsMatch(last.Result)) return ("dialect", "a command written for another shell: " + Short(last.Result, 90));
         }
         DateTime lastMove = log.Steps.Where(s => !s.Sub).Select(s => s.End ?? s.Start).DefaultIfEmpty(log.Start).Max();
-        if (!busy && now - lastMove >= Silent) return "no new step for 5 minutes, and nothing is running";
+        if (!busy && now - lastMove >= Silent) return ("silent", "no new step for 5 minutes, and nothing is running");
         int since = 0;
         var seen = new HashSet<string>();
         var errors = new HashSet<string>();
@@ -52,7 +55,7 @@ public static class Watch
                 : s.Tool is "Edit" or "Write" or "NotebookEdit" or "MultiEdit" || seen.Add(s.Result);
             since = progress ? 0 : since + 1;
         }
-        return since >= NoProgress ? $"{since} steps without progress: no file written, no new result, no new error" : null;
+        return since >= NoProgress ? ("no-progress", $"{since} steps without progress: no file written, no new result, no new error") : null;
     }
 
     /// <summary>

@@ -60,7 +60,17 @@ public static class SessionStats
                 {
                     cache = null;
                 }
-                Data data = Scan(Root, cache);
+                Data data;
+                try
+                {
+                    data = Scan(Root, cache);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+                {
+                    // a folder that went away or is locked mid-read: what could be read is lost this time, and it says so
+                    SessionPane.Log("session stats: could not read the sessions folder - " + ex.Message);
+                    data = new Data([]);
+                }
                 Current = data;
                 try
                 {
@@ -161,7 +171,7 @@ public static class SessionStats
                     {
                         files.Add(ReadFile(path, info));
                     }
-                    catch (IOException)
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                     {
                         // locked or gone: next time
                     }

@@ -73,9 +73,9 @@ public partial class SessionPane
         if (!state.Working || state.Log is not { } log || DateTime.Now - _lastWatch < TimeSpan.FromSeconds(2)) return;
         _lastWatch = DateTime.Now;
         bool busy = log.Running != null || state.Tasks.Count > 0;
-        if (state.Coach == null && Watch.Flag(log, DateTime.Now, busy) is { } reason && !state.CoachDismissed.Contains(Rule(reason)))
+        if (state.Coach == null && Watch.FlagRule(log, DateTime.Now, busy) is { } flag && !state.CoachDismissed.Contains(flag.Rule))
         {
-            Raise(state, new CoachFlag(reason, Evidence(log), DefaultNudge(reason), Rule(reason)));
+            Raise(state, new CoachFlag(flag.Reason, Evidence(log), DefaultNudge(flag.Reason), flag.Rule));
         }
         SessionSetting setting = SessionSettings.Of(state.Info.Id);
         int steps = log.Steps.Count(s => !s.Sub);
@@ -85,9 +85,6 @@ public partial class SessionPane
             Logged(AiCheck(state, log, steps), "ai check");
         }
     }
-
-    // a reason's rule, without its details: a dismissed rule is not raised again this turn
-    private static string Rule(string reason) => reason.Split(':')[0].Split(' ').Take(4) is var words ? string.Join(' ', words) : reason;
 
     private static List<string> Evidence(TurnLog log) =>
         [.. log.Steps.Where(s => !s.Sub).TakeLast(5).Select(s => $"{s.Tool}: {Shorten(s.Summary, 90)}{(s.End == null ? "  (running)" : s.Error ? "  ✗ " + Shorten(s.Result, 80) : "  ✓")}")];
@@ -206,8 +203,19 @@ public partial class SessionPane
         state.CoachDismissed.Add(state.Coach?.Rule ?? "");
         state.Coach = null;
         UpdateCoach();
-        InputBox.Text = text.Trim();
-        Send(now: state.Working);
+        SendFromCard(state, text.Trim());
+    }
+
+    /// <summary>
+    /// A message a card sends for the user: to the card's own session, through the pane that shows it now (a session
+    /// moves between panes; this pane may show another one by now), marked so it is not read as the user correcting Claude.
+    /// </summary>
+    private static void SendFromCard(SessionState state, string text)
+    {
+        if (state.ShownIn is not { } pane) return;
+        state.FromCard = true;
+        pane.InputBox.Text = text;
+        pane.Send(now: state.Working);
     }
 
     // a small model proposes other ways to the user's goal, given what failed; one click puts one in the nudge

@@ -66,11 +66,14 @@ public partial class InsightsView
             Margin = new Thickness(0, 10, 0, 0), IsEnabled = data != null,
             ToolTip = "Find the procedures you re-run in many sessions and draft a skill for each - you review every one",
         };
-        _drafts = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        // the drafts outlive a refresh of the page (a factory run or a new read refreshes it while Learn waits)
+        _drafts ??= new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        if (_drafts.Parent is Panel old) old.Children.Remove(_drafts);
+        StackPanel drafts = _drafts;
         learn.Click += async (_, _) =>
         {
             learn.IsEnabled = false;
-            await Learn(_drafts);
+            await Learn(drafts);
             learn.IsEnabled = true;
         };
         content.Children.Add(learn);
@@ -159,11 +162,8 @@ public partial class InsightsView
             return;
         }
         drafts.Children.Add(Caption($"{skills.Count} skill draft{(skills.Count == 1 ? "" : "s")} - edit, then Save (to ~/.claude/skills) or Dismiss."));
-        foreach (FactoryLesson skill in skills.Where(s => s.Kind == "skill"))
-        {
-            SessionLessons.Record("(all sessions)", "", skill);
-            drafts.Children.Add(Draft(skill, home));
-        }
+        // recorded only when acted on: a draft left alone is not a pending lesson nobody can reach
+        foreach (FactoryLesson skill in skills.Where(s => s.Kind == "skill")) drafts.Children.Add(Draft(skill, home));
     }
 
     // a skill draft, editable here (Insights is no read-only document)
@@ -220,10 +220,46 @@ public partial class InsightsView
         var head = new TextBlock { TextWrapping = TextWrapping.Wrap };
         head.Inlines.Add(new Run(lesson.Kind.ToUpperInvariant() + "  ") { FontSize = 11, FontWeight = FontWeights.Bold, Foreground = (Brush)Res("VioletBrush") });
         head.Inlines.Add(new Run(lesson.Name) { FontWeight = FontWeights.Bold, FontSize = 13.5 });
-        head.Inlines.Add(new Run("  ·  " + (lesson.Status == "saved" ? "kept in " + lesson.File : "waits under its turn")) { FontSize = 11.5, Foreground = (Brush)Res("InkSoftBrush") });
+        head.Inlines.Add(new Run("  ·  " + (lesson.Status == "saved" ? "kept in " + lesson.File : "waiting for your decision")) { FontSize = 11.5, Foreground = (Brush)Res("InkSoftBrush") });
         body.Children.Add(head);
         body.Children.Add(new TextBlock { Text = lesson.Description, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, Margin = new Thickness(0, 2, 0, 4) });
         body.Children.Add(new TextBlock { Text = lesson.Content, TextWrapping = TextWrapping.Wrap, FontSize = 12, Foreground = (Brush)Res("InkSoftBrush") });
+        if (lesson.Status == "pending")
+        {
+            // its card under the turn is gone after a restart: decide here
+            var result = Caption("");
+            var save = new Button { Content = "Save", Style = (Style)Res("SecondaryButton"), Margin = new Thickness(0, 6, 8, 0) };
+            var dismiss = new Button { Content = "Dismiss", Style = (Style)Res("SecondaryButton"), Margin = new Thickness(0, 6, 0, 0) };
+            save.Click += async (_, _) =>
+            {
+                if (!SessionLessons.TryBeginSave(lesson)) return;
+                save.IsEnabled = dismiss.IsEnabled = false;
+                try
+                {
+                    string? memoryDir = lesson.Kind == "memory" ? await CliSetup.MemoryDirAsync(saved.Folder) : null;
+                    SessionLessons.Save(lesson, memoryDir, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+                    SessionLessons.Record(saved.Folder, saved.Session, lesson);
+                    Refresh();
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException)
+                {
+                    lesson.Status = "pending";
+                    save.IsEnabled = dismiss.IsEnabled = true;
+                    result.Text = "Could not save: " + ex.Message;
+                }
+            };
+            dismiss.Click += (_, _) =>
+            {
+                lesson.Status = "dismissed";
+                SessionLessons.Record(saved.Folder, saved.Session, lesson);
+                Refresh();
+            };
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+            buttons.Children.Add(save);
+            buttons.Children.Add(dismiss);
+            body.Children.Add(buttons);
+            body.Children.Add(result);
+        }
         if (lesson.Status == "saved")
         {
             var undo = new Button { Content = "Undo", Style = (Style)Res("SecondaryButton"), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 6, 0, 0) };

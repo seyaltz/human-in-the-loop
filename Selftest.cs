@@ -30,6 +30,7 @@ public static class Selftest
             QualityCases();
             LessonCases();
             LearnCases();
+            ReviewFixCases();
             Check(Watch.IsQuickStep("commit and push"), "Quick step: \"commit and push\"");
             Check(Watch.IsQuickStep("rebuild and restart dev break"), "Quick step: \"rebuild and restart dev break\"");
             Check(!Watch.IsQuickStep("design a watcher that coaches long turns"), "Quick step: a design ask is not one");
@@ -209,6 +210,20 @@ public static class Selftest
         {
             Directory.Delete(home, recursive: true);
         }
+    }
+
+    // what the final review found, pinned
+    private static void ReviewFixCases()
+    {
+        DateTime early = DateTime.Now.AddMinutes(-9.9);
+        var twelve = Enumerable.Range(0, 13).Select(i => ("Grep", "p" + i, false, "No matches found")).ToArray();
+        var thirteen = Enumerable.Range(0, 14).Select(i => ("Grep", "p" + i, false, "No matches found")).ToArray();
+        Check(Watch.FlagRule(LogOf(twelve), early, false)?.Rule is "no-progress" && Watch.FlagRule(LogOf(thirteen), early, false)?.Rule is "no-progress",
+            "Review fix: the no-progress flag keeps one rule id as its count grows (Dismiss holds)");
+        var lesson = new FactoryLesson { Kind = "memory", Name = "x", Content = "y", Status = "pending" };
+        Check(SessionLessons.TryBeginSave(lesson) && !SessionLessons.TryBeginSave(lesson), "Review fix: a second Save while the first runs is refused");
+        Check(Rubric.Parse("[{\"criterion\":\"a\",\"verdict\":\"fail\",\"evidence\":\"e\"}]") == null,
+            "Review fix: a verdict that is neither ok nor violated makes the grade unreadable, not clean");
     }
 
     private static void LearnCases()

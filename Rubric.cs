@@ -83,10 +83,10 @@ public static class Rubric
             var violated = new List<(string, string)>();
             foreach (JsonElement item in doc.RootElement.EnumerateArray())
             {
-                if (TurnLog.Str(item, "verdict").Equals("violated", StringComparison.OrdinalIgnoreCase))
-                {
-                    violated.Add((TurnLog.Str(item, "criterion"), TurnLog.Str(item, "evidence")));
-                }
+                string verdict = TurnLog.Str(item, "verdict");
+                // a verdict in any other words is a grade that cannot be read - never "clean"
+                if (!verdict.Equals("ok", StringComparison.OrdinalIgnoreCase) && !verdict.Equals("violated", StringComparison.OrdinalIgnoreCase)) return null;
+                if (verdict.Equals("violated", StringComparison.OrdinalIgnoreCase)) violated.Add((TurnLog.Str(item, "criterion"), TurnLog.Str(item, "evidence")));
             }
             return violated;
         }

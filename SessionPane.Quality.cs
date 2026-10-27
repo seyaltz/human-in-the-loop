@@ -96,8 +96,7 @@ public partial class SessionPane
         {
             buttons.Add(CardButton("Send to Claude", true, () =>
             {
-                InputBox.Text = "An independent review of your change found:\n\n" + findings.Trim() + "\n\nFix what is real; say which findings you think are wrong and why.";
-                Send();
+                SendFromCard(state, "An independent review of your change found:\n\n" + findings.Trim() + "\n\nFix what is real; say which findings you think are wrong and why.");
             }));
         }
         buttons.Add(CardButton("Dismiss", false, () => state.Document.Blocks.Remove(CardBlock(body))));
