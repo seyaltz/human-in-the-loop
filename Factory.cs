@@ -3147,6 +3147,7 @@ public static class Factory
             UseShellExecute = false, CreateNoWindow = true,
         };
         foreach (string arg in new[] { "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence" }.Concat(args)) start.ArgumentList.Add(arg);
+        CliSetup.UseCompactWindow(start);
         string answer = "";
         try
         {

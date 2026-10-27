@@ -31,6 +31,11 @@ public static class Selftest
             LessonCases();
             LearnCases();
             ReviewFixCases();
+            ContextCases();
+            TelemetryCases();
+            Check(CliSetup.CompactWindowOf("{\"autoCompactWindow\": 200000}") == "200000", "Compact window: read from the user's settings");
+            Check(CliSetup.CompactWindowOf("{\"env\": {}}") == null, "Compact window: none set -> none passed");
+            Check(CliSetup.CompactWindowOf("not json") == null, "Compact window: unreadable settings -> none passed");
             Check(Watch.IsQuickStep("commit and push"), "Quick step: \"commit and push\"");
             Check(Watch.IsQuickStep("rebuild and restart dev break"), "Quick step: \"rebuild and restart dev break\"");
             Check(!Watch.IsQuickStep("design a watcher that coaches long turns"), "Quick step: a design ask is not one");
@@ -111,8 +116,48 @@ public static class Selftest
         return log;
     }
 
+    // the footer says what each step re-reads, in tokens; past 150k (or 80% full) it turns coral
+    private static void ContextCases()
+    {
+        Check(Watch.ContextLabel(511_400, 51) == ("511k context", true), "Context: 511,400 tokens of 1M -> \"511k context\", heavy (51% hid it)");
+        Check(Watch.ContextLabel(26_834, 13) == ("27k context", false), "Context: 26,834 tokens -> \"27k context\", light");
+        Check(Watch.ContextLabel(149_999, 74).Heavy == false, "Context: just under 150k is light");
+        Check(Watch.ContextLabel(150_000, 75).Heavy, "Context: 150k is heavy");
+        Check(Watch.ContextLabel(120_000, 80).Heavy, "Context: 80% full is heavy even under 150k");
+    }
+
+    // one devbreak.log line per finished turn: what it did, what it cost, what Dev break spent watching it
+    private static void TelemetryCases()
+    {
+        TurnLog log = LogOf(("Bash", "npm test", true, "e"), ("Read", "a.cs", false, "x"));
+        log.Read(ToolUse("w1", "Edit", new { file_path = @"C:\r\a.cs", old_string = "a", new_string = "1\n2\n3" }));
+        Check(Watch.TurnSummary(log, 324, 1.234, 129_354, 167_000, 6) ==
+              "3 steps, 1 failed, 1 file / 3 lines, 5.4 min, $1.23, context 129k (compacts at 167k), 6 ai checks",
+            "Telemetry: a turn's summary line");
+        Check(Watch.TurnSummary(new TurnLog("q"), 2, 0, 0, 0, 0) == "0 steps, 0 failed, 0 files / 0 lines, 0.0 min, $0.00, context ?, 0 ai checks",
+            "Telemetry: an empty turn, context unknown");
+    }
+
+    // 4 different Playwright scripts: the tool keeps its script in "code", which the summary does not show (it is blank),
+    // so only the whole input tells them apart - the case that flagged real progress as stuck
+    private static void SameInputCases()
+    {
+        string[] scripts = ["open the deal link", "close the other tabs, go to the page", "take a screenshot", "type into the chat box"];
+        TurnLog different = new("check the radar"), same = new("check the radar");
+        for (int i = 0; i < 4; i++)
+        {
+            different.Read(ToolUse("d" + i, "mcp__playwright__browser_run_code_unsafe", new { code = scripts[i] }));
+            different.Read(ToolResult("d" + i, false, "ok " + i));
+            same.Read(ToolUse("s" + i, "mcp__playwright__browser_run_code_unsafe", new { code = scripts[0] }));
+            same.Read(ToolResult("s" + i, false, "ok"));
+        }
+        Check(Watch.FlagRule(different, DateTime.Now, false)?.Rule != "same-4", "Flag: 4 different scripts of one tool are not the same call");
+        Check(Watch.FlagRule(same, DateTime.Now, false)?.Rule == "same-4", "Flag: 4 identical scripts are the same call");
+    }
+
     private static void FlagCases()
     {
+        SameInputCases();
         DateTime now = DateTime.Now;
         var failing = ("Bash", "npm run build", true, "error TS2304");
         Check(Watch.Flag(LogOf(failing, failing, failing), now.AddMinutes(-9.9), false)?.StartsWith("the same Bash call failed 3 times in a row") == true,

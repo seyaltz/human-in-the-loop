@@ -62,6 +62,40 @@ public static class CliSetup
     }
 
     /// <summary>
+    /// Runs started with <c>--setting-sources ""</c> do not read the user's settings, so their auto-compact point would be
+    /// near the full window (967k of 1M, measured): they get the user's own <c>autoCompactWindow</c> as the environment
+    /// variable the CLI also reads (CLAUDE_CODE_AUTO_COMPACT_WINDOW, measured: 200000 -> compacts at 167k).
+    /// </summary>
+    public static void UseCompactWindow(ProcessStartInfo start)
+    {
+        const string Name = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
+        if (Environment.GetEnvironmentVariable(Name) != null) return;
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json");
+        try
+        {
+            if (File.Exists(settings) && CompactWindowOf(File.ReadAllText(settings)) is { } window) start.Environment[Name] = window;
+        }
+        catch (IOException)
+        {
+            // unread this time: the run keeps the CLI's own window
+        }
+    }
+
+    internal static string? CompactWindowOf(string settingsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(settingsJson);
+            return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("autoCompactWindow", out JsonElement w)
+                   && w.ValueKind == JsonValueKind.Number ? w.GetRawText() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// The memory folder Claude Code uses for a folder (memory_paths.auto of its init line). A git worktree gets its
     /// main repository's folder, so what is saved there reaches sessions in the repo and in its worktrees.
     /// </summary>

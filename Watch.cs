@@ -37,7 +37,7 @@ public static class Watch
         {
             TurnStep last = done[^1];
             bool Same(int n, Func<TurnStep, bool> also) => done.Count >= n &&
-                done.TakeLast(n).All(s => s.Tool == last.Tool && s.Summary == last.Summary && s.Error == last.Error && also(s));
+                done.TakeLast(n).All(s => s.Tool == last.Tool && s.Summary == last.Summary && s.Input == last.Input && s.Error == last.Error && also(s));
             if (Same(3, s => s.Error)) return ("failed-3", $"the same {last.Tool} call failed 3 times in a row: {last.Summary}");
             if (Same(4, _ => true)) return ("same-4", $"it ran the same {last.Tool} call 4 times in a row: {last.Summary}");
             if (done.TakeLast(10).Count(s => s.Error) >= 5) return ("errors", "5 of its last 10 tool calls failed");
@@ -147,4 +147,29 @@ public static class Watch
         if (usual is { } u) text += $" · usually ~{Math.Max(1, (int)Math.Round(u.TotalMinutes))} min";
         return text;
     }
+
+    /// <summary>
+    /// A finished turn in one devbreak.log line: its own steps and failures, what it changed, how long, what it cost, the
+    /// context the next turn starts from, and the AI checks Dev break spent watching it.
+    /// </summary>
+    public static string TurnSummary(TurnLog log, double seconds, double cost, double context, double compactAt, int aiChecks)
+    {
+        int steps = log.Steps.Count(s => !s.Sub), failed = log.Steps.Count(s => !s.Sub && s.Error);
+        string files = log.Changed.Count == 1 ? "1 file" : $"{log.Changed.Count} files";
+        string size = context <= 0 ? "?" : $"{Math.Round(context / 1000):0}k" + (compactAt > 0 ? $" (compacts at {Math.Round(compactAt / 1000):0}k)" : "");
+        return $"{steps} steps, {failed} failed, {files} / {log.LinesChanged} lines, {seconds / 60:0.0} min, ${cost:0.00}, context {size}, {aiChecks} ai checks";
+    }
+
+    /// <summary>What a fresh session starts from instead of the whole history.</summary>
+    public const string HandoverQuestion =
+        "Write a handover of this conversation for a new session that will not see it. Plain text, under 300 words: " +
+        "the goal in the user's words; what is done, with file paths; decisions made and why; what is left, in order; " +
+        "commands that work here; anything that failed and must not be retried. No preamble.";
+
+    /// <summary>
+    /// The footer's context: every step re-sends the whole conversation, so the size in tokens is what each step costs -
+    /// a percent of a 1M window hid that (51% was 511k re-read per step). Heavy from 150k, or 80% full.
+    /// </summary>
+    public static (string Text, bool Heavy) ContextLabel(double tokens, int percent) =>
+        ($"{Math.Round(tokens / 1000):0}k context", tokens >= 150_000 || percent >= 80);
 }

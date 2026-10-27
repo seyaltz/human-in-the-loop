@@ -32,8 +32,9 @@ public partial class SessionPane
         ModelButton.Content = "Model: " + (setting.Model == null ? "default" : model?.Name ?? setting.Model);
         EffortButton.Content = "Effort: " + (setting.Effort ?? "auto");
         ContextButton.Visibility = state.ContextPercent >= 0 ? Visibility.Visible : Visibility.Collapsed;
-        ContextButton.Content = $"{state.ContextPercent}% context";
-        ContextButton.Foreground = state.ContextPercent >= 80 ? (Brush)FindResource("CoralInkBrush") : (Brush)FindResource("InkBrush");
+        (string context, bool heavy) = Watch.ContextLabel(state.ContextTokens, state.ContextPercent);
+        ContextButton.Content = context;
+        ContextButton.Foreground = heavy ? (Brush)FindResource("CoralInkBrush") : (Brush)FindResource("InkBrush");
         ContextButton.ToolTip = state.ContextDetail.Length > 0 ? state.ContextDetail : null;
         CostText.Text = state.Cost > 0 ? $"${state.Cost:0.00} this run" : "";
         AiCheckButton.Content = "AI check: " + (setting.AiCheck ? "on" : "off");
@@ -184,6 +185,10 @@ public partial class SessionPane
         var compact = new MenuItem { Header = "Compact the conversation (/compact) - add what to keep after it" };
         compact.Click += (_, _) => PutInBox("/compact ");
         menu.Items.Add(compact);
+        var fresh = new MenuItem { Header = "Fresh session from a handover - start over from a short summary, not the whole history" };
+        SessionState state = _state;
+        fresh.Click += (_, _) => Logged(Handover(state), "handover");
+        menu.Items.Add(fresh);
         Open(menu, ContextButton);
     }
 
@@ -205,7 +210,13 @@ public partial class SessionPane
             var lines = new List<string>();
             if (usage.TryGetProperty("totalTokens", out JsonElement t) && usage.TryGetProperty("maxTokens", out JsonElement m))
             {
-                lines.Add($"{t.GetDouble() / 1000:0.#}k of {m.GetDouble() / 1000:0.#}k tokens");
+                state.ContextTokens = t.GetDouble();
+                lines.Add($"{t.GetDouble() / 1000:0.#}k of {m.GetDouble() / 1000:0.#}k tokens ({state.ContextPercent}%) - every step re-reads all of it");
+                if (usage.TryGetProperty("autoCompactThreshold", out JsonElement at) && at.ValueKind == JsonValueKind.Number)
+                {
+                    state.CompactAt = at.GetDouble();
+                    lines.Add($"compacts on its own at {at.GetDouble() / 1000:0.#}k");
+                }
             }
             if (usage.TryGetProperty("categories", out JsonElement cats) && cats.ValueKind == JsonValueKind.Array)
             {
@@ -273,6 +284,37 @@ public partial class SessionPane
         }
         AsideText.Document.FontSize = 13.5;
         AsideText.Document.Foreground = (Brush)FindResource("InkBrush");
+    }
+
+    // Claude writes a handover of the task (a side question: it reads the conversation, adds nothing to it), and a new
+    // session in the same folder starts with it in the box - read it, change it, send it. The old session stays listed.
+    private async Task Handover(SessionState state)
+    {
+        ShowAction("Fresh session - writing the handover...", [Say("Claude is summarizing the task, what is done and what is left.")]);
+        string handover;
+        try
+        {
+            SessionProcess process = await ProcessFor(state);
+            JsonElement reply = await process.ControlAsync("side_question", new() { ["question"] = Watch.HandoverQuestion }, TimeSpan.FromMinutes(3));
+            handover = reply.TryGetProperty("response", out JsonElement r) ? r.GetString()?.Trim() ?? "" : "";
+        }
+        catch (Exception ex)
+        {
+            ShowAction("Fresh session - no handover", [Say("Could not ask: " + ex.Message), Buttons(CardButton("Close", false, CloseAction))]);
+            return;
+        }
+        if (handover.Length == 0)
+        {
+            ShowAction("Fresh session - no handover", [Say("Claude gave no answer."), Buttons(CardButton("Close", false, CloseAction))]);
+            return;
+        }
+        CloseAction();
+        var info = new SessionInfo(Guid.NewGuid().ToString(), state.Info.Folder, "Fresh: " + state.Info.Title, DateTime.Now);
+        SessionSetting mine = SessionSettings.Of(state.Info.Id), next = SessionSettings.Of(info.Id);
+        (next.Mode, next.Model, next.Effort) = (mine.Mode, mine.Model, mine.Effort);
+        SessionSettings.Save();
+        NewSessionRequested?.Invoke(this, info, null, false);
+        PutInBox("Continue this task. A handover from the previous session:\n\n" + handover);
     }
 
     private void CloseAside_Click(object sender, RoutedEventArgs e) => AsideBox.Visibility = Visibility.Collapsed;

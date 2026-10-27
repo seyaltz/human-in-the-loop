@@ -16,6 +16,9 @@ public sealed record TurnStep(string Id, string Tool, string Summary, string Key
     public string Result { get; set; } = "";
     public bool IsShell => Tool is "Bash" or "PowerShell";
     public string Command { get; init; } = "";
+
+    /// <summary>The call's whole input as sent: two calls are the same only when this matches (a summary can be blank).</summary>
+    public string Input { get; init; } = "";
 }
 
 /// <summary>
@@ -68,7 +71,10 @@ public sealed class TurnLog
                 JsonElement input = block.TryGetProperty("input", out JsonElement i) ? i : default;
                 string command = Str(input, "command");
                 Steps.Add(new TurnStep(Str(block, "id"), tool, ClaudeSessions.ToolSummary(block),
-                    command.Length > 0 ? KeyOf(command) : tool, DateTime.Now, sub) { Command = command });
+                    command.Length > 0 ? KeyOf(command) : tool, DateTime.Now, sub)
+                {
+                    Command = command, Input = input.ValueKind == JsonValueKind.Undefined ? "" : input.GetRawText(),
+                });
                 if (!sub && tool is "Edit" or "Write" or "NotebookEdit" or "MultiEdit")
                 {
                     string file = Str(input, "file_path") is { Length: > 0 } f ? f : Str(input, "notebook_path");

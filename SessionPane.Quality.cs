@@ -155,7 +155,7 @@ public partial class SessionPane
             foreach ((string criterion, string evidence) in violations)
             {
                 int times = SessionLessons.CountViolation(state.Info.Folder, criterion);
-                Log($"grade: '{criterion}' violated {times} time(s) in this folder");
+                Log($"grade: '{criterion}' violated {times} time(s) in this folder - {evidence}");
                 if (times >= 3) RepeatedViolation(state, criterion, evidence, times);
             }
         }

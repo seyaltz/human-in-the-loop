@@ -113,6 +113,7 @@ public partial class SessionPane
             Say drifting only when the steps show it (repeating, wandering off the ask, fighting the same error); slow but sensible work is on track.
             """;
         string answer;
+        var took = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             answer = await ClaudeOnce.AskAsync(prompt, "haiku", state.Info.Folder, "", "", TimeSpan.FromSeconds(90));
@@ -126,7 +127,7 @@ public partial class SessionPane
         {
             state.AiChecking = false;
         }
-        Log($"ai check ({state.Info.Id[..8]}): {answer.Replace('\n', ' ')}");
+        Log($"ai check ({state.Info.Id[..8]}, {took.Elapsed.TotalSeconds:0}s): {answer.Replace('\n', ' ')}");
         // the turn it looked at ended meanwhile (stopped, finished): its answer is about nothing on screen
         if (state.Log != log || !state.Working || state.Coach != null) return;
         if (Drifting(answer) is not { } drift || state.CoachDismissed.Contains("ai check")) return;
