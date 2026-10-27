@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Windows;
@@ -12,7 +13,7 @@ namespace DevBreak;
 /// <summary>
 /// Turns Claude's reply into a FlowDocument: prose with light Markdown (headings, lists, tables, bold, italic, links),
 /// ```lang fenced blocks as an ink code box coloured like VS Code's Dark+ theme, `inline code` in the code font on a
-/// violet tint.
+/// violet tint; a path to an image or video on a local drive opens it, and an image shows as a thumbnail too.
 /// </summary>
 public static class CodeRenderer
 {
@@ -108,11 +109,17 @@ public static class CodeRenderer
     private static readonly Regex Numbered = new(@"^\s*\d+[.)]\s+(.*)$", RegexOptions.Compiled);
     private static readonly Regex TableRule = new(@"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$", RegexOptions.Compiled);
 
-    // inline Markdown, in this order: `code`, **bold**, *italic* / _italic_, [text](url), a bare https URL
+    // an image or video on a drive ("C:\...\shot.png"): a link that opens it, an image also as a thumbnail
+    private const string MediaPattern = @"[A-Za-z]:[\\/][^\s<>""|?*`]*?\.(?:png|jpe?g|gif|webp|bmp|mp4|m4v|mov|webm|mkv|avi)(?![\w.])";
+    // inside `code` the path's ends are plain, so it may have spaces
+    private static readonly Regex WholeMedia = new(@"^[A-Za-z]:[\\/][^<>""|?*`\n]*\.(?:png|jpe?g|gif|webp|bmp|mp4|m4v|mov|webm|mkv|avi)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // inline Markdown, in this order: `code`, **bold**, *italic* / _italic_, [text](url), a media file path, a bare https URL
     private static readonly Regex Inline = new(
         @"`(?<code>[^`\n]+)`|\*\*(?<bold>[^*\n]+?)\*\*|(?<![\w*])\*(?<italic>[^*\s][^*\n]*?)\*(?![\w*])|(?<![\w_])_(?<italic>[^_\s][^_\n]*?)_(?![\w_])" +
-        @"|\[(?<text>[^\]\n]+)\]\((?<link>https?://[^)\s]+)\)|(?<url>https?://[^\s<>()]+)",
-        RegexOptions.Compiled | RegexOptions.ExplicitCapture);
+        @"|\[(?<text>[^\]\n]+)\]\((?<link>https?://[^)\s]+)\)|(?<media>" + MediaPattern + @")|(?<url>https?://[^\s<>()]+)",
+        RegexOptions.Compiled | RegexOptions.ExplicitCapture | RegexOptions.IgnoreCase);
 
     /// <summary>
     /// Prose with the Markdown Claude writes: "#" headings, "- " / "1. " lists (lines that follow an item without a
@@ -230,15 +237,40 @@ public static class CodeRenderer
     private static void AddInline(Paragraph paragraph, string line)
     {
         int at = 0;
+        var images = new List<string>();
         foreach (Match m in Inline.Matches(line))
         {
             paragraph.Inlines.Add(new Run(line[at..m.Index]));
             if (m.Groups["code"].Success)
             {
-                paragraph.Inlines.Add(new Run(m.Groups["code"].Value)
+                var code = new Run(m.Groups["code"].Value)
                 {
                     FontFamily = CodeFont, Foreground = InlineCodeColor, Background = InlineCodeBackground, FontSize = 13.5,
-                });
+                };
+                // `C:\path with spaces\shot.png` is a file too
+                string inner = m.Groups["code"].Value.Trim();
+                if (WholeMedia.IsMatch(inner) && MediaFile(inner))
+                {
+                    paragraph.Inlines.Add(OpenLink(code, inner));
+                    if (AttachedFiles.IsImage(inner)) images.Add(inner);
+                }
+                else
+                {
+                    paragraph.Inlines.Add(code);
+                }
+            }
+            else if (m.Groups["media"].Success)
+            {
+                string path = m.Groups["media"].Value;
+                if (MediaFile(path))
+                {
+                    paragraph.Inlines.Add(OpenLink(new Run(path), path));
+                    if (AttachedFiles.IsImage(path)) images.Add(path);
+                }
+                else
+                {
+                    paragraph.Inlines.Add(new Run(path));
+                }
             }
             else if (m.Groups["bold"].Success)
             {
@@ -261,6 +293,63 @@ public static class CodeRenderer
             at = m.Index + m.Length;
         }
         paragraph.Inlines.Add(new Run(line[at..]));
+        foreach (string image in images.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (Thumbnail(image) is not { } thumbnail) continue;
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(OpenLink(new InlineUIContainer(thumbnail), image));
+        }
+    }
+
+    // a media file that may be looked at: on a local drive (a network path or a mapped network drive would make
+    // Windows connect to that server, and send it the user's credentials, just to draw a link) and still there
+    private static bool MediaFile(string path)
+    {
+        try
+        {
+            return new DriveInfo(path[..1]).DriveType is not (DriveType.Network or DriveType.NoRootDirectory) && File.Exists(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    // a link that opens the file in Windows' own viewer or player
+    private static Hyperlink OpenLink(Inline content, string path)
+    {
+        var link = new Hyperlink(content) { ToolTip = "Open " + path, Cursor = System.Windows.Input.Cursors.Hand };
+        link.Click += (_, _) =>
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                // no app for this type, or the file went away: nothing to open
+            }
+        };
+        return link;
+    }
+
+    // an image scaled down to a preview, or null when it cannot be read
+    private static FrameworkElement? Thumbnail(string path)
+    {
+        try
+        {
+            return new Border
+            {
+                CornerRadius = new CornerRadius(6), ClipToBounds = true, Margin = new Thickness(0, 6, 0, 4), BorderBrush = TableLine,
+                BorderThickness = new Thickness(1), HorizontalAlignment = HorizontalAlignment.Left,
+                Child = new Image { Source = AttachedFiles.Load(path, 640), MaxWidth = 360, MaxHeight = 220, Stretch = Stretch.Uniform },
+            };
+        }
+        catch (Exception ex) when (ex is IOException or NotSupportedException or UnauthorizedAccessException or ArgumentException
+                                       or System.Runtime.InteropServices.COMException)
+        {
+            return null;
+        }
     }
 
     // bold may hold inline code; a span takes the same inline rules as a paragraph
