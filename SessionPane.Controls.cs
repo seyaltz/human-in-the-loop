@@ -319,6 +319,7 @@ public partial class SessionPane
         }
 
         state.OpenCards.Add((ask, Close));
+        CallBack(state, "Claude needs you: " + (ask.Tool == "ExitPlanMode" ? "approve the plan" : ask.Tool == "AskUserQuestion" ? "a question" : "allow " + ask.Tool));
         state.LastNote = "Waiting for you: " + (ask.Tool == "ExitPlanMode" ? "approve the plan" : ask.Tool == "AskUserQuestion" ? "Claude asks you" : "allow " + ask.Tool + "?");
         state.LastNoteAt = DateTime.Now;
         state.Notify();

@@ -25,6 +25,7 @@ public static class Selftest
         {
             TurnLogCases();
             StatsCases();
+            WaitCases();
         }
         catch (Exception ex)
         {
@@ -83,6 +84,17 @@ public static class Selftest
             Lines.Add($"real: week {w.Start:yyyy-MM-dd} active {w.ActiveH:0.0} h, wait {w.WaitH:0.0}, tools {w.ToolH:0.0}, model {w.ModelH:0.0}, you {w.UserH:0.0}, calls {w.Calls}, failed {w.Failed}, interrupts {w.Interrupts}, corrections {w.Corrections}");
         }
         Lines.Add($"real: families in 3+ sessions: {data.Families(3).Count}");
+    }
+
+    private static void WaitCases()
+    {
+        DateTime now = DateTime.Now;
+        var step = new TurnStep("w1", "Bash", "", "npm run", now.AddSeconds(-200), false) { Command = "cd app && npm run build -- --prod" };
+        Check(Watch.WaitText(step, now, TimeSpan.FromMinutes(6)) == "⧗ waiting on npm run build -- --prod · 3:20 · usually ~6 min",
+            "Watch.WaitText: command without its cd, m:ss, usually ~6 min - got: " + Watch.WaitText(step, now, TimeSpan.FromMinutes(6)));
+        Check(Watch.WaitText(step, now, null) == "⧗ waiting on npm run build -- --prod · 3:20", "Watch.WaitText: no 'usually' without history");
+        Check(Watch.WaitText(step, now, TimeSpan.FromSeconds(40)) == "⧗ waiting on npm run build -- --prod · 3:20 · usually ~1 min",
+            "Watch.WaitText: under a minute reads ~1 min");
     }
 
     private static void StatsCases()

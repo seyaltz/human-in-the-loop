@@ -167,6 +167,7 @@ public partial class SessionPane : UserControl
     {
         SessionState? state = _state;
         LiveBox.Visibility = state?.Working == true ? Visibility.Visible : Visibility.Collapsed;
+        UpdateWait();
         if (state?.Working != true) return;
         LiveTitle.Text = $"● Working · {Span(DateTime.Now - state.TurnStartedAt)} · {state.Steps} step{(state.Steps == 1 ? "" : "s")}";
         bool note = state.LastNote.Length > 0;
@@ -352,6 +353,8 @@ public partial class SessionPane : UserControl
         state.LastNote = "";
         if (state.Log != null) state.PastLogs.Add(state.Log);
         state.Log = new TurnLog(message);
+        state.ToldWaiting = false;
+        state.WaitToldFor = "";
         state.Notify();
         bool wasNew = state.IsNew;
         try
@@ -373,6 +376,7 @@ public partial class SessionPane : UserControl
         state.Running = null;
         state.Stopping = false;
         CloseCards(state, "No longer asked - the turn ended.");
+        CallBack(state, "Claude finished: " + SessionAnswers.FirstLine(state.TurnQuestion));
         state.Notify();
         if (wasNew && !state.IsNew) SessionSaved?.Invoke();
         Stamp(state);
@@ -438,6 +442,10 @@ public partial class SessionPane : UserControl
         });
         process.Result += root => Dispatcher.Invoke(() =>
         {
+            if (root.TryGetProperty("duration_ms", out System.Text.Json.JsonElement ms) && ms.ValueKind == System.Text.Json.JsonValueKind.Number)
+            {
+                SessionStats.RecordPaneTurn(state.Info.Id, state.TurnStartedAt, ms.GetDouble() / 1000);
+            }
             state.Cost += process.LastTurnCost;
             state.Notify();
         });

@@ -94,6 +94,10 @@ public sealed class SessionState
     internal List<string> History { get; } = [];
 
     /// <summary>Working, failed or idle changed, or a step was counted.</summary>
+    /// <summary>This turn told the user (tray) it waits: it tells them again when it needs them. The step it was about.</summary>
+    public bool ToldWaiting { get; set; }
+    public string WaitToldFor { get; set; } = "";
+
     /// <summary>The running (or last) turn's tool calls, read from the process's lines.</summary>
     public TurnLog? Log { get; set; }
 
