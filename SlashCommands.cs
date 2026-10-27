@@ -13,7 +13,7 @@ namespace DevBreak;
 public sealed record SlashCommand(string Name, string Description, string ArgumentHint, IReadOnlyList<string> Aliases, bool Builtin)
 {
     /// <summary>Where it comes from: "built-in", the plugin's name, or "yours" (the user's or the project's).</summary>
-    public string Source => Builtin ? "built-in" : Name.Contains(':') ? Name[..Name.IndexOf(':')] : "yours";
+    public string Source => Builtin ? "built-in" : Name.Contains(':') ? Name[..Name.IndexOf(':')] : SessionPane.OwnCommands.Contains(this) ? "dev break" : "yours";
 }
 
 /// <summary>A model the CLI offers (/model): its value for --model and set_model, its name, and the effort levels it takes.</summary>

@@ -140,7 +140,7 @@ public partial class SessionPane : UserControl
         _commands = null;
         _commandsFailed = false;
         _shownTyped = null;
-        CommandMenu.Visibility = CommandHint.Visibility = QueuedText.Visibility = Visibility.Collapsed;
+        CommandMenu.Visibility = CommandHint.Visibility = QueuedText.Visibility = AsideBox.Visibility = Visibility.Collapsed;
     }
 
     private void OnChanged(SessionState state) => Update();
@@ -203,7 +203,7 @@ public partial class SessionPane : UserControl
         {
             IReadOnlyList<SlashCommand> commands = await SlashCommands.For(folder);
             if (_state?.Info.Folder != folder) return;
-            _commands = commands;
+            _commands = [.. OwnCommands, .. commands];
         }
         catch (Exception)
         {
@@ -212,6 +212,8 @@ public partial class SessionPane : UserControl
         }
         _shownTyped = null;
         UpdateMenu();
+        // the model names came with the commands
+        UpdateBar();
     }
 
     private void InputBox_TextChanged(object sender, TextChangedEventArgs e) => UpdateMenu();
@@ -493,6 +495,12 @@ public partial class SessionPane : UserControl
         // Claude gets the files' paths in the message (it reads them itself; the transcript shows them as chips), and
         // the note asking for the answer's shape and for progress notes on long work (hidden in the transcript) - not after a
         // "/command": measured, the CLI then passes the note to the command as its arguments (<command-args>...</command-args>)
+        if (text.StartsWith("/btw ", StringComparison.OrdinalIgnoreCase) && text.Length > 5)
+        {
+            InputBox.Clear();
+            _ = Aside(state, text[5..].Trim());
+            return;
+        }
         string body = AttachedFiles.Message(text, _pending);
         string message = text.StartsWith('/') ? body : SessionAnswers.WithShape(body);
         InputBox.Clear();

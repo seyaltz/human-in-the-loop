@@ -80,6 +80,22 @@
                                            Visibility="Collapsed" />
                             </StackPanel>
                         </Border>
+                        <!-- /btw: an aside answered outside the conversation (side_question), closed with × -->
+                        <Border x:Name="AsideBox" Background="{StaticResource PaperBrush}" BorderBrush="{StaticResource LineBrush}"
+                                BorderThickness="1" CornerRadius="10" Padding="10,6,6,8" Margin="0,0,0,8" Visibility="Collapsed">
+                            <DockPanel>
+                                <DockPanel DockPanel.Dock="Top">
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="28" Height="28"
+                                            ToolTip="Close the aside" AutomationProperties.Name="Close aside" Click="CloseAside_Click">
+                                        <Path Data="M6,6 L18,18 M18,6 L6,18" Style="{StaticResource IconPath}" Width="10" Height="10" />
+                                    </Button>
+                                    <TextBlock x:Name="AsideTitle" FontWeight="Bold" FontSize="12.5" Foreground="{StaticResource InkSoftBrush}"
+                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                </DockPanel>
+                                <FlowDocumentScrollViewer x:Name="AsideText" MaxHeight="200" VerticalScrollBarVisibility="Auto"
+                                                          IsToolBarVisible="False" Margin="0,2,0,0" />
+                            </DockPanel>
+                        </Border>
                         <TextBlock x:Name="QueuedText" FontSize="12" Foreground="{StaticResource VioletDarkBrush}" Margin="2,0,0,6"
                                    TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
                         <TextBlock x:Name="WorkingText" Style="{StaticResource HandNote}" FontSize="19" Margin="2,0,0,4"

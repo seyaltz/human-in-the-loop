@@ -245,6 +245,36 @@ public partial class SessionPane
         });
     }
 
+    /// <summary>Dev break's own "/" commands, listed with the CLI's: /btw is the terminal's aside, which -p does not have.</summary>
+    internal static readonly SlashCommand[] OwnCommands =
+    [
+        new("btw", "Ask a quick aside: answered outside the conversation, not kept in it - works while Claude works", "<question>", [], false),
+    ];
+
+    // /btw <question>: measured, -p answers "/btw isn't available in this environment", while the open process's
+    // side_question answers outside the conversation - so it goes there, and the answer shows above the box
+    private async Task Aside(SessionState state, string question)
+    {
+        AsideTitle.Text = "Aside: " + question;
+        AsideText.Document = CodeRenderer.Render("_Asking..._");
+        AsideBox.Visibility = Visibility.Visible;
+        try
+        {
+            SessionProcess process = await ProcessFor(state);
+            JsonElement reply = await process.ControlAsync("side_question", new() { ["question"] = question }, TimeSpan.FromMinutes(3));
+            string answer = reply.TryGetProperty("response", out JsonElement r) ? r.GetString() ?? "" : "";
+            if (_state == state) AsideText.Document = CodeRenderer.Render(answer.Length > 0 ? answer : "_No answer._");
+        }
+        catch (Exception ex)
+        {
+            if (_state == state) AsideText.Document = CodeRenderer.Render("Could not ask: " + ex.Message);
+        }
+        AsideText.Document.FontSize = 13.5;
+        AsideText.Document.Foreground = (Brush)FindResource("InkBrush");
+    }
+
+    private void CloseAside_Click(object sender, RoutedEventArgs e) => AsideBox.Visibility = Visibility.Collapsed;
+
     // a turn ended: the questions it left are no longer asked
     private static void CloseCards(SessionState state, string why)
     {
@@ -331,14 +361,18 @@ public partial class SessionPane
     {
         string detail = ClaudeSessions.ToolSummary(JsonSerializer.SerializeToElement(new { input = ask.Input }));
         body.Children.Add(CardTitle("Claude wants to use " + ask.Tool));
-        if (detail.Length > 0)
+        // all of what would run, never the shortened step line: a long or many-line command must not hide its tail
+        // behind Allow - a Bash command as it is, anything else as its whole input
+        string full = ask.Tool == "Bash" && ask.Input.TryGetProperty("command", out JsonElement command) && command.ValueKind == JsonValueKind.String
+            ? command.GetString()!
+            : JsonSerializer.Serialize(ask.Input, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        body.Children.Add(new TextBox
         {
-            body.Children.Add(new TextBlock
-            {
-                Text = detail, FontFamily = (FontFamily)FindResource("MonoFont"), FontSize = 12.5, TextWrapping = TextWrapping.Wrap,
-                Foreground = (Brush)FindResource("InkBrush"), Margin = new Thickness(0, 0, 0, 10),
-            });
-        }
+            Text = full, IsReadOnly = true, FontFamily = (FontFamily)FindResource("MonoFont"), FontSize = 12.5, TextWrapping = TextWrapping.Wrap,
+            MaxHeight = 240, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = (Brush)FindResource("CardBrush"),
+            BorderBrush = (Brush)FindResource("LineBrush"), Padding = new Thickness(6, 4, 6, 4), Margin = new Thickness(0, 0, 0, 10),
+            ToolTip = "Everything the tool would run with",
+        });
         var buttons = new WrapPanel();
         string what = ask.Tool + (detail.Length > 0 ? " " + Shorten(detail, 80) : "");
         buttons.Children.Add(CardButton("Allow", true, () => reply(SessionProcess.Allow(ask.Input), "✓ Allowed " + what)));
