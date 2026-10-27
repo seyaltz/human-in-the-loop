@@ -79,6 +79,27 @@ public static class SessionStats
     /// <summary>The median of a command family's past runs, from 3 runs on; null with fewer.</summary>
     public static TimeSpan? Usual(string key) => Current?.Usual(key);
 
+    // command families that are not a procedure: an interpreter running an inline script, or a basic shell word
+    private static readonly HashSet<string> Interpreters = ["python", "python3", "py", "node", "bash", "sh", "powershell", "pwsh", "ruby", "perl"];
+    private static readonly HashSet<string> ShellWords =
+        ["cat", "echo", "for", "while", "if", "cd", "ls", "dir", "grep", "rg", "sed", "awk", "head", "tail", "sleep", "until", "export", "set", "find", "wc", "test", "true", "$s", "$p"];
+
+    /// <summary>
+    /// The families worth a skill: not one an installed skill already names (all of the family's words in a skill's
+    /// name or description), and not an inline script or a basic shell word - those are how work is done, not what.
+    /// </summary>
+    public static List<CommandFamily> Uncovered(IEnumerable<CommandFamily> families, IEnumerable<string> skills)
+    {
+        List<string> texts = [.. skills.Select(s => s.ToLowerInvariant())];
+        return [.. families.Where(f =>
+        {
+            string[] words = f.Key.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length == 0 || ShellWords.Contains(words[0]) || words[0].StartsWith('$')) return false;
+            if (Interpreters.Contains(words[0]) && (words.Length == 1 || words[1].StartsWith('-'))) return false;
+            return !texts.Any(t => words.All(w => t.Contains(w)));
+        })];
+    }
+
     /// <summary>A Sessions pane's turn, exactly timed from its result line: the Time view uses these for the pane's session.</summary>
     public static void RecordPaneTurn(string sessionId, DateTime start, double seconds)
     {

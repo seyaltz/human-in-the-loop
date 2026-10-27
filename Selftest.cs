@@ -29,6 +29,7 @@ public static class Selftest
             FlagCases();
             QualityCases();
             LessonCases();
+            LearnCases();
         }
         catch (Exception ex)
         {
@@ -203,6 +204,20 @@ public static class Selftest
         {
             Directory.Delete(home, recursive: true);
         }
+    }
+
+    private static void LearnCases()
+    {
+        var families = new List<SessionStats.CommandFamily>
+        {
+            new("gcloud run", 20, 90, 9, [], []),
+            new("docker compose", 6, 30, 2, [], []),
+            new("python -", 24, 600, 40, [], []),
+        };
+        string[] skills = ["cloud-run-deploy: Deploy a service to Cloud Run with gcloud run deploy", "pdf: work with PDF files"];
+        List<SessionStats.CommandFamily> left = SessionStats.Uncovered(families, skills);
+        Check(left.Select(f => f.Key).SequenceEqual(["docker compose"]),
+            "Learn: a family a skill already names (gcloud run) and an ad-hoc one (python -) are left out - got: " + string.Join(", ", left.Select(f => f.Key)));
     }
 
     private static void WaitCases()

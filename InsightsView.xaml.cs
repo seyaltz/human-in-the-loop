@@ -25,8 +25,10 @@ public partial class InsightsView : UserControl
         {
             _listening = true;
             Factory.Changed += _ => Dispatcher.BeginInvoke(() => { if (IsVisible) Refresh(); });
+            SessionStats.Changed += () => Dispatcher.BeginInvoke(() => { if (IsVisible) Refresh(); });
         }
         Body.Children.Clear();
+        AddTime();
         // the live runs' kept lessons, and the insights kept from runs that were deleted
         var kept = Factory.Runs
             .SelectMany(run => run.Lessons.Where(l => l.Status is "saved" or "applied" or "pending")
