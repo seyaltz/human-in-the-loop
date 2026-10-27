@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace DevBreak;
@@ -15,7 +16,7 @@ public static class Selftest
     private static readonly List<string> Lines = [];
     private static bool _ok = true;
 
-    public static int Run()
+    public static int Run(bool real = false)
     {
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "selftest.txt"), "started");
         Lines.Clear();
@@ -23,11 +24,13 @@ public static class Selftest
         try
         {
             TurnLogCases();
+            StatsCases();
         }
         catch (Exception ex)
         {
             Check(false, "threw: " + ex);
         }
+        if (real) RealScan();
         File.WriteAllLines(Path.Combine(AppContext.BaseDirectory, "selftest.txt"), [.. Lines, _ok ? "ALL PASS" : "FAILED"]);
         return _ok ? 0 : 1;
     }
@@ -67,5 +70,59 @@ public static class Selftest
         log.Read(ToolResult("t2", false, "ok"));
         Check(log.Changed.Contains(@"C:\r\a.cs") && log.LinesChanged == 3, "TurnLog: an Edit counts its file and its new lines (3)");
         Check(TurnLog.KeyOf("Read") == "Read", "TurnLog.KeyOf: one word stays one word");
+    }
+
+    // "-selftest real": the user's own folder, read once, timed - numbers to compare with the audit, not a pass/fail
+    private static void RealScan()
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        SessionStats.Data data = SessionStats.Scan(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects"), null);
+        Lines.Add($"real: {data.Files.Count} files, {data.Files.Count(f => f.Counts)} counted, {watch.Elapsed.TotalSeconds:0} s");
+        foreach (SessionStats.WeekStats w in data.Weeks(5))
+        {
+            Lines.Add($"real: week {w.Start:yyyy-MM-dd} active {w.ActiveH:0.0} h, wait {w.WaitH:0.0}, tools {w.ToolH:0.0}, model {w.ModelH:0.0}, you {w.UserH:0.0}, calls {w.Calls}, failed {w.Failed}, interrupts {w.Interrupts}, corrections {w.Corrections}");
+        }
+        Lines.Add($"real: families in 3+ sessions: {data.Families(3).Count}");
+    }
+
+    private static void StatsCases()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "devbreak-selftest-" + Guid.NewGuid().ToString("N")[..8]);
+        string project = Path.Combine(root, "C--some-folder");
+        Directory.CreateDirectory(project);
+        DateTime t0 = DateTime.UtcNow.AddHours(-2);
+        string At(int seconds) => t0.AddSeconds(seconds).ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+        string[] lines =
+        [
+            $$$"""{"type":"user","entrypoint":"cli","timestamp":"{{{At(0)}}}","message":{"role":"user","content":"make the build faster"}}""",
+            $$$"""{"type":"assistant","entrypoint":"cli","timestamp":"{{{At(5)}}}","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"cd x && sleep 5"}}]}}""",
+            $$$"""{"type":"user","entrypoint":"cli","timestamp":"{{{At(15)}}}","message":{"content":[{"type":"tool_result","tool_use_id":"b1","is_error":true,"content":"x"}]}}""",
+            $$$"""{"type":"assistant","entrypoint":"cli","timestamp":"{{{At(20)}}}","message":{"content":[{"type":"text","text":"done"}]}}""",
+            $$$"""{"type":"system","subtype":"turn_duration","durationMs":60000,"entrypoint":"cli","timestamp":"{{{At(21)}}}"}""",
+            $$$"""{"type":"user","entrypoint":"cli","timestamp":"{{{At(30)}}}","message":{"role":"user","content":"no, not like that"}}""",
+            """{"type":"assistant","timestamp":"2026-""",
+        ];
+        File.WriteAllLines(Path.Combine(project, "11111111-2222-3333-4444-555555555555.jsonl"), lines);
+        try
+        {
+            SessionStats.Data data = SessionStats.Scan(root, null);
+            List<SessionStats.WeekStats> weeks = data.Weeks(1);
+            SessionStats.WeekStats week = weeks.Count > 0 ? weeks[0] : new SessionStats.WeekStats(DateTime.MinValue);
+            Check(Math.Abs(week.ActiveH * 3600 - 60) < 0.5, $"SessionStats: active time is the turn_duration (60 s, got {week.ActiveH * 3600:0.#})");
+            Check(Math.Abs(week.WaitH * 3600 - 10) < 0.5, $"SessionStats: a sleep command's 10 s is waiting (got {week.WaitH * 3600:0.#})");
+            Check(week.Calls == 1 && week.Failed == 1, "SessionStats: one call, one failed");
+            Check(week.Corrections == 1, "SessionStats: \"no, not like that\" is a correction");
+            Check(data.Usual("sleep 5") == null, "SessionStats: no 'usually' from fewer than 3 samples");
+        }
+        catch (Exception ex)
+        {
+            Check(false, "SessionStats threw on a half-written last line: " + ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+        Check(SessionStats.Correction.IsMatch("no, use the other file"), "Correction: \"no, use the other file\"");
+        Check(!SessionStats.Correction.IsMatch("add a button to the bar"), "Correction: \"add a button to the bar\" is not one");
     }
 }
