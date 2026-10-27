@@ -30,15 +30,6 @@ public partial class SessionPane : UserControl
     // ticks the live box (how long the turn has run, how old its last note is) while a turn runs
     private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(1) };
 
-    // the "/" menu: the CLI's commands in the session's folder, the ones matching what is typed, the one picked by the keys
-    private const int MaxShownCommands = 60;
-    private IReadOnlyList<SlashCommand>? _commands;
-    private bool _commandsFailed;
-    private List<SlashCommand> _matches = [];
-    private int _selected;
-    private string? _shownTyped;
-    private bool _menuDismissed;
-
     /// <summary>The pane was clicked or typed in: it becomes the active one.</summary>
     public event Action<SessionPane>? Activated;
 
@@ -197,226 +188,6 @@ public partial class SessionPane : UserControl
         if (show) SetupArea.Show(_state!.Info.Folder);
     }
 
-    private async void LoadCommands(string folder)
-    {
-        try
-        {
-            IReadOnlyList<SlashCommand> commands = await SlashCommands.For(folder);
-            if (_state?.Info.Folder != folder) return;
-            _commands = [.. OwnCommands, .. commands];
-        }
-        catch (Exception)
-        {
-            if (_state?.Info.Folder != folder) return;
-            _commandsFailed = true;
-        }
-        _shownTyped = null;
-        UpdateMenu();
-        // the model names came with the commands
-        UpdateBar();
-    }
-
-    private void InputBox_TextChanged(object sender, TextChangedEventArgs e) => UpdateMenu();
-
-    private void InputBox_SelectionChanged(object sender, RoutedEventArgs e) => UpdateMenu();
-
-    // another control of the window took the keys: the menu closes (another window being in front leaves it open)
-    private void InputBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        if (e.NewFocus == null) return;
-        CommandMenu.Visibility = Visibility.Collapsed;
-        _shownTyped = null;
-    }
-
-    private void InputBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) => UpdateMenu();
-
-    // the "/name" being typed: the message starts with "/" and the caret is still in its first word
-    private string? TypedCommand()
-    {
-        string text = InputBox.Text;
-        if (!text.StartsWith('/')) return null;
-        int end = text.IndexOfAny([' ', '\t', '\r', '\n']);
-        if (end < 0) end = text.Length;
-        return InputBox.CaretIndex > 0 && InputBox.CaretIndex <= end ? text[1..end] : null;
-    }
-
-    // the menu follows what is typed: open while the first word starting with "/" is written, closed by Esc until it is gone
-    private void UpdateMenu()
-    {
-        if (!InputBox.Text.StartsWith('/')) _menuDismissed = false;
-        string? typed = _state == null || _menuDismissed || (!InputBox.IsKeyboardFocused && CommandMenu.Visibility != Visibility.Visible) ? null : TypedCommand();
-        UpdateHint(typed == null);
-        if (typed == null)
-        {
-            CommandMenu.Visibility = Visibility.Collapsed;
-            _shownTyped = null;
-            return;
-        }
-        CommandMenu.Visibility = Visibility.Visible;
-        if (typed == _shownTyped) return;
-        _shownTyped = typed;
-        CommandList.Children.Clear();
-        _selected = 0;
-        if (_commands == null)
-        {
-            _matches = [];
-            CommandKeys.Text = _commandsFailed
-                ? "Could not read the CLI's commands - type the command, it is sent as it is.  ·  Esc close"
-                : "Reading the CLI's commands...";
-            return;
-        }
-        _matches = SlashCommands.Match(_commands, typed);
-        Brush Res(string key) => (Brush)FindResource(key);
-        foreach (SlashCommand command in _matches.Take(MaxShownCommands))
-        {
-            var name = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis, FontSize = 13 };
-            name.Inlines.Add(new Run("/" + command.Name) { FontWeight = FontWeights.Bold, FontFamily = (FontFamily)FindResource("MonoFont"), Foreground = Res("InkBrush") });
-            if (command.ArgumentHint.Length > 0) name.Inlines.Add(new Run("  " + command.ArgumentHint) { Foreground = Res("MutedBrush") });
-            var tag = new Border
-            {
-                Background = Res("PaperBrush"), BorderBrush = Res("RuleBrush"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(6, 0, 6, 1), Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
-                Child = new TextBlock { Text = command.Source, FontSize = 10.5, Foreground = Res("InkSoftBrush") },
-            };
-            DockPanel.SetDock(tag, Dock.Right);
-            var top = new DockPanel();
-            top.Children.Add(tag);
-            top.Children.Add(name);
-            var rows = new StackPanel();
-            rows.Children.Add(top);
-            if (command.Description.Length > 0)
-            {
-                rows.Children.Add(new TextBlock
-                {
-                    Text = command.Description, FontSize = 12, Foreground = Res("InkSoftBrush"), TextTrimming = TextTrimming.CharacterEllipsis,
-                    Margin = new Thickness(0, 1, 0, 0),
-                });
-            }
-            var row = new Border { CornerRadius = new CornerRadius(7), Padding = new Thickness(8, 4, 8, 5), Child = rows, Cursor = Cursors.Hand, ToolTip = command.Description.Length > 0 ? command.Description : null };
-            row.MouseLeftButtonDown += (_, e) =>
-            {
-                e.Handled = true;
-                Pick(command);
-            };
-            CommandList.Children.Add(row);
-        }
-        Select(0);
-        string count = _matches.Count > MaxShownCommands ? $"{MaxShownCommands} of {_matches.Count} - type more to narrow" : $"{_matches.Count} of {_commands.Count}";
-        CommandKeys.Text = _matches.Count == 0
-            ? $"No command or skill matches /{typed} - Enter sends it as it is  ·  Esc close"
-            : $"↑ ↓ move  ·  Tab or Enter pick  ·  Esc close  ·  {count}";
-    }
-
-    private void Select(int index)
-    {
-        if (CommandList.Children.Count == 0) return;
-        _selected = (index + CommandList.Children.Count) % CommandList.Children.Count;
-        for (int i = 0; i < CommandList.Children.Count; i++)
-        {
-            ((Border)CommandList.Children[i]).Background = i == _selected ? (Brush)FindResource("VioletTintBrush") : Brushes.Transparent;
-        }
-        ((FrameworkElement)CommandList.Children[_selected]).BringIntoView();
-    }
-
-    // the picked command replaces the word typed, followed by a space for its arguments
-    private void Pick(SlashCommand command)
-    {
-        string text = InputBox.Text;
-        int end = text.IndexOfAny([' ', '\t', '\r', '\n']);
-        string rest = end < 0 ? "" : text[end..].TrimStart(' ', '\t');
-        InputBox.Text = "/" + command.Name + " " + rest;
-        InputBox.CaretIndex = command.Name.Length + 2;
-        InputBox.Focus();
-    }
-
-    // under the menu, once a known command is written: "/model <model> · Set the AI model for Claude Code"
-    private void UpdateHint(bool show)
-    {
-        SlashCommand? command = show && _commands != null ? SlashCommands.Find(_commands, InputBox.Text) : null;
-        CommandHint.Visibility = command != null ? Visibility.Visible : Visibility.Collapsed;
-        if (command == null) return;
-        CommandHint.Inlines.Clear();
-        CommandHint.Inlines.Add(new Run("/" + command.Name) { FontWeight = FontWeights.Bold, Foreground = (Brush)FindResource("VioletBrush") });
-        if (command.ArgumentHint.Length > 0) CommandHint.Inlines.Add(new Run(" " + command.ArgumentHint) { Foreground = (Brush)FindResource("MutedBrush") });
-        if (command.Description.Length > 0) CommandHint.Inlines.Add(new Run("  ·  " + command.Description));
-        CommandHint.ToolTip = command.Description.Length > 0 ? command.Description : null;
-    }
-
-    private void InputBox_PreviewKeyDown(object sender, KeyEventArgs e)
-    {
-        if (CommandMenu.Visibility == Visibility.Visible && MenuKey(e.Key))
-        {
-            e.Handled = true;
-            return;
-        }
-        if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
-        {
-            e.Handled = true;
-            Send(now: (Keyboard.Modifiers & ModifierKeys.Control) != 0);
-        }
-        else if (e.Key == Key.Tab && (Keyboard.Modifiers & ModifierKeys.Shift) != 0 && _state != null)
-        {
-            e.Handled = true;
-            _ = CycleMode();
-        }
-        else if (e.Key == Key.System && e.SystemKey == Key.P && _state != null)
-        {
-            e.Handled = true;
-            OpenModels();
-        }
-        else if (e.Key == Key.Escape && _state?.Working == true)
-        {
-            e.Handled = true;
-            _ = StopTurn();
-        }
-        else if (e.Key == Key.Up && InputBox.Text.Length == 0 && _state?.Queued.Count > 0)
-        {
-            // the last queued message back into the box
-            e.Handled = true;
-            string message = _state.Queued[^1];
-            _state.Queued.RemoveAt(_state.Queued.Count - 1);
-            UpdateQueued();
-            (string text, List<string> files) = AttachedFiles.Split(SessionAnswers.WithoutShape(message));
-            InputBox.Text = text;
-            InputBox.CaretIndex = text.Length;
-            foreach (string file in files) Attach(file);
-        }
-        else if (e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && PasteFiles())
-        {
-            e.Handled = true;
-        }
-    }
-
-    // the menu's keys, as in the CLI: up and down move, Tab or Enter picks, Esc closes; true when the key was the menu's.
-    // Enter on a command already written out in full sends it.
-    private bool MenuKey(Key key)
-    {
-        if (key == Key.Escape)
-        {
-            _menuDismissed = true;
-            UpdateMenu();
-            return true;
-        }
-        if (_matches.Count == 0) return false;
-        switch (key)
-        {
-            case Key.Down:
-                Select(_selected + 1);
-                return true;
-            case Key.Up:
-                Select(_selected - 1);
-                return true;
-            case Key.Tab:
-                Pick(_matches[_selected]);
-                return true;
-            case Key.Enter when (Keyboard.Modifiers & ModifierKeys.Shift) == 0:
-                if (string.Equals(TypedCommand(), _matches[_selected].Name, StringComparison.OrdinalIgnoreCase)) return false;
-                Pick(_matches[_selected]);
-                return true;
-        }
-        return false;
-    }
-
     /// <summary>Ctrl+V with a screenshot or copied files on the clipboard adds them; plain text pastes as usual.</summary>
     private bool PasteFiles()
     {
@@ -495,6 +266,13 @@ public partial class SessionPane : UserControl
         // Claude gets the files' paths in the message (it reads them itself; the transcript shows them as chips), and
         // the note asking for the answer's shape and for progress notes on long work (hidden in the transcript) - not after a
         // "/command": measured, the CLI then passes the note to the command as its arguments (<command-args>...</command-args>)
+        if (text.StartsWith('!') && text.Length > 1 && _pending.Count == 0)
+        {
+            InputBox.Clear();
+            if (!state.Working) _ = RunShell(state, text[1..].Trim());
+            else WorkingText.Text = "A shell command waits for the turn to end - run it after.";
+            return;
+        }
         if (text.StartsWith("/btw ", StringComparison.OrdinalIgnoreCase) && text.Length > 5)
         {
             InputBox.Clear();
@@ -503,6 +281,13 @@ public partial class SessionPane : UserControl
         }
         string body = AttachedFiles.Message(text, _pending);
         string message = text.StartsWith('/') ? body : SessionAnswers.WithShape(body);
+        // the "!" commands run since the last message go in front of it, as the CLI puts them in the conversation
+        // (not before a "/command": they would become its arguments)
+        if (state.PendingShell.Count > 0 && !text.StartsWith('/'))
+        {
+            message = string.Concat(state.PendingShell) + message;
+            state.PendingShell.Clear();
+        }
         InputBox.Clear();
         _pending.Clear();
         Attachments.Children.Clear();
@@ -670,6 +455,11 @@ public partial class SessionPane : UserControl
     {
         SessionState? state = _state;
         if (state?.Working != true) return;
+        if (state.Shell != null)
+        {
+            state.Shell.Cancel();
+            return;
+        }
         state.Stopping = true;
         state.Queued.Clear();
         UpdateQueued();
@@ -718,7 +508,10 @@ public partial class SessionPane : UserControl
         {
             case SessionEntryKind.You:
                 FoldTurn(state);
-                (string text, List<string> files) = AttachedFiles.Split(SessionAnswers.WithoutShape(entry.Text));
+                (List<(string Command, int Code, string Output)> ran, string said) = ShellCommand.Split(SessionAnswers.WithoutShape(entry.Text));
+                foreach ((string command, int code, string output) in ran) ShellBlock(state, command, output, code);
+                (string text, List<string> files) = AttachedFiles.Split(said);
+                if (text.Length > 0) state.History.Add(text);
                 state.TurnStart = Turns.Add(document, isMine: true, text.Length > 0 ? text : "(files)", this);
                 state.TurnQuestion = text.Length > 0 ? text : string.Join(", ", files.Select(f => System.IO.Path.GetFileName(f.TrimEnd('\\', '/'))));
                 if (files.Count > 0)

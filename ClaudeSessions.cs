@@ -80,17 +80,33 @@ public static class ClaudeSessions
         while (reader.ReadLine() is { } line)
         {
             bool user = line.Contains("\"type\":\"user\"", StringComparison.Ordinal);
-            if (!user && !line.Contains("\"type\":\"assistant\"", StringComparison.Ordinal)) continue;
+            // a "/command"'s output, in newer files a system line of its own
+            bool local = !user && line.Contains("\"subtype\":\"local_command\"", StringComparison.Ordinal);
+            if (!user && !local && !line.Contains("\"type\":\"assistant\"", StringComparison.Ordinal)) continue;
             try
             {
                 using JsonDocument doc = JsonDocument.Parse(line);
                 JsonElement root = doc.RootElement;
                 if (root.TryGetProperty("isSidechain", out JsonElement side) && side.ValueKind == JsonValueKind.True) continue;
                 if (root.TryGetProperty("isMeta", out JsonElement meta) && meta.ValueKind == JsonValueKind.True) continue;
+                if (local)
+                {
+                    if (root.TryGetProperty("content", out JsonElement said) && said.ValueKind == JsonValueKind.String
+                        && (Tag(said.GetString()!, "local-command-stdout") ?? Tag(said.GetString()!, "local-command-stderr")) is { } output)
+                    {
+                        entries.Add(new SessionEntry(SessionEntryKind.Note, output.Length > 0 ? output : "(no output)"));
+                    }
+                    continue;
+                }
                 if (!root.TryGetProperty("message", out JsonElement message) || !message.TryGetProperty("content", out JsonElement content)) continue;
                 if (user)
                 {
-                    if (IsHuman(root) && Typed(content) is { Length: > 0 } typed) entries.Add(new SessionEntry(SessionEntryKind.You, typed));
+                    if (!IsHuman(root) || Typed(content) is not { Length: > 0 } typed) continue;
+                    // a "/command" is saved as tags: shown as typed, its output as the turn's answer, the CLI's caveat left out
+                    if (Tag(typed, "local-command-stdout") is { } output) entries.Add(new SessionEntry(SessionEntryKind.Note, output.Length > 0 ? output : "(no output)"));
+                    else if (Tag(typed, "local-command-stderr") is { } error) entries.Add(new SessionEntry(SessionEntryKind.Note, error));
+                    else if (Tag(typed, "command-name") is { } name) entries.Add(new SessionEntry(SessionEntryKind.You, (name + " " + (Tag(typed, "command-args") ?? "")).Trim()));
+                    else if (!typed.StartsWith("<local-command-caveat>", StringComparison.Ordinal)) entries.Add(new SessionEntry(SessionEntryKind.You, typed));
                     continue;
                 }
                 if (content.ValueKind != JsonValueKind.Array) continue;
@@ -414,6 +430,18 @@ public static class ClaudeSessions
         }
         string typed = text.ToString();
         return typed.StartsWith("[Request interrupted", StringComparison.Ordinal) ? null : typed;
+    }
+
+    // the text inside <tag>...</tag> when the message starts with that tag (after white space), else null
+    private static string? Tag(string text, string tag)
+    {
+        string trimmed = text.TrimStart();
+        string open = "<" + tag + ">", close = "</" + tag + ">";
+        int start = trimmed.IndexOf(open, StringComparison.Ordinal);
+        // the command's tags come in either order (<command-message> first in older files)
+        if (start < 0 || (start > 0 && !(tag.StartsWith("command-", StringComparison.Ordinal) && trimmed.StartsWith("<command-", StringComparison.Ordinal)))) return null;
+        int end = trimmed.IndexOf(close, start, StringComparison.Ordinal);
+        return end < 0 ? null : trimmed[(start + open.Length)..end].Trim();
     }
 
     private static bool IsHuman(JsonElement root) =>

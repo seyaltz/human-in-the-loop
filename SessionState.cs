@@ -75,7 +75,17 @@ public sealed class SessionState
     /// <summary>The pane showing this session, if any.</summary>
     internal SessionPane? ShownIn { get; set; }
 
-    public bool Working => Running != null;
+    /// <summary>A turn or a "!" shell command runs.</summary>
+    public bool Working => Running != null || Shell != null;
+
+    /// <summary>The "!" shell command running, if one does.</summary>
+    internal CancellationTokenSource? Shell { get; set; }
+
+    /// <summary>"!" commands run since the last message, with their output: they go with the next message.</summary>
+    internal List<string> PendingShell { get; } = [];
+
+    /// <summary>What the user wrote in this session, oldest first (↑ / ↓ and Ctrl+R).</summary>
+    internal List<string> History { get; } = [];
 
     /// <summary>Working, failed or idle changed, or a step was counted.</summary>
     public event Action<SessionState>? Changed;
