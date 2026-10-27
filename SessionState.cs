@@ -94,6 +94,12 @@ public sealed class SessionState
     internal List<string> History { get; } = [];
 
     /// <summary>Working, failed or idle changed, or a step was counted.</summary>
+    /// <summary>The running (or last) turn's tool calls, read from the process's lines.</summary>
+    public TurnLog? Log { get; set; }
+
+    /// <summary>The turns of this run, oldest first: the lessons look back at them.</summary>
+    public List<TurnLog> PastLogs { get; } = [];
+
     public event Action<SessionState>? Changed;
 
     public void Notify() => Changed?.Invoke(this);

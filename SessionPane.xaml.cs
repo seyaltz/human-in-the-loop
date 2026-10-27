@@ -350,6 +350,8 @@ public partial class SessionPane : UserControl
         state.Stopping = false;
         state.TurnStartedAt = DateTime.Now;
         state.LastNote = "";
+        if (state.Log != null) state.PastLogs.Add(state.Log);
+        state.Log = new TurnLog(message);
         state.Notify();
         bool wasNew = state.IsNew;
         try
@@ -417,6 +419,10 @@ public partial class SessionPane : UserControl
     private void Wire(SessionState state, SessionProcess process)
     {
         WireControls(state, process);
+        process.Line += line => Dispatcher.Invoke(() =>
+        {
+            if (state.Process == process) state.Log?.Read(line);
+        });
         process.Entry += entry => Dispatcher.Invoke(() =>
         {
             if (state.Process != process) return;

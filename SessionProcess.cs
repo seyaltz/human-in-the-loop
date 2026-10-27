@@ -80,6 +80,9 @@ public sealed class SessionProcess : IDisposable
     /// <summary>A system line: its subtype and the line (task_started, task_notification, commands_changed, ...).</summary>
     public event Action<string, JsonElement>? SystemEvent;
 
+    /// <summary>Every line it writes, parsed, before anything else reads it (the turn log reads tool calls from it).</summary>
+    public event Action<JsonElement>? Line;
+
     /// <summary>The process ended; the last of what it wrote to stderr.</summary>
     public event Action<string>? Exited;
 
@@ -285,6 +288,7 @@ public sealed class SessionProcess : IDisposable
         {
             return;
         }
+        Line?.Invoke(root);
         string type = Str(root, "type");
         switch (type)
         {
