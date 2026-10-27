@@ -149,7 +149,7 @@
                                      PreviewKeyDown="InputBox_PreviewKeyDown" TextChanged="InputBox_TextChanged"
                                      SelectionChanged="InputBox_SelectionChanged" LostKeyboardFocus="InputBox_LostKeyboardFocus" GotKeyboardFocus="InputBox_GotKeyboardFocus" />
                         </DockPanel>
-                        <TextBlock Text="Enter to send, Shift+Enter for a new line. / for commands and skills. Ctrl+V, drop or + to add files. Claude may edit files and run commands in this folder."
+                        <TextBlock Text="Enter to send, Shift+Enter for a new line. / commands and skills, @ files, ! shell, ? keys and tips. Ctrl+V, drop or + to add files. Claude may edit files and run commands in this folder."
                                    Style="{StaticResource Caption}" FontSize="11.5" Margin="2,6,0,0" TextWrapping="Wrap" />
 
                     </StackPanel>
@@ -163,6 +163,22 @@
                     </StackPanel>
                 </Grid>
             </DockPanel>
+            <!-- "?": every key, and the tips the Claude Code docs give, over the pane -->
+            <Border x:Name="SheetOverlay" Visibility="Collapsed" CornerRadius="14" BorderThickness="1.5"
+                    BorderBrush="{StaticResource VioletBrush}" Background="{StaticResource CardBrush}" Padding="18,12,10,12">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                        <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="32" Height="32" ToolTip="Close (Esc)"
+                                AutomationProperties.Name="Close keys and tips" Click="CloseSheet_Click">
+                            <Path Data="M6,6 L18,18 M18,6 L6,18" Style="{StaticResource IconPath}" Width="12" Height="12" />
+                        </Button>
+                        <TextBlock Text="Keys and tips" Style="{StaticResource Heading}" FontSize="20" VerticalAlignment="Center" />
+                    </DockPanel>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="SheetBody" Margin="0,0,8,0" />
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
             <Border x:Name="DropOverlay" IsHitTestVisible="False" Visibility="Collapsed" CornerRadius="14" BorderThickness="2.5"
                     BorderBrush="{StaticResource VioletBrush}" Background="#E6F1EEFF">
                 <TextBlock Text="Drop to add the files to your message" Style="{StaticResource Heading}" FontSize="20"

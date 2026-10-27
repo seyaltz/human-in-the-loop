@@ -425,6 +425,11 @@ public partial class SessionPane
     // Esc: stops a running turn; Esc Esc on the box: with text it clears it, empty it opens the rewind list
     private bool Escape()
     {
+        if (SheetOverlay.Visibility == Visibility.Visible)
+        {
+            ShowSheet(false);
+            return true;
+        }
         if (_state?.Working == true)
         {
             _ = StopTurn();

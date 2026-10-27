@@ -304,10 +304,31 @@ started in a folder or continued, worked in like the CLI, and continuable with `
 - **Transcript** of a session: its lines in order, skipping `isSidechain` and `isMeta`: the user's typed prompts, and
   each assistant message's `text` blocks and `tool_use` blocks (shown as a step: the tool name and its `command`,
   `file_path`, `pattern`, `url`, `query`, `description`, `prompt` or `skill`, 140 characters). The last 300 entries.
-- **A turn** (`RunTurnAsync`): `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions`
-  and `--session-id <new id>` for a new session or `--resume <id>`, working directory = the session's folder, the
-  message on stdin. No `--setting-sources`: the user's full setup loads (CLAUDE.md, memory, skills, plugins, hooks,
-  MCP servers). Full access is the user's choice: `-p` cannot stop to ask.
+  A typed prompt is a string or text blocks (messages written as stream-json); a user line holding a `tool_result` or
+  "[Request interrupted ..." is not one. A "/command" saved as tags shows as "/name args" (`<command-name>`,
+  `<command-args>`, in either order with `<command-message>`), its `<local-command-stdout>` / `-stderr>` - in a user
+  line, or in newer files a `system` line with `subtype: local_command` - as the turn's answer; `<local-command-caveat>`
+  lines are left out. A message starting with "[I ran: " blocks shows them as shell blocks (below). The branches cut by
+  a conversation rewind made here are skipped: from the line with the cut message's uuid until a user line whose
+  `parentUuid` is where the session resumed (kept in `session-settings.json`; the file keeps both branches - measured,
+  following `parentUuid` chains instead drops lines in 14 of 60 sessions that were never rewound, so it is not used).
+- **A session's process** (`SessionProcess`): one kept-open `claude -p --input-format stream-json --output-format
+  stream-json --verbose --permission-prompt-tool stdio --replay-user-messages --permission-mode <mode> [--model m]
+  [--effort e]` and `--session-id <new id>` for a new session or `--resume <id>` (`--resume-session-at <uuid>` after a
+  conversation rewind; `--resume <from> --fork-session --session-id <new id>` for a branch), working directory = the
+  session's folder, env `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1`. First written: the `initialize` control request.
+  No `--setting-sources`: the user's full setup loads (CLAUDE.md, memory, skills, plugins, hooks, MCP servers). Each
+  message is a stream-json user line; the turn ends at its `result` line. Its output is read all the time (questions
+  and events come between steps too). Started when the session has none, it ended, the model or effort was changed,
+  or the session file changed since the process last wrote it (size or write time against a stamp taken at the turn's
+  end and 4 s later - the session was used in a terminal; two writers would split its history; measured: the next
+  turn then knows what was said in the terminal). Closed after 10 minutes idle (checked every minute) and with the app.
+  Measured: later turns of an open process 1.2-3.6 s, the first 11-14 s. A turn's cost is the difference of the
+  process's `total_cost_usd`, which is a running total (0.0047, 0.0101, 0.0106 over three turns) that a resumed process
+  carries on from the session file's last `cost-state` `totalCostUSD` (a total below it: counted from 0). Control
+  requests used (each measured): `interrupt`, `set_permission_mode`, `set_model`, `get_context_usage`,
+  `side_question`, `rename_session`, `rewind_files`, `stop_task`; the CLI's `can_use_tool` requests become cards;
+  any other request from the CLI is answered with an error so it does not wait.
 - **Answer shape** (`SessionAnswers`): every message sent from a pane ends with one note, after a blank line:
   "[Dev break - answer shape: use these markdown headings, in this order, leaving out one with nothing under it:
   ## Result (one or two lines: what came out) / ## What I did (the important actions, short bullets) / ## Worth
@@ -319,8 +340,10 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   message starting with "/" gets no note: measured, the CLI passes everything after the command name to it as its
   arguments (`<command-args>...</command-args>` in the session file), the note included. The
   transcript hides the note (cut from the last "[Dev break - answer shape:"), live and when a saved session is read. Each streamed `assistant` line adds its
-  text and tool steps as they come; the `result` line adds "✓ done · <seconds> s · $<cost>" or its error. No timeout;
-  **Stop** kills the process tree ("Stopped.").
+  text and tool steps as they come; the `result` line adds "✓ done · <seconds> s · $<this turn's cost>" or its error,
+  and a "↶ rewind" link when the turn can be rewound. No timeout; **Stop** (or Esc) sends `interrupt` - the turn ends
+  ("Stopped.", measured: `error_during_execution`) and the process stays; no answer in 10 s, or still running 10 s
+  later: the process is killed.
 - **View** (5th mode tab **Sessions**, wide): left a card "your Claude Code, here" / Sessions with **New session...**
   (a folder picker, `OpenFolderDialog`; the new session gets a fresh id and stays at the top of the list), **Refresh**,
   and the list (title, folder name · "N min/h/d ago", the folder as tooltip). Right: the title, "<folder> · session
@@ -338,8 +361,9 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   to list it all in order (steps in mono with the tool name in violet, notes rendered small and faded with a left
   rule; the last note equal to the answer is dropped from the fold); the done line; errors in coral. While a turn runs on screen the view goes to the start of the reply once and stays; a
   session opens at the start of its latest reply; the input (Enter sends), Send, Stop, and the note "Enter to send,
-  Shift+Enter for a new line. / for commands and skills. Ctrl+V, drop or + to add files. Claude may edit files and run
-  commands in this folder.".
+  Shift+Enter for a new line. / commands and skills, @ files, ! shell, ? keys and tips. Ctrl+V, drop or + to add files.
+  Claude may edit files and run commands in this folder.". Header: **⋯** (Rewind... Esc Esc · Branch from here ·
+  Rename... · Keys and tips ?), Setup, Copy resume, Open folder.
   **"/" menu** (`SlashCommands`), like the CLI's: the commands the user's CLI takes in the session's folder - built-ins,
   the user's and the project's skills and commands, plugins' - read when a session is shown, once per folder while the
   app runs (again after a failed read): `claude -p --input-format stream-json --output-format stream-json --verbose`
@@ -357,7 +381,75 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   of the word, keeping the rest of the message; Enter on a command already written in full sends it; Esc closes the
   box until the message no longer starts with "/". Focus going to another control closes it; another window in front
   leaves it open. Once a known command (or alias) starts the message and the box is closed, a line above the input
-  shows "/name <argument hint> · <description>" (trimmed, the description as tooltip).
+  shows "/name <argument hint> · <description>" (trimmed, the description as tooltip). Dev break's own command is
+  listed first, tagged "dev break": `/btw <question>` (below). The same box serves "@" and Ctrl+R (below); for those
+  rows the tag is "file" / "folder" / "earlier".
+  **The prompt, as the terminal's** (`SessionPane.Input`): **@** - the word at the caret starting with "@" lists the
+  folder's files and folders (`FileMentions`: `git ls-files` when the folder has `.git`, else a walk skipping bin, obj,
+  node_modules, .git, .vs, .idea, dist, build, target, publish; their folders as "dir/"; at most 5,000; read once per
+  folder): a name starting with the word first, then a path starting with it, then a path holding it (shorter first);
+  a pick puts "@path " in place of the word; sent as typed (measured: `-p` reads an @file itself). **!** - a message
+  starting with "!" is not sent: measured, `-p` does not run it (Claude ran Bash itself, a model turn); Dev break runs
+  it in the folder (`ShellCommand`: Git Bash `bash.exe -lc` from Program Files\Git when there, else `powershell
+  -NoProfile -Command`), shows "$ command", the output (stdout and stderr, the last 4,000 characters) and "exit code N"
+  as a mono block with a left rule (Stop cancels it), and puts "[I ran: <cmd>]", a fenced block with the output,
+  "exit code N", "[/I ran]" and a blank line in front of the next message (not before a "/command"); the hint line says
+  so while the box starts with "!" and while results wait. **↑ / ↓** on the box's first / last line walk the session's
+  earlier messages (the draft comes back after the newest); **Ctrl+R** lists earlier messages holding what is in the
+  box, newest first, a pick puts it in the box. **Esc** stops a running turn; **Esc Esc** (600 ms) clears the box, or
+  on an empty box opens the rewind panel. **Ctrl+J** a new line. **Enter** while a turn runs queues the message
+  ("Queued (N): <first line> · sent when this turn ends · ↑ takes it back" above the box; ↑ on an empty box takes the
+  last one back); **Ctrl+Enter** writes it now (measured: it joins the running turn), shown in the turn's fold as "↳ You,
+  during the turn". "ultrathink" in the text gets the hint "ultrathink · Claude thinks harder on this message".
+  **Shift+Tab** cycles the mode, **Alt+P** opens the models, **?** on an empty box opens the sheet.
+  **Footer bar** under the input, the pane's full width (small `SecondaryButton`s, 28 px): mode "⏵ Bypass" (coral) /
+  "⏵ Ask" / "⏵ Accept edits" / "⏵ Plan" (violet) - a menu with what each does (Bypass runs everything without asking;
+  Ask asks before tools that change things; Accept edits edits files without asking, asks for the rest; Plan plans
+  only) - switched live with `set_permission_mode`; "Model: <name>" - the models of the `initialize` reply (`value`,
+  `displayName`, `description`), switched live with `set_model` (measured: the next answer's model changed);
+  "Effort: auto | <level>" - the model's `supportedEffortLevels`, applied as `--effort` when the next message restarts
+  the process; "N% context" after each turn (`get_context_usage`: `percentage`, `totalTokens`, `maxTokens`,
+  `categories`; tooltip and menu list them, coral from 80%, the menu offers "/compact "); "$x.xx this run"; and a
+  "⧗ <what>  ×" chip per background task (`task_started`, gone at `task_notification` / `task_updated` with a final
+  status; × sends `stop_task`). Mode, model and effort are kept per session in `session-settings.json` next to the app
+  (the user's data); a session never set starts in Bypass with the CLI's default model and effort.
+  **Cards** (`SessionPane.Controls`) - the CLI's `can_use_tool` questions, in the transcript (violet tint, violet
+  edge, rounded); the live box says "Waiting for you: ...". A tool: "Claude wants to use <tool>", the whole of what it
+  would run - a Bash command as it is, anything else its whole input as JSON - in a read-only scrollable mono box (never
+  the shortened step line: a long or many-line command must not hide its tail behind Allow), **Allow** · **Always
+  allow** (only with `permission_suggestions`; sends them back as `updatedPermissions` so the CLI saves the rule where
+  the terminal would; tooltip names it, e.g. "Bash(cmd) in this project's local settings") · **Deny**. A plan
+  (`ExitPlanMode`): "Plan ready - approve it to start", the plan rendered, a box for changes, **Approve and run
+  (<mode before Plan, else Ask>)** (allow, then that mode) · **Keep planning** (deny with the box's text). Claude's
+  questions (`AskUserQuestion`): each question, its options as buttons (several when `multiSelect`), a box for an own
+  answer, **Send answers** - allowed with the input plus `answers: {question: label(s)}` (measured). An answered card
+  folds to one line ("✓ Allowed ...", "✕ Denied ...", "✓ Plan approved ...", "✓ Answered: ..."); a turn's end folds
+  its open cards to "No longer asked - the turn ended." (the CLI settles them on interrupt).
+  **/btw <question>**: measured, `-p` answers "/btw isn't available in this environment"; Dev break asks the open
+  process's `side_question` and shows the answer in a box above the input ("Aside: <question>", closed with ×),
+  outside the conversation; works while a turn runs.
+  **Rewind** (`SessionPane.Rewind`): a turn of this run (its message's uuid from the replayed user line) can be rewound
+  - from Esc Esc / ⋯ (the turns, newest first), a ↶ on its folded line, or "↶ rewind" after its done line. The panel:
+  "Code and conversation" · "Conversation only" · "Code only" · Cancel, with the docs' limits (not changes made by shell
+  commands, nor most made by subagents). Code: `rewind_files` with `dry_run` first - "Restore N files (+i −d)" and the
+  files - then on a click without it (`canRewind: false` shows the reason). Conversation: the message's parent is read
+  from the session file (measured: the replayed line has no `parentUuid`); the process is replaced by one resuming at
+  it, the turn and all after it leave the transcript, its message comes back to the box, and the cut is kept for
+  reading back; a session's first message cannot be (start a new one with /clear). A line "↶ Rewound ... to before:
+  <message>" stays. Turns before this run are rewound in the terminal (/rewind).
+  **Branch from here** (⋯, once the session has a saved turn): a new session with the same mode, model and effort,
+  opened in a new pane (when there is room) showing this session's history; its first process forks this session into
+  its id (measured: `--fork-session` takes `--session-id`, and the fork answers from the shared history). **Rename**
+  (⋯ or "/rename <title>"): the title in the list and pane (kept in `session-titles.json`, shown before any other) and
+  `rename_session` (source "host"). **/clear**: a new session in the same folder in this pane; the old one stays in the
+  list.
+  **? sheet** (over the pane, card white, violet edge; × or Esc closes): "Keys" - Enter, Ctrl+Enter, Shift+Enter ·
+  Ctrl+J, Esc, Esc Esc, ↑ ↓, Ctrl+R, Shift+Tab, Alt+P, /, @, !, /btw, Ctrl+V · drop · +, ? - and "Tips from the Claude
+  Code docs", each with a button where it can be done here and a "docs" link (code.claude.com/docs/en/<page>): plan
+  before editing (Plan mode) · give Claude a way to check its work · /compact with what to keep (/compact) · /clear
+  between tasks (/clear) · Esc early, after two corrections /clear and say it better · @ files (@) · paste a screenshot
+  · subagents for research · a second session as reviewer (+ Pane) · rename sessions you come back to (Rename) ·
+  branch to try another way (Branch) · rewind (Rewind) · ultrathink · /btw (/btw).
   **Live box** above the input while a turn runs (violet tint, rounded): "● Working · <41 s | 3 min 10 s> · N steps",
   then the first line of the last text Claude wrote on the way and "Claude wrote this <time> ago", ticking every
   second (`DispatcherTimer`); gone when the turn ends.
@@ -402,7 +494,11 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   skipped until the next run. Sessions with an `ai-title` keep it.
 - State (`SessionState`): per session - transcript document, running turn, steps, failed, reply start, step group, the
   turn on screen (where it starts, its message, result, done line, failed), when the running turn started, its last
-  note and when, the pane showing it - with a `Changed` event the panes and the list lights follow.
+  note and when, its process and the file stamp, stopping, queued messages, the turns that can be rewound (start
+  block, message, uuid, the line before; their folded line), cost this run, context percent and categories, the mode
+  before Plan, background tasks, open cards, the running "!" command and the results waiting for the next message, the
+  messages written (for ↑ / Ctrl+R), a branch's source and a rewind's resume point, the pane showing it - with a
+  `Changed` event the panes and the list lights follow.
 
 ### Setup (`CliSetup.cs`, `SetupPanel`)
 
@@ -1115,7 +1211,17 @@ turns opens with every turn but the newest as one "You: ... · Claude: ..." line
 Ctrl+V with copied files and a folder and then with a screenshot gives LOG / DIR / thumbnail chips, a turn sent with
 them shows the chips in the You box (not the paths, not the shape note), a turn of more than 30 s shows the live box
 with Claude's "Now: ..." note, and the answer comes back with Result / What I did / Worth knowing, Decisions for you in
-its box and Details folded; "/" opens the command list (the CLI's, with descriptions and tags) within seconds,
+its box and Details folded; in a throwaway folder's session on Haiku: two turns run on one process (same pid, later
+turns 1-4 s), Esc during `ping -n 60` gives "Stopped." and the next turn answers on the same pid, Enter during a turn
+queues and sends after, a message sent from a terminal meanwhile makes the next turn start a new process that knows
+it; Shift+Tab to Ask and a Write gives a card whose Allow writes the file, Deny on a three-line mkdir (the card shows
+all three lines) creates nothing, Plan gives a plan card whose Approve runs it, AskUserQuestion gives a card whose
+answer comes back; switching the model makes the next answer's `model` the new one in the session file; /btw answers
+above the box; `@a` lists a.txt and Tab puts "@a.txt "; `!echo X` shows its block and the next answer knows X; ↑
+recalls, Esc Esc clears; a Write turn rewound "Code and conversation" deletes the file and puts the message back, a
+"remember <unique word>" turn rewound "Conversation only" is not known after, and stays out after a restart; Branch
+opens a pane whose process has `--fork-session --session-id` and answers from the shared history; /rename shows in
+the list; /clear opens a new session; "?" opens the sheet and its /compact button fills the box; "/" opens the command list (the CLI's, with descriptions and tags) within seconds,
 "/brain" narrows it to the brainstorming skill, ↓ moves, Tab puts "/<name> " in the box with its hint line above, a
 click on a row does the same, Esc closes the list - and a test never presses Enter on a command in a real session
 (it runs there). Drive every test from a throwaway copy of the
