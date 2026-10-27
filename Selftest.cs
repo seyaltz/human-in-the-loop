@@ -30,6 +30,11 @@ public static class Selftest
             QualityCases();
             LessonCases();
             LearnCases();
+            Check(Watch.IsQuickStep("commit and push"), "Quick step: \"commit and push\"");
+            Check(Watch.IsQuickStep("rebuild and restart dev break"), "Quick step: \"rebuild and restart dev break\"");
+            Check(!Watch.IsQuickStep("design a watcher that coaches long turns"), "Quick step: a design ask is not one");
+            Check(!Watch.IsQuickStep("run the migration, then rewrite the three services that read the old table and add tests for each of them"),
+                "Quick step: a long ask with 'run' in it is not one (over 80 characters)");
         }
         catch (Exception ex)
         {

@@ -120,6 +120,12 @@ public static class Watch
         return "the app or the changed file";
     }
 
+    private static readonly Regex QuickWord = new(@"\b(commit|push|merge|restart|rebuild|deploy|run|status|pull|rebase|tag)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>A short operational ask ("commit and push", "restart it"): low effort answers it faster, at the same quality.</summary>
+    public static bool IsQuickStep(string text) => text.Trim().Length is > 0 and <= 80 && QuickWord.IsMatch(text);
+
     private static string Clock(double seconds) => $"{(int)(seconds / 60)}:{(int)(seconds % 60):00}";
 
     private static string Short(string text, int max)
