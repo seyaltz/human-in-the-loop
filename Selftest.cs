@@ -138,8 +138,26 @@ public static class Selftest
             "Telemetry: an empty turn, context unknown");
     }
 
+    // 4 different Playwright scripts: the tool keeps its script in "code", which the summary does not show (it is blank),
+    // so only the whole input tells them apart - the case that flagged real progress as stuck
+    private static void SameInputCases()
+    {
+        string[] scripts = ["open the deal link", "close the other tabs, go to the page", "take a screenshot", "type into the chat box"];
+        TurnLog different = new("check the radar"), same = new("check the radar");
+        for (int i = 0; i < 4; i++)
+        {
+            different.Read(ToolUse("d" + i, "mcp__playwright__browser_run_code_unsafe", new { code = scripts[i] }));
+            different.Read(ToolResult("d" + i, false, "ok " + i));
+            same.Read(ToolUse("s" + i, "mcp__playwright__browser_run_code_unsafe", new { code = scripts[0] }));
+            same.Read(ToolResult("s" + i, false, "ok"));
+        }
+        Check(Watch.FlagRule(different, DateTime.Now, false)?.Rule != "same-4", "Flag: 4 different scripts of one tool are not the same call");
+        Check(Watch.FlagRule(same, DateTime.Now, false)?.Rule == "same-4", "Flag: 4 identical scripts are the same call");
+    }
+
     private static void FlagCases()
     {
+        SameInputCases();
         DateTime now = DateTime.Now;
         var failing = ("Bash", "npm run build", true, "error TS2304");
         Check(Watch.Flag(LogOf(failing, failing, failing), now.AddMinutes(-9.9), false)?.StartsWith("the same Bash call failed 3 times in a row") == true,

@@ -37,7 +37,7 @@ public static class Watch
         {
             TurnStep last = done[^1];
             bool Same(int n, Func<TurnStep, bool> also) => done.Count >= n &&
-                done.TakeLast(n).All(s => s.Tool == last.Tool && s.Summary == last.Summary && s.Error == last.Error && also(s));
+                done.TakeLast(n).All(s => s.Tool == last.Tool && s.Summary == last.Summary && s.Input == last.Input && s.Error == last.Error && also(s));
             if (Same(3, s => s.Error)) return ("failed-3", $"the same {last.Tool} call failed 3 times in a row: {last.Summary}");
             if (Same(4, _ => true)) return ("same-4", $"it ran the same {last.Tool} call 4 times in a row: {last.Summary}");
             if (done.TakeLast(10).Count(s => s.Error) >= 5) return ("errors", "5 of its last 10 tool calls failed");
