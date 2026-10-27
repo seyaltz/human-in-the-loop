@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Windows.Documents;
 
@@ -13,7 +14,13 @@ public sealed class SessionState
 {
     public required SessionInfo Info { get; set; }
     public bool IsNew { get; set; }
-    public bool StartedHere { get; init; }
+    public bool StartedHere { get; set; }
+
+    /// <summary>A branch not started yet: the session it branches from (its first process forks it).</summary>
+    internal string? ForkFrom { get; set; }
+
+    /// <summary>After a conversation rewind: the line the next process resumes the session at.</summary>
+    internal string? ResumeAt { get; set; }
     public bool Loaded { get; set; }
     public FlowDocument Document { get; } = CodeRenderer.Render("");
     public CancellationTokenSource? Running { get; set; }
@@ -38,13 +45,63 @@ public sealed class SessionState
     public string LastNote { get; set; } = "";
     public DateTime LastNoteAt { get; set; }
 
+    /// <summary>The session's kept-open claude process, while it has one.</summary>
+    internal SessionProcess? Process { get; set; }
+
+    /// <summary>The session file's size and time when its process last finished writing: another change means another writer.</summary>
+    internal (long Length, DateTime Time)? FileStamp { get; set; }
+
+    /// <summary>Stop was pressed for the running turn.</summary>
+    internal bool Stopping { get; set; }
+
+    /// <summary>Messages written while a turn ran, sent one by one when it ends.</summary>
+    internal List<string> Queued { get; } = [];
+
+    /// <summary>The turns of this run that can be rewound: where each starts in the document, its message's uuid, and the uuid before it.</summary>
+    internal List<TurnMark> Marks { get; } = [];
+
+    /// <summary>What the turns cost in this run of the app.</summary>
+    public double Cost { get; set; }
+
+    /// <summary>How full the context was after the last turn (percent), or -1 before it is known.</summary>
+    public int ContextPercent { get; set; } = -1;
+
+    /// <summary>The categories behind <see cref="ContextPercent"/>, one per line.</summary>
+    public string ContextDetail { get; set; } = "";
+
+    /// <summary>The mode before Plan: approving a plan goes back to it.</summary>
+    public string? ModeBeforePlan { get; set; }
+
+    /// <summary>Background tasks running (Bash commands and agents moved to the background): id and what it is.</summary>
+    internal Dictionary<string, string> Tasks { get; } = [];
+
+    /// <summary>Questions of the CLI shown as cards and not answered yet; each closes its card with a line.</summary>
+    internal List<(PermissionAsk Ask, Action<string> Close)> OpenCards { get; } = [];
+
     /// <summary>The pane showing this session, if any.</summary>
     internal SessionPane? ShownIn { get; set; }
 
-    public bool Working => Running != null;
+    /// <summary>A turn or a "!" shell command runs.</summary>
+    public bool Working => Running != null || Shell != null;
+
+    /// <summary>The "!" shell command running, if one does.</summary>
+    internal CancellationTokenSource? Shell { get; set; }
+
+    /// <summary>"!" commands run since the last message, with their output: they go with the next message.</summary>
+    internal List<string> PendingShell { get; } = [];
+
+    /// <summary>What the user wrote in this session, oldest first (↑ / ↓ and Ctrl+R).</summary>
+    internal List<string> History { get; } = [];
 
     /// <summary>Working, failed or idle changed, or a step was counted.</summary>
     public event Action<SessionState>? Changed;
 
     public void Notify() => Changed?.Invoke(this);
+}
+
+/// <summary>A turn of this run that can be rewound: its first block, its message, its uuid and the uuid of the line before it.</summary>
+internal sealed record TurnMark(Block Start, string Message, string Uuid, string? Before)
+{
+    /// <summary>The turn's one line once it is folded (its blocks are then out of the document).</summary>
+    public Block? Line { get; set; }
 }

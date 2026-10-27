@@ -10,7 +10,7 @@ using System.Windows.Media;
 namespace DevBreak;
 
 /// <summary>
-/// Turns Claude's reply into a FlowDocument: prose with light Markdown (headings, lists, bold, italic, links),
+/// Turns Claude's reply into a FlowDocument: prose with light Markdown (headings, lists, tables, bold, italic, links),
 /// ```lang fenced blocks as an ink code box coloured like VS Code's Dark+ theme, `inline code` in the code font on a
 /// violet tint.
 /// </summary>
@@ -30,6 +30,7 @@ public static class CodeRenderer
     private static readonly Brush FunctionColor = Frozen(0xDC, 0xDC, 0xAA);
     private static readonly Brush InlineCodeColor = Frozen(0x3A, 0x22, 0xC4);
     private static readonly Brush HeaderColor = Frozen(0x9A, 0xA0, 0xC8);
+    private static readonly Brush TableLine = Frozen(0xDD, 0xD8, 0xF2);
 
     private static readonly Regex Fence = new(@"```[ \t]*(\w*)[^\n]*\n([\s\S]*?)```", RegexOptions.Compiled);
 
@@ -105,6 +106,7 @@ public static class CodeRenderer
     private static readonly Regex Heading = new(@"^\s{0,3}(#{1,4})\s+(.+)$", RegexOptions.Compiled);
     private static readonly Regex Bullet = new(@"^\s*[-*•]\s+(.*)$", RegexOptions.Compiled);
     private static readonly Regex Numbered = new(@"^\s*\d+[.)]\s+(.*)$", RegexOptions.Compiled);
+    private static readonly Regex TableRule = new(@"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$", RegexOptions.Compiled);
 
     // inline Markdown, in this order: `code`, **bold**, *italic* / _italic_, [text](url), a bare https URL
     private static readonly Regex Inline = new(
@@ -114,7 +116,8 @@ public static class CodeRenderer
 
     /// <summary>
     /// Prose with the Markdown Claude writes: "#" headings, "- " / "1. " lists (lines that follow an item without a
-    /// marker continue it), and inline code, bold, italic and links (which open in the browser).
+    /// marker continue it), "| a | b |" tables (a header row, then a "|---|" rule), and inline code, bold, italic and
+    /// links (which open in the browser).
     /// </summary>
     private static void AddProse(FlowDocument document, string prose, bool softWrap)
     {
@@ -123,9 +126,20 @@ public static class CodeRenderer
             if (block.Trim().Length == 0) continue;
             Paragraph? paragraph = null;
             List? list = null;
-            foreach (string raw in block.Trim().Split('\n'))
+            string[] lines = block.Trim().Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+            for (int i = 0; i < lines.Length; i++)
             {
-                string line = raw.TrimEnd('\r');
+                string line = lines[i];
+                if (line.TrimStart().StartsWith('|') && i + 1 < lines.Length && TableRule.IsMatch(lines[i + 1]))
+                {
+                    int end = i + 2;
+                    while (end < lines.Length && lines[end].TrimStart().StartsWith('|')) end++;
+                    document.Blocks.Add(MakeTable(line, lines[i + 1], lines[(i + 2)..end]));
+                    list = null;
+                    paragraph = null;
+                    i = end - 1;
+                    continue;
+                }
                 Match heading = Heading.Match(line);
                 Match bullet = Bullet.Match(line);
                 Match numbered = Numbered.Match(line);
@@ -168,6 +182,49 @@ public static class CodeRenderer
                 }
             }
         }
+    }
+
+    // a row's cells: "| a | b |" -> a, b (a "\|" stays a bar inside its cell)
+    private static string[] Cells(string row)
+    {
+        string inner = row.Trim();
+        if (inner.StartsWith('|')) inner = inner[1..];
+        if (inner.EndsWith('|') && !inner.EndsWith(@"\|", StringComparison.Ordinal)) inner = inner[..^1];
+        return Regex.Split(inner, @"(?<!\\)\|").Select(c => c.Trim().Replace(@"\|", "|")).ToArray();
+    }
+
+    /// <summary>A Markdown table: the header row bold on a tint, its rule's ":--" / ":-:" / "--:" as each column's alignment.</summary>
+    private static Table MakeTable(string header, string rule, string[] rows)
+    {
+        string[] heads = Cells(header);
+        string[] rules = Cells(rule);
+        TextAlignment[] align = heads.Select((_, c) => c >= rules.Length ? TextAlignment.Left
+            : rules[c].StartsWith(':') && rules[c].EndsWith(':') ? TextAlignment.Center
+            : rules[c].EndsWith(':') ? TextAlignment.Right : TextAlignment.Left).ToArray();
+        var table = new Table { CellSpacing = 0, Margin = new Thickness(0, 2, 0, 14), BorderBrush = TableLine, BorderThickness = new Thickness(1, 1, 0, 0) };
+        foreach (string _ in heads) table.Columns.Add(new TableColumn());
+        var group = new TableRowGroup();
+        group.Rows.Add(TableLineOf(heads, align, true));
+        foreach (string row in rows) group.Rows.Add(TableLineOf(Cells(row), align, false));
+        table.RowGroups.Add(group);
+        return table;
+    }
+
+    // one row, as many cells as the header has columns: extra ones are dropped, missing ones are empty
+    private static TableRow TableLineOf(string[] cells, TextAlignment[] align, bool header)
+    {
+        var row = new TableRow { Background = header ? InlineCodeBackground : null };
+        for (int c = 0; c < align.Length; c++)
+        {
+            var paragraph = new Paragraph { Margin = new Thickness(0), TextAlignment = align[c], FontSize = 13.5 };
+            if (header) paragraph.FontWeight = FontWeights.Bold;
+            AddInline(paragraph, c < cells.Length ? cells[c] : "");
+            row.Cells.Add(new TableCell(paragraph)
+            {
+                BorderBrush = TableLine, BorderThickness = new Thickness(0, 0, 1, 1), Padding = new Thickness(8, 4, 8, 4),
+            });
+        }
+        return row;
     }
 
     private static void AddInline(Paragraph paragraph, string line)

@@ -76,21 +76,41 @@ public static class ClaudeSessions
         var entries = new List<SessionEntry>();
         string? file = FileOf(id);
         if (file == null) return entries;
+        // the branches Dev break rewound: from the cut message until the line that goes on from where it resumed
+        List<RewindCut> cuts = SessionSettings.RewindsOf(id);
+        RewindCut? skipping = null;
         using var reader = new StreamReader(new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
         while (reader.ReadLine() is { } line)
         {
+            if (cuts.Count > 0 && Cut(line, cuts, ref skipping)) continue;
             bool user = line.Contains("\"type\":\"user\"", StringComparison.Ordinal);
-            if (!user && !line.Contains("\"type\":\"assistant\"", StringComparison.Ordinal)) continue;
+            // a "/command"'s output, in newer files a system line of its own
+            bool local = !user && line.Contains("\"subtype\":\"local_command\"", StringComparison.Ordinal);
+            if (!user && !local && !line.Contains("\"type\":\"assistant\"", StringComparison.Ordinal)) continue;
             try
             {
                 using JsonDocument doc = JsonDocument.Parse(line);
                 JsonElement root = doc.RootElement;
                 if (root.TryGetProperty("isSidechain", out JsonElement side) && side.ValueKind == JsonValueKind.True) continue;
                 if (root.TryGetProperty("isMeta", out JsonElement meta) && meta.ValueKind == JsonValueKind.True) continue;
+                if (local)
+                {
+                    if (root.TryGetProperty("content", out JsonElement said) && said.ValueKind == JsonValueKind.String
+                        && (Tag(said.GetString()!, "local-command-stdout") ?? Tag(said.GetString()!, "local-command-stderr")) is { } output)
+                    {
+                        entries.Add(new SessionEntry(SessionEntryKind.Note, output.Length > 0 ? output : "(no output)"));
+                    }
+                    continue;
+                }
                 if (!root.TryGetProperty("message", out JsonElement message) || !message.TryGetProperty("content", out JsonElement content)) continue;
                 if (user)
                 {
-                    if (content.ValueKind == JsonValueKind.String && IsHuman(root)) entries.Add(new SessionEntry(SessionEntryKind.You, content.GetString()!));
+                    if (!IsHuman(root) || Typed(content) is not { Length: > 0 } typed) continue;
+                    // a "/command" is saved as tags: shown as typed, its output as the turn's answer, the CLI's caveat left out
+                    if (Tag(typed, "local-command-stdout") is { } output) entries.Add(new SessionEntry(SessionEntryKind.Note, output.Length > 0 ? output : "(no output)"));
+                    else if (Tag(typed, "local-command-stderr") is { } error) entries.Add(new SessionEntry(SessionEntryKind.Note, error));
+                    else if (Tag(typed, "command-name") is { } name) entries.Add(new SessionEntry(SessionEntryKind.You, (name + " " + (Tag(typed, "command-args") ?? "")).Trim()));
+                    else if (!typed.StartsWith("<local-command-caveat>", StringComparison.Ordinal)) entries.Add(new SessionEntry(SessionEntryKind.You, typed));
                     continue;
                 }
                 if (content.ValueKind != JsonValueKind.Array) continue;
@@ -103,6 +123,35 @@ public static class ClaudeSessions
         }
         AnswerPerTurn(entries);
         return entries.Count > MaxEntries ? entries[^MaxEntries..] : entries;
+    }
+
+    // true when the line is in a rewound branch: from the line with the cut's uuid until a message whose parent is
+    // where the session resumed (a message with no parent, for a rewind to the start)
+    private static bool Cut(string line, List<RewindCut> cuts, ref RewindCut? skipping)
+    {
+        if (!line.Contains("\"uuid\"", StringComparison.Ordinal)) return skipping != null;
+        string uuid = "", parent = "";
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(line);
+            if (doc.RootElement.TryGetProperty("uuid", out JsonElement u) && u.ValueKind == JsonValueKind.String) uuid = u.GetString()!;
+            if (doc.RootElement.TryGetProperty("parentUuid", out JsonElement p) && p.ValueKind == JsonValueKind.String) parent = p.GetString()!;
+        }
+        catch (JsonException)
+        {
+            return skipping != null;
+        }
+        if (skipping == null)
+        {
+            skipping = cuts.FirstOrDefault(c => c.From == uuid);
+            return skipping != null;
+        }
+        if (parent == (skipping.At ?? "") && line.Contains("\"type\":\"user\"", StringComparison.Ordinal))
+        {
+            skipping = cuts.FirstOrDefault(c => c.From == uuid);
+            return skipping != null;
+        }
+        return true;
     }
 
     // a saved turn has no separate result: its last text is the answer, the texts before it were notes on the way
@@ -123,63 +172,8 @@ public static class ClaudeSessions
         }
     }
 
-    /// <summary>
-    /// Runs one turn of a session in its folder: <paramref name="isNew"/> starts it with that id, otherwise it resumes.
-    /// Each step is reported as it streams in. Cancelling stops claude and everything it started.
-    /// <paramref name="extraArgs"/> go to claude as they are (the factory denies pushing with them); <paramref name="onLine"/>
-    /// sees every streamed line as it is parsed (the factory's trace), valid only during the call.
-    /// </summary>
-    public static async Task RunTurnAsync(string folder, string id, bool isNew, string prompt, Action<SessionEntry> onEntry,
-        CancellationToken cancel, IEnumerable<string>? extraArgs = null, Action<JsonElement>? onLine = null)
-    {
-        var start = new ProcessStartInfo("claude")
-        {
-            WorkingDirectory = folder,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(false),
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (string arg in new[] { "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions" })
-        {
-            start.ArgumentList.Add(arg);
-        }
-        start.ArgumentList.Add(isNew ? "--session-id" : "--resume");
-        start.ArgumentList.Add(id);
-        foreach (string arg in extraArgs ?? []) start.ArgumentList.Add(arg);
-
-        using Process process = await Task.Run(() => Process.Start(start)) ?? throw new InvalidOperationException("could not start claude");
-        using CancellationTokenRegistration stop = cancel.Register(() =>
-        {
-            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-        });
-        await process.StandardInput.WriteAsync(prompt);
-        process.StandardInput.Close();
-        Task<string> stderr = process.StandardError.ReadToEndAsync();
-
-        bool finished = false;
-        while (await process.StandardOutput.ReadLineAsync() is { } line)
-        {
-            finished |= ReadLine(line, onEntry, onLine);
-        }
-        await process.WaitForExitAsync();
-        if (cancel.IsCancellationRequested)
-        {
-            onEntry(new SessionEntry(SessionEntryKind.Error, "Stopped."));
-        }
-        else if (!finished)
-        {
-            string err = (await stderr).Trim();
-            onEntry(new SessionEntry(SessionEntryKind.Error, $"claude exited with {process.ExitCode}" + (err.Length > 0 ? ": " + err : "")));
-        }
-    }
-
     // one streamed line of a turn: its steps and answer go to onEntry; true when it is the line that ends the turn
-    private static bool ReadLine(string line, Action<SessionEntry> onEntry, Action<JsonElement>? onLine)
+    internal static bool ReadLine(string line, Action<SessionEntry> onEntry, Action<JsonElement>? onLine)
     {
         if (!line.StartsWith('{')) return false;
         try
@@ -238,10 +232,23 @@ public static class ClaudeSessions
 
         public bool Usable => !_broken && !_process.HasExited;
 
+        // the process's running total at its last result (a resumed one may carry on the session's recorded total)
+        private double _costSoFar;
+
         private LiveSession(Process process, string key)
         {
             _process = process;
             Key = key;
+        }
+
+        /// <summary>What a turn cost, from its result's total_cost_usd - the process's total so far, not the turn's.</summary>
+        public double TurnCost(double total)
+        {
+            // a total below the recorded one: this process did not carry the session's total on, it counts from 0
+            if (total < _costSoFar) _costSoFar = 0;
+            double cost = total - _costSoFar;
+            _costSoFar = total;
+            return cost;
         }
 
         public static LiveSession Start(string folder, string id, bool isNew, IEnumerable<string>? extraArgs)
@@ -267,7 +274,7 @@ public static class ClaudeSessions
             start.ArgumentList.Add(id);
             foreach (string arg in extra) start.ArgumentList.Add(arg);
             Process process = Process.Start(start) ?? throw new InvalidOperationException("could not start claude");
-            var live = new LiveSession(process, KeyOf(folder, id, extra));
+            var live = new LiveSession(process, KeyOf(folder, id, extra)) { _costSoFar = isNew ? 0 : LastCost(id) };
             process.ErrorDataReceived += (_, e) =>
             {
                 if (e.Data != null) lock (live._stderr) live._stderr.AppendLine(e.Data);
@@ -399,6 +406,35 @@ public static class ClaudeSessions
         return "";
     }
 
+    // what the user typed: a string (a message from the terminal or -p) or text blocks (a message written as stream-json,
+    // as Sessions and the Factory send them); a line of tool results, or the CLI's "[Request interrupted ...]", is not
+    private static string? Typed(JsonElement content)
+    {
+        if (content.ValueKind == JsonValueKind.String) return content.GetString();
+        if (content.ValueKind != JsonValueKind.Array) return null;
+        var text = new StringBuilder();
+        foreach (JsonElement block in content.EnumerateArray())
+        {
+            string kind = block.TryGetProperty("type", out JsonElement k) ? k.GetString() ?? "" : "";
+            if (kind == "tool_result") return null;
+            if (kind == "text" && block.TryGetProperty("text", out JsonElement t)) text.Append(t.GetString());
+        }
+        string typed = text.ToString();
+        return typed.StartsWith("[Request interrupted", StringComparison.Ordinal) ? null : typed;
+    }
+
+    // the text inside <tag>...</tag> when the message starts with that tag (after white space), else null
+    private static string? Tag(string text, string tag)
+    {
+        string trimmed = text.TrimStart();
+        string open = "<" + tag + ">", close = "</" + tag + ">";
+        int start = trimmed.IndexOf(open, StringComparison.Ordinal);
+        // the command's tags come in either order (<command-message> first in older files)
+        if (start < 0 || (start > 0 && !(tag.StartsWith("command-", StringComparison.Ordinal) && trimmed.StartsWith("<command-", StringComparison.Ordinal)))) return null;
+        int end = trimmed.IndexOf(close, start, StringComparison.Ordinal);
+        return end < 0 ? null : trimmed[(start + open.Length)..end].Trim();
+    }
+
     private static bool IsHuman(JsonElement root) =>
         !root.TryGetProperty("origin", out JsonElement origin)
         || (origin.TryGetProperty("kind", out JsonElement kind) && kind.GetString() == "human");
@@ -429,6 +465,67 @@ public static class ClaudeSessions
             }
         }
         return (folder, prompt);
+    }
+
+    /// <summary>
+    /// The line a message follows in the session file (its parentUuid). Measured: the echo of a message
+    /// (--replay-user-messages) carries its uuid but no parentUuid, and a process that just resumed has seen no line
+    /// before it - the file has it.
+    /// </summary>
+    public static string? ParentOf(string id, string uuid)
+    {
+        if (FileOf(id) is not { } file) return null;
+        using var reader = new StreamReader(new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+        while (reader.ReadLine() is { } line)
+        {
+            if (!line.Contains(uuid, StringComparison.Ordinal)) continue;
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(line);
+                JsonElement root = doc.RootElement;
+                if (root.TryGetProperty("uuid", out JsonElement u) && u.GetString() == uuid)
+                {
+                    return root.TryGetProperty("parentUuid", out JsonElement p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The session's running cost as its file last recorded it (the last cost-state line's totalCostUSD), 0 without one.
+    /// Measured: a process resuming the session carries this total on in its results' total_cost_usd.
+    /// </summary>
+    public static double LastCost(string id)
+    {
+        if (FileOf(id) is not { } file) return 0;
+        try
+        {
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            stream.Seek(Math.Max(0, stream.Length - 256 * 1024), SeekOrigin.Begin);
+            using var reader = new StreamReader(stream);
+            double cost = 0;
+            while (reader.ReadLine() is { } line)
+            {
+                if (!line.Contains("\"cost-state\"", StringComparison.Ordinal)) continue;
+                try
+                {
+                    using JsonDocument doc = JsonDocument.Parse(line);
+                    if (doc.RootElement.TryGetProperty("totalCostUSD", out JsonElement c) && c.ValueKind == JsonValueKind.Number) cost = c.GetDouble();
+                }
+                catch (JsonException)
+                {
+                }
+            }
+            return cost;
+        }
+        catch (IOException)
+        {
+            return 0;
+        }
     }
 
     // the session's latest generated title, from the end of the file (titles are rewritten as the session goes on)

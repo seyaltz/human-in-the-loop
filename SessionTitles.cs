@@ -36,6 +36,20 @@ public static class SessionTitles
         }
     }
 
+    /// <summary>A title the user gave the session (Rename): shown from then on, in place of any other.</summary>
+    public static void Set(string id, string title)
+    {
+        Cache[id] = title;
+        try
+        {
+            File.WriteAllText(CachePath, JsonSerializer.Serialize(Cache, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception)
+        {
+            // kept for this run only
+        }
+    }
+
     /// <summary>The title Claude wrote for this session, if it has one.</summary>
     public static string? Get(string id) => Cache.GetValueOrDefault(id);
 

@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace DevBreak;
 
@@ -39,7 +40,28 @@ public partial class SessionsView : UserControl
         _active = NewPane();
         Layout();
         Activate(_active);
+        // a session's process closes after 10 minutes idle (the user's choice: the session may go on in a terminal);
+        // all of them close with the app
+        var idle = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+        idle.Tick += (_, _) =>
+        {
+            foreach (SessionState state in _sessions.Values)
+            {
+                if (state.Process is { } process && !state.Working && DateTime.Now - process.LastActivity > IdleClose)
+                {
+                    state.Process = null;
+                    process.Dispose();
+                }
+            }
+        };
+        idle.Start();
+        Application.Current.Exit += (_, _) =>
+        {
+            foreach (SessionState state in _sessions.Values) state.Process?.Dispose();
+        };
     }
+
+    private static readonly TimeSpan IdleClose = TimeSpan.FromMinutes(10);
 
     /// <summary>Lists the sessions the first time the view is shown.</summary>
     public void Start()
@@ -65,6 +87,11 @@ public partial class SessionsView : UserControl
         pane.Activated += Activate;
         pane.CloseRequested += Close;
         pane.SessionSaved += RefreshList;
+        pane.NewSessionRequested += StartSession;
+        pane.Renamed += state =>
+        {
+            if (_titles.TryGetValue(state.Info.Id, out TextBlock? title)) title.Text = state.Info.Title;
+        };
         _panes.Add(pane);
         Panes.Children.Add(pane);
         return pane;
@@ -273,6 +300,28 @@ public partial class SessionsView : UserControl
             _sessions[info.Id] = state;
         }
         return state;
+    }
+
+    // /clear (a new session, in the pane) or Branch (a fork of the pane's session, in a new pane when there is room)
+    private void StartSession(SessionPane from, SessionInfo info, string? forkFrom, bool newPane)
+    {
+        SessionState state = StateOf(info, isNew: forkFrom == null);
+        if (forkFrom != null)
+        {
+            state.ForkFrom = forkFrom;
+            state.StartedHere = true;
+        }
+        ListBoxItem row = Row(info);
+        SessionList.Items.Insert(0, row);
+        SessionPane target = from;
+        if (newPane && _panes.Count < MaxPanes)
+        {
+            target = NewPane();
+            target.Clear();
+            Layout();
+        }
+        target.Show(state);
+        Activate(target);
     }
 
     private void New_Click(object sender, RoutedEventArgs e)

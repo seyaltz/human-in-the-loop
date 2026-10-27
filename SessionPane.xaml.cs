@@ -41,6 +41,12 @@ public partial class SessionPane : UserControl
 
     public SessionState? State => _state;
 
+    /// <summary>A session to start: its info, the session it branches from (null: a new one), in a new pane or this one.</summary>
+    public event Action<SessionPane, SessionInfo, string?, bool>? NewSessionRequested;
+
+    /// <summary>The session got a new title.</summary>
+    public event Action<SessionState>? Renamed;
+
     public SessionPane()
     {
         InitializeComponent();
@@ -83,13 +89,17 @@ public partial class SessionPane : UserControl
         SessionTitle.Text = state.Info.Title;
         SessionFolder.Text = state.Info.Folder + "   ·   session " + state.Info.Id;
         Transcript.Document = state.Document;
-        CopyResumeButton.IsEnabled = OpenFolderButton.IsEnabled = SetupButton.IsEnabled = true;
+        CopyResumeButton.IsEnabled = OpenFolderButton.IsEnabled = SetupButton.IsEnabled = MoreButton.IsEnabled = true;
         ShowSetup(false);
         Update();
+        UpdateQueued();
+        LoadCommands(state.Info.Folder);
         if (!state.Loaded)
         {
             Loading.Visibility = Visibility.Visible;
-            IReadOnlyList<SessionEntry> entries = await Task.Run(() => ClaudeSessions.Transcript(state.Info.Id));
+            // a branch not started yet shows the session it branches from
+            string from = state.ForkFrom ?? state.Info.Id;
+            IReadOnlyList<SessionEntry> entries = await Task.Run(() => ClaudeSessions.Transcript(from));
             if (!state.Loaded)
             {
                 state.Loaded = true;
@@ -108,7 +118,7 @@ public partial class SessionPane : UserControl
         Transcript.Document = CodeRenderer.Render("");
         SessionTitle.Text = "Pick a session";
         SessionFolder.Text = "Pick one on the left for this pane.";
-        CopyResumeButton.IsEnabled = OpenFolderButton.IsEnabled = SetupButton.IsEnabled = false;
+        CopyResumeButton.IsEnabled = OpenFolderButton.IsEnabled = SetupButton.IsEnabled = MoreButton.IsEnabled = false;
         ShowSetup(false);
         Update();
     }
@@ -125,6 +135,11 @@ public partial class SessionPane : UserControl
         _pending.Clear();
         Attachments.Children.Clear();
         Attachments.Visibility = Visibility.Collapsed;
+        // the commands were that folder's
+        _commands = null;
+        _commandsFailed = false;
+        _shownTyped = null;
+        CommandMenu.Visibility = CommandHint.Visibility = QueuedText.Visibility = AsideBox.Visibility = Visibility.Collapsed;
     }
 
     private void OnChanged(SessionState state) => Update();
@@ -134,7 +149,8 @@ public partial class SessionPane : UserControl
     {
         bool running = _state?.Working == true;
         InputBox.IsEnabled = AddFilesButton.IsEnabled = _state != null;
-        SendButton.IsEnabled = _state != null && !running;
+        // while a turn runs, Send queues the message
+        SendButton.IsEnabled = _state != null;
         StopButton.IsEnabled = running;
         if (running) WorkingText.Visibility = Visibility.Collapsed;
         UpdateLive();
@@ -142,6 +158,7 @@ public partial class SessionPane : UserControl
         else _clock.Stop();
         // the title may come later (Claude writes one for an untitled session)
         if (_state != null) SessionTitle.Text = _state.Info.Title;
+        UpdateBar();
         Lights.Set(Light, _state, this);
     }
 
@@ -177,19 +194,6 @@ public partial class SessionPane : UserControl
         ChatArea.Visibility = show ? Visibility.Collapsed : Visibility.Visible;
         SetupButton.Content = show ? "Chat" : "Setup";
         if (show) SetupArea.Show(_state!.Info.Folder);
-    }
-
-    private void InputBox_PreviewKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
-        {
-            e.Handled = true;
-            Send();
-        }
-        else if (e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && PasteFiles())
-        {
-            e.Handled = true;
-        }
     }
 
     /// <summary>Ctrl+V with a screenshot or copied files on the clipboard adds them; plain text pastes as usual.</summary>
@@ -260,41 +264,104 @@ public partial class SessionPane : UserControl
 
     private void Send_Click(object sender, RoutedEventArgs e) => Send();
 
-    private async void Send()
+    // Enter: the message is sent, or queued while a turn runs (as the CLI queues it); Ctrl+Enter while a turn runs: sent
+    // now, into the running turn
+    private void Send(bool now = false)
     {
         SessionState? state = _state;
         string text = InputBox.Text.Trim();
-        if (state == null || state.Working || (text.Length == 0 && _pending.Count == 0)) return;
+        if (state == null || (text.Length == 0 && _pending.Count == 0)) return;
         // Claude gets the files' paths in the message (it reads them itself; the transcript shows them as chips), and
-        // the note asking for the answer's shape and for progress notes on long work (hidden in the transcript)
-        string message = SessionAnswers.WithShape(AttachedFiles.Message(text, _pending));
+        // the note asking for the answer's shape and for progress notes on long work (hidden in the transcript) - not after a
+        // "/command": measured, the CLI then passes the note to the command as its arguments (<command-args>...</command-args>)
+        if (text.StartsWith('!') && text.Length > 1 && _pending.Count == 0)
+        {
+            InputBox.Clear();
+            if (!state.Working) _ = RunShell(state, text[1..].Trim());
+            else WorkingText.Text = "A shell command waits for the turn to end - run it after.";
+            return;
+        }
+        if (text.Equals("/clear", StringComparison.OrdinalIgnoreCase) && _pending.Count == 0)
+        {
+            // as in the CLI: a fresh session in the same folder; the old one stays in the list
+            InputBox.Clear();
+            NewSessionRequested?.Invoke(this, new SessionInfo(Guid.NewGuid().ToString(), state.Info.Folder,
+                "New session in " + System.IO.Path.GetFileName(state.Info.Folder.TrimEnd('\\')), DateTime.Now), null, false);
+            return;
+        }
+        if (text.StartsWith("/rename ", StringComparison.OrdinalIgnoreCase) && text.Length > 8 && _pending.Count == 0)
+        {
+            InputBox.Clear();
+            _ = Rename(state, text[8..].Trim());
+            return;
+        }
+        if (text.StartsWith("/btw ", StringComparison.OrdinalIgnoreCase) && text.Length > 5)
+        {
+            InputBox.Clear();
+            _ = Aside(state, text[5..].Trim());
+            return;
+        }
+        string body = AttachedFiles.Message(text, _pending);
+        string message = text.StartsWith('/') ? body : SessionAnswers.WithShape(body);
+        // the "!" commands run since the last message go in front of it, as the CLI puts them in the conversation
+        // (not before a "/command": they would become its arguments)
+        if (state.PendingShell.Count > 0 && !text.StartsWith('/'))
+        {
+            message = string.Concat(state.PendingShell) + message;
+            state.PendingShell.Clear();
+        }
         InputBox.Clear();
         _pending.Clear();
         Attachments.Children.Clear();
         Attachments.Visibility = Visibility.Collapsed;
+        if (!state.Working)
+        {
+            _ = RunTurn(state, message);
+        }
+        else if (now && state.Process != null)
+        {
+            // measured: a message written during a turn joins it; shown with the turn's work
+            Add(state, new SessionEntry(SessionEntryKind.Note, "↳ **You, during the turn:** " + text));
+            _ = state.Process.SendNowAsync(message);
+        }
+        else
+        {
+            state.Queued.Add(message);
+            UpdateQueued();
+        }
+    }
+
+    // the messages waiting for the running turn to end, above the box
+    private void UpdateQueued()
+    {
+        List<string> queued = _state?.Queued ?? [];
+        QueuedText.Visibility = queued.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (queued.Count == 0) return;
+        string first = SessionAnswers.FirstLine(AttachedFiles.Split(SessionAnswers.WithoutShape(queued[0])).Text);
+        QueuedText.Text = $"Queued{(queued.Count > 1 ? $" ({queued.Count})" : "")}: {first}  ·  sent when this turn ends · ↑ takes it back";
+    }
+
+    private async Task RunTurn(SessionState state, string message)
+    {
         Add(state, new SessionEntry(SessionEntryKind.You, message));
         state.Running = new CancellationTokenSource();
         state.Steps = 0;
         state.Failed = false;
+        state.Stopping = false;
         state.TurnStartedAt = DateTime.Now;
         state.LastNote = "";
         state.Notify();
         bool wasNew = state.IsNew;
         try
         {
-            await ClaudeSessions.RunTurnAsync(state.Info.Folder, state.Info.Id, state.IsNew, message, entry =>
-                Dispatcher.Invoke(() =>
-                {
-                    if (entry.Kind == SessionEntryKind.Tool) state.Steps++;
-                    if (entry.Kind == SessionEntryKind.Note)
-                    {
-                        state.LastNote = SessionAnswers.FirstLine(entry.Text);
-                        state.LastNoteAt = DateTime.Now;
-                    }
-                    Add(state, entry);
-                    state.Notify();
-                }), state.Running.Token);
-            state.IsNew = false;
+            SessionProcess process = await ProcessFor(state);
+            bool finished = await process.TurnAsync(message);
+            if (!finished && state.Stopping) Add(state, new SessionEntry(SessionEntryKind.Error, "Stopped."));
+            if (finished || ClaudeSessions.FileOf(state.Info.Id) != null)
+            {
+                state.IsNew = false;
+                state.ForkFrom = null;
+            }
         }
         catch (Exception ex)
         {
@@ -302,11 +369,145 @@ public partial class SessionPane : UserControl
         }
         state.Running.Dispose();
         state.Running = null;
+        state.Stopping = false;
+        CloseCards(state, "No longer asked - the turn ended.");
         state.Notify();
         if (wasNew && !state.IsNew) SessionSaved?.Invoke();
+        Stamp(state);
+        StampLater(state);
+        await RefreshContext(state);
+        if (state.Queued.Count > 0)
+        {
+            string next = state.Queued[0];
+            state.Queued.RemoveAt(0);
+            if (_state == state) UpdateQueued();
+            await RunTurn(state, next);
+        }
     }
 
-    private void Stop_Click(object sender, RoutedEventArgs e) => _state?.Running?.Cancel();
+    /// <summary>
+    /// The session's open process, started (resuming the session) when it has none, it ended, its model or effort was
+    /// changed, or the session file was written by someone else since (the session used in a terminal): two writers
+    /// would split its history.
+    /// </summary>
+    private async Task<SessionProcess> ProcessFor(SessionState state)
+    {
+        SessionSetting setting = SessionSettings.Of(state.Info.Id);
+        SessionProcess? process = state.Process;
+        if (process != null && process.Usable && process.Model == setting.Model && process.Launch.Effort == setting.Effort
+            && !ChangedOutside(state))
+        {
+            return process;
+        }
+        process?.Dispose();
+        state.Process = null;
+        // a branch's first process forks the session it branches from into this one's id; after a conversation rewind
+        // the session goes on from the line before the cut message
+        SessionLaunch launch = state.ForkFrom is { } from
+            ? new SessionLaunch(state.Info.Folder, from, false, setting.Mode, setting.Model, setting.Effort, Fork: true, ForkId: state.Info.Id)
+            : new SessionLaunch(state.Info.Folder, state.Info.Id, state.IsNew, setting.Mode, setting.Model, setting.Effort, state.ResumeAt);
+        process = await SessionProcess.StartAsync(launch);
+        state.ResumeAt = null;
+        Wire(state, process);
+        state.Process = process;
+        return process;
+    }
+
+    // what the process reports goes to the session's transcript and state, whichever pane shows it
+    private void Wire(SessionState state, SessionProcess process)
+    {
+        WireControls(state, process);
+        process.Entry += entry => Dispatcher.Invoke(() =>
+        {
+            if (state.Process != process) return;
+            if (state.Stopping && entry.Kind == SessionEntryKind.Error) entry = entry with { Text = "Stopped." };
+            if (entry.Kind == SessionEntryKind.Tool) state.Steps++;
+            if (entry.Kind == SessionEntryKind.Note)
+            {
+                state.LastNote = SessionAnswers.FirstLine(entry.Text);
+                state.LastNoteAt = DateTime.Now;
+            }
+            Add(state, entry);
+            state.Notify();
+        });
+        process.Result += root => Dispatcher.Invoke(() =>
+        {
+            state.Cost += process.LastTurnCost;
+            state.Notify();
+        });
+        process.UserMessage += (uuid, before) => Dispatcher.Invoke(() =>
+        {
+            // the turn on screen gets its rewind point once (a message sent during the turn joins it)
+            if (state.TurnStart != null && state.Marks.All(m => m.Start != state.TurnStart))
+            {
+                state.Marks.Add(new TurnMark(state.TurnStart, state.TurnQuestion, uuid, before));
+            }
+        });
+        process.Exited += err => Dispatcher.Invoke(() =>
+        {
+            // a process replaced or closed on purpose is not the session's any more: its end is no error
+            if (state.Process != process) return;
+            state.Process = null;
+            if (state.Working && !state.Stopping)
+            {
+                Add(state, new SessionEntry(SessionEntryKind.Error, "claude exited" + (err.Length > 0 ? ": " + err : "")));
+            }
+        });
+    }
+
+    private static bool ChangedOutside(SessionState state)
+    {
+        if (state.FileStamp is not { } stamp || ClaudeSessions.FileOf(state.Info.Id) is not { } file) return false;
+        var info = new System.IO.FileInfo(file);
+        return info.Length != stamp.Length || info.LastWriteTimeUtc != stamp.Time;
+    }
+
+    // the session file as its process left it: taken when the turn ends and again a few seconds later, as the CLI
+    // writes a title and the last prompt after the result
+    private static void Stamp(SessionState state)
+    {
+        if (ClaudeSessions.FileOf(state.Info.Id) is not { } file) return;
+        var info = new System.IO.FileInfo(file);
+        state.FileStamp = (info.Length, info.LastWriteTimeUtc);
+    }
+
+    private static async void StampLater(SessionState state)
+    {
+        SessionProcess? process = state.Process;
+        await Task.Delay(TimeSpan.FromSeconds(4));
+        if (state.Process == process && !state.Working) Stamp(state);
+    }
+
+    // Stop (or Esc while a turn runs): the turn is interrupted and the session's process stays; if claude does not
+    // answer in 10 s, it is killed as before
+    private async void Stop_Click(object sender, RoutedEventArgs e) => await StopTurn();
+
+    private async Task StopTurn()
+    {
+        SessionState? state = _state;
+        if (state?.Working != true) return;
+        if (state.Shell != null)
+        {
+            state.Shell.Cancel();
+            return;
+        }
+        state.Stopping = true;
+        state.Queued.Clear();
+        UpdateQueued();
+        SessionProcess? process = state.Process;
+        if (process == null) return;
+        try
+        {
+            await process.ControlAsync("interrupt", timeout: TimeSpan.FromSeconds(10));
+        }
+        catch (Exception)
+        {
+            process.Dispose();
+            return;
+        }
+        await Task.Delay(TimeSpan.FromSeconds(10));
+        if (state.Working && state.Stopping && state.Process == process) process.Dispose();
+    }
 
     private void CopyResume_Click(object sender, RoutedEventArgs e)
     {
@@ -338,7 +539,10 @@ public partial class SessionPane : UserControl
         {
             case SessionEntryKind.You:
                 FoldTurn(state);
-                (string text, List<string> files) = AttachedFiles.Split(SessionAnswers.WithoutShape(entry.Text));
+                (List<(string Command, int Code, string Output)> ran, string said) = ShellCommand.Split(SessionAnswers.WithoutShape(entry.Text));
+                foreach ((string command, int code, string output) in ran) ShellBlock(state, command, output, code);
+                (string text, List<string> files) = AttachedFiles.Split(said);
+                if (text.Length > 0) state.History.Add(text);
                 state.TurnStart = Turns.Add(document, isMine: true, text.Length > 0 ? text : "(files)", this);
                 state.TurnQuestion = text.Length > 0 ? text : string.Join(", ", files.Select(f => System.IO.Path.GetFileName(f.TrimEnd('\\', '/'))));
                 if (files.Count > 0)
@@ -372,10 +576,18 @@ public partial class SessionPane : UserControl
             case SessionEntryKind.Done:
                 state.TurnDone = entry.Text;
                 state.Group = null;
-                document.Blocks.Add(new Paragraph(new Run("✓ done · " + entry.Text))
+                var done = new Paragraph(new Run("✓ done · " + entry.Text))
                 {
                     FontSize = 11.5, Foreground = Res("InkSoftBrush"), Margin = new Thickness(0, 2, 0, 8),
-                });
+                };
+                if (state.Marks.FirstOrDefault(m => m.Start == state.TurnStart) is { } mark)
+                {
+                    var rewind = new Hyperlink(new Run("↶ rewind")) { Foreground = Res("VioletBrush"), ToolTip = "Go back to before this message (code, conversation or both)" };
+                    rewind.Click += (_, _) => OpenRewind(mark);
+                    done.Inlines.Add(new Run("   "));
+                    done.Inlines.Add(rewind);
+                }
+                document.Blocks.Add(done);
                 return;
             case SessionEntryKind.Error:
                 state.Group = null;
@@ -394,7 +606,12 @@ public partial class SessionPane : UserControl
     private void FoldTurn(SessionState state)
     {
         if (state.TurnStart != null && state.TurnStart.Parent == state.Document)
-            new TurnFold(state.Document, state.TurnStart, state.TurnQuestion, state.TurnResult, state.TurnDone, state.TurnFailed, this);
+        {
+            TurnMark? mark = state.Marks.FirstOrDefault(m => m.Start == state.TurnStart);
+            var fold = new TurnFold(state.Document, state.TurnStart, state.TurnQuestion, state.TurnResult, state.TurnDone, state.TurnFailed, this,
+                mark == null ? null : () => OpenRewind(mark));
+            if (mark != null) mark.Line = fold.Line;
+        }
         state.TurnStart = null;
         state.TurnQuestion = state.TurnResult = state.TurnDone = "";
         state.TurnFailed = false;

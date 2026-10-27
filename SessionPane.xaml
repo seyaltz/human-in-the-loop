@@ -3,6 +3,21 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:DevBreak"
         >
+    <UserControl.Resources>
+        <Style x:Key="BarButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Margin" Value="0,0,6,4" />
+            <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
+        </Style>
+        <Style x:Key="CardButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+        </Style>
+    </UserControl.Resources>
     <!-- the outline marks the active pane when the screen is split -->
     <Border x:Name="Outline" BorderThickness="2.5" CornerRadius="20" BorderBrush="Transparent" Padding="0">
         <ContentControl Style="{StaticResource ShadowCard}" Padding="20,16,16,14">
@@ -14,6 +29,9 @@
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                     <!-- right of the title; under it when the pane is narrow (several panes) -->
                     <StackPanel x:Name="HeaderButtons" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top">
+                        <Button x:Name="MoreButton" Content="⋯" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Padding="14,0"
+                                IsEnabled="False" Click="More_Click" ToolTip="Rewind, branch, rename, keys and tips"
+                                AutomationProperties.Name="More" />
                         <Button x:Name="SetupButton" Content="Setup" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
                                 IsEnabled="False" Click="Setup_Click"
                                 ToolTip="Memory, skills, plugins, MCP servers and agents Claude Code has in this folder" />
@@ -40,6 +58,19 @@
                     </StackPanel>
                 </DockPanel>
 
+                <!-- like the CLI's footer: permission mode, model, effort, context, cost, background tasks -->
+                <WrapPanel x:Name="StatusBar" DockPanel.Dock="Bottom" Margin="0,6,0,0" Visibility="Collapsed">
+                    <Button x:Name="ModeButton" Style="{StaticResource BarButton}" Click="ModeButton_Click"
+                            ToolTip="Permission mode - Shift+Tab in the box cycles it" />
+                    <Button x:Name="ModelButton" Style="{StaticResource BarButton}" Click="ModelButton_Click" ToolTip="Model (Alt+P)" />
+                    <Button x:Name="EffortButton" Style="{StaticResource BarButton}" Click="EffortButton_Click"
+                            ToolTip="How hard Claude thinks - applies from the next message" />
+                    <Button x:Name="ContextButton" Style="{StaticResource BarButton}" Click="ContextButton_Click" Visibility="Collapsed" />
+                    <TextBlock x:Name="CostText" FontSize="12" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"
+                               Margin="4,0,8,0" ToolTip="What the turns of this session cost since Dev break started" />
+                    <WrapPanel x:Name="TaskChips" VerticalAlignment="Center" />
+                </WrapPanel>
+
                 <DockPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top" Margin="10,0,0,0">
                         <Button x:Name="StopButton" Content="Stop" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
@@ -65,10 +96,47 @@
                                            Visibility="Collapsed" />
                             </StackPanel>
                         </Border>
+                        <!-- /btw: an aside answered outside the conversation (side_question), closed with × -->
+                        <Border x:Name="AsideBox" Background="{StaticResource PaperBrush}" BorderBrush="{StaticResource LineBrush}"
+                                BorderThickness="1" CornerRadius="10" Padding="10,6,6,8" Margin="0,0,0,8" Visibility="Collapsed">
+                            <DockPanel>
+                                <DockPanel DockPanel.Dock="Top">
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="28" Height="28"
+                                            ToolTip="Close the aside" AutomationProperties.Name="Close aside" Click="CloseAside_Click">
+                                        <Path Data="M6,6 L18,18 M18,6 L6,18" Style="{StaticResource IconPath}" Width="10" Height="10" />
+                                    </Button>
+                                    <TextBlock x:Name="AsideTitle" FontWeight="Bold" FontSize="12.5" Foreground="{StaticResource InkSoftBrush}"
+                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                </DockPanel>
+                                <FlowDocumentScrollViewer x:Name="AsideText" MaxHeight="200" VerticalScrollBarVisibility="Auto"
+                                                          IsToolBarVisible="False" Margin="0,2,0,0" />
+                            </DockPanel>
+                        </Border>
+                        <!-- rewind, rename: a small in-pane panel above the box -->
+                        <Border x:Name="ActionBox" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource VioletBrush}"
+                                BorderThickness="1.5" CornerRadius="12" Padding="12,8,12,10" Margin="0,0,0,8" Visibility="Collapsed">
+                            <StackPanel x:Name="ActionBody" />
+                        </Border>
+                        <TextBlock x:Name="QueuedText" FontSize="12" Foreground="{StaticResource VioletDarkBrush}" Margin="2,0,0,6"
+                                   TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
                         <TextBlock x:Name="WorkingText" Style="{StaticResource HandNote}" FontSize="19" Margin="2,0,0,4"
                                    Visibility="Collapsed" />
                         <!-- files pasted, dropped or picked, sent with the next message -->
                         <WrapPanel x:Name="Attachments" Margin="0,0,0,2" Visibility="Collapsed" />
+                        <!-- "/" at the start of the message: the CLI's commands and skills, narrowed as you type -->
+                        <Border x:Name="CommandMenu" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource VioletRingBrush}"
+                                BorderThickness="1" CornerRadius="10" Padding="4" Margin="48,0,0,6" Visibility="Collapsed">
+                            <DockPanel>
+                                <TextBlock x:Name="CommandKeys" DockPanel.Dock="Bottom" FontSize="11.5" Foreground="{StaticResource MutedBrush}"
+                                           Margin="8,4,8,2" TextWrapping="Wrap" />
+                                <ScrollViewer x:Name="CommandScroll" MaxHeight="264" VerticalScrollBarVisibility="Auto" Focusable="False">
+                                    <StackPanel x:Name="CommandList" />
+                                </ScrollViewer>
+                            </DockPanel>
+                        </Border>
+                        <!-- the picked command's arguments and what it does, while its message is written -->
+                        <TextBlock x:Name="CommandHint" FontSize="12" Foreground="{StaticResource InkSoftBrush}" Margin="50,0,0,4"
+                                   TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
                         <DockPanel>
                             <Button x:Name="AddFilesButton" DockPanel.Dock="Left" Style="{StaticResource IconButton}" Width="40" Height="40"
                                     Margin="0,0,8,0" VerticalAlignment="Top" IsEnabled="False" Click="AddFiles_Click"
@@ -78,10 +146,12 @@
                             <TextBox x:Name="InputBox" Style="{StaticResource NotebookBox}" MinHeight="64" MaxHeight="160"
                                      TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
                                      VerticalContentAlignment="Top" IsEnabled="False" AutomationProperties.Name="Your message"
-                                     PreviewKeyDown="InputBox_PreviewKeyDown" />
+                                     PreviewKeyDown="InputBox_PreviewKeyDown" TextChanged="InputBox_TextChanged"
+                                     SelectionChanged="InputBox_SelectionChanged" LostKeyboardFocus="InputBox_LostKeyboardFocus" GotKeyboardFocus="InputBox_GotKeyboardFocus" />
                         </DockPanel>
-                        <TextBlock Text="Enter to send, Shift+Enter for a new line. Ctrl+V, drop or + to add files. Claude may edit files and run commands in this folder."
+                        <TextBlock Text="Enter to send, Shift+Enter for a new line. / commands and skills, @ files, ! shell, ? keys and tips. Ctrl+V, drop or + to add files. Claude may edit files and run commands in this folder."
                                    Style="{StaticResource Caption}" FontSize="11.5" Margin="2,6,0,0" TextWrapping="Wrap" />
+
                     </StackPanel>
                 </DockPanel>
 
@@ -93,6 +163,22 @@
                     </StackPanel>
                 </Grid>
             </DockPanel>
+            <!-- "?": every key, and the tips the Claude Code docs give, over the pane -->
+            <Border x:Name="SheetOverlay" Visibility="Collapsed" CornerRadius="14" BorderThickness="1.5"
+                    BorderBrush="{StaticResource VioletBrush}" Background="{StaticResource CardBrush}" Padding="18,12,10,12">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                        <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="32" Height="32" ToolTip="Close (Esc)"
+                                AutomationProperties.Name="Close keys and tips" Click="CloseSheet_Click">
+                            <Path Data="M6,6 L18,18 M18,6 L6,18" Style="{StaticResource IconPath}" Width="12" Height="12" />
+                        </Button>
+                        <TextBlock Text="Keys and tips" Style="{StaticResource Heading}" FontSize="20" VerticalAlignment="Center" />
+                    </DockPanel>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="SheetBody" Margin="0,0,8,0" />
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
             <Border x:Name="DropOverlay" IsHitTestVisible="False" Visibility="Collapsed" CornerRadius="14" BorderThickness="2.5"
                     BorderBrush="{StaticResource VioletBrush}" Background="#E6F1EEFF">
                 <TextBlock Text="Drop to add the files to your message" Style="{StaticResource Heading}" FontSize="20"
