@@ -159,6 +159,7 @@ public partial class SessionPane : UserControl
         else _clock.Stop();
         // the title may come later (Claude writes one for an untitled session)
         if (_state != null) SessionTitle.Text = _state.Info.Title;
+        UpdateBar();
         Lights.Set(Light, _state, this);
     }
 
@@ -351,6 +352,16 @@ public partial class SessionPane : UserControl
             e.Handled = true;
             Send(now: (Keyboard.Modifiers & ModifierKeys.Control) != 0);
         }
+        else if (e.Key == Key.Tab && (Keyboard.Modifiers & ModifierKeys.Shift) != 0 && _state != null)
+        {
+            e.Handled = true;
+            _ = CycleMode();
+        }
+        else if (e.Key == Key.System && e.SystemKey == Key.P && _state != null)
+        {
+            e.Handled = true;
+            OpenModels();
+        }
         else if (e.Key == Key.Escape && _state?.Working == true)
         {
             e.Handled = true;
@@ -540,10 +551,12 @@ public partial class SessionPane : UserControl
         state.Running.Dispose();
         state.Running = null;
         state.Stopping = false;
+        CloseCards(state, "No longer asked - the turn ended.");
         state.Notify();
         if (wasNew && !state.IsNew) SessionSaved?.Invoke();
         Stamp(state);
         StampLater(state);
+        await RefreshContext(state);
         if (state.Queued.Count > 0)
         {
             string next = state.Queued[0];
@@ -562,7 +575,7 @@ public partial class SessionPane : UserControl
     {
         SessionSetting setting = SessionSettings.Of(state.Info.Id);
         SessionProcess? process = state.Process;
-        if (process != null && process.Usable && process.Launch.Model == setting.Model && process.Launch.Effort == setting.Effort
+        if (process != null && process.Usable && process.Model == setting.Model && process.Launch.Effort == setting.Effort
             && !ChangedOutside(state))
         {
             return process;
@@ -579,6 +592,7 @@ public partial class SessionPane : UserControl
     // what the process reports goes to the session's transcript and state, whichever pane shows it
     private void Wire(SessionState state, SessionProcess process)
     {
+        WireControls(state, process);
         process.Entry += entry => Dispatcher.Invoke(() =>
         {
             if (state.Process != process) return;
@@ -594,10 +608,7 @@ public partial class SessionPane : UserControl
         });
         process.Result += root => Dispatcher.Invoke(() =>
         {
-            if (root.TryGetProperty("total_cost_usd", out System.Text.Json.JsonElement cost) && cost.ValueKind == System.Text.Json.JsonValueKind.Number)
-            {
-                state.Cost += cost.GetDouble();
-            }
+            state.Cost += process.LastTurnCost;
             state.Notify();
         });
         process.UserMessage += (uuid, before) => Dispatcher.Invoke(() =>

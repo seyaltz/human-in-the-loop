@@ -448,6 +448,39 @@ public static class ClaudeSessions
         return (folder, prompt);
     }
 
+    /// <summary>
+    /// The session's running cost as its file last recorded it (the last cost-state line's totalCostUSD), 0 without one.
+    /// Measured: a process resuming the session carries this total on in its results' total_cost_usd.
+    /// </summary>
+    public static double LastCost(string id)
+    {
+        if (FileOf(id) is not { } file) return 0;
+        try
+        {
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            stream.Seek(Math.Max(0, stream.Length - 256 * 1024), SeekOrigin.Begin);
+            using var reader = new StreamReader(stream);
+            double cost = 0;
+            while (reader.ReadLine() is { } line)
+            {
+                if (!line.Contains("\"cost-state\"", StringComparison.Ordinal)) continue;
+                try
+                {
+                    using JsonDocument doc = JsonDocument.Parse(line);
+                    if (doc.RootElement.TryGetProperty("totalCostUSD", out JsonElement c) && c.ValueKind == JsonValueKind.Number) cost = c.GetDouble();
+                }
+                catch (JsonException)
+                {
+                }
+            }
+            return cost;
+        }
+        catch (IOException)
+        {
+            return 0;
+        }
+    }
+
     // the session's latest generated title, from the end of the file (titles are rewritten as the session goes on)
     private static (string? Title, bool HasAiTitle) LastTitle(string file)
     {

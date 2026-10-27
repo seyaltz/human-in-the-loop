@@ -60,6 +60,18 @@ public sealed class SessionState
     /// <summary>How full the context was after the last turn (percent), or -1 before it is known.</summary>
     public int ContextPercent { get; set; } = -1;
 
+    /// <summary>The categories behind <see cref="ContextPercent"/>, one per line.</summary>
+    public string ContextDetail { get; set; } = "";
+
+    /// <summary>The mode before Plan: approving a plan goes back to it.</summary>
+    public string? ModeBeforePlan { get; set; }
+
+    /// <summary>Background tasks running (Bash commands and agents moved to the background): id and what it is.</summary>
+    internal Dictionary<string, string> Tasks { get; } = [];
+
+    /// <summary>Questions of the CLI shown as cards and not answered yet; each closes its card with a line.</summary>
+    internal List<(PermissionAsk Ask, Action<string> Close)> OpenCards { get; } = [];
+
     /// <summary>The pane showing this session, if any.</summary>
     internal SessionPane? ShownIn { get; set; }
 

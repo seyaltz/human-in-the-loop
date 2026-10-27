@@ -16,6 +16,9 @@ public sealed record SlashCommand(string Name, string Description, string Argume
     public string Source => Builtin ? "built-in" : Name.Contains(':') ? Name[..Name.IndexOf(':')] : "yours";
 }
 
+/// <summary>A model the CLI offers (/model): its value for --model and set_model, its name, and the effort levels it takes.</summary>
+public sealed record CliModel(string Value, string Name, string Description, IReadOnlyList<string> Efforts);
+
 /// <summary>
 /// The "/" commands the user's claude CLI takes in a folder - its own list, the one the CLI's "/" menu shows, with each
 /// one's description and argument hint. It comes from the reply to the stream-json initialize request: measured, 247
@@ -27,6 +30,13 @@ public static class SlashCommands
     private static readonly HashSet<string> TerminalOnly = ["doctor", "color", "focus", "reload-plugins"];
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
     private static readonly Dictionary<string, Task<IReadOnlyList<SlashCommand>>> Loaded = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, IReadOnlyList<CliModel>> LoadedModels = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The models the CLI offers in the folder, from the same reply (empty until its commands are read).</summary>
+    public static IReadOnlyList<CliModel> ModelsOf(string folder)
+    {
+        lock (LoadedModels) return LoadedModels.GetValueOrDefault(folder) ?? [];
+    }
 
     /// <summary>The folder's commands; read the first time (again after a failed read).</summary>
     public static Task<IReadOnlyList<SlashCommand>> For(string folder)
@@ -101,7 +111,11 @@ public static class SlashCommands
             using var limit = new CancellationTokenSource(Timeout);
             while (await process.StandardOutput.ReadLineAsync(limit.Token) is { } line)
             {
-                if (line.StartsWith('{') && line.Contains("\"control_response\"", StringComparison.Ordinal)) return Parse(line);
+                if (line.StartsWith('{') && line.Contains("\"control_response\"", StringComparison.Ordinal))
+                {
+                    lock (LoadedModels) LoadedModels[folder] = Models(line);
+                    return Parse(line);
+                }
             }
             throw new InvalidOperationException("claude exited before it listed its commands");
         }
@@ -129,6 +143,23 @@ public static class SlashCommands
             commands.Add(new SlashCommand(name, Str(c, "description"), Str(c, "argumentHint"), aliases, builtin));
         }
         return commands;
+    }
+
+    // {"response":{"response":{"models":[{"value","displayName","description","supportedEffortLevels"}]}}}
+    private static List<CliModel> Models(string line)
+    {
+        var models = new List<CliModel>();
+        using JsonDocument doc = JsonDocument.Parse(line);
+        if (!doc.RootElement.TryGetProperty("response", out JsonElement outer) || !outer.TryGetProperty("response", out JsonElement inner)
+            || !inner.TryGetProperty("models", out JsonElement list) || list.ValueKind != JsonValueKind.Array) return models;
+        foreach (JsonElement m in list.EnumerateArray())
+        {
+            string[] efforts = m.TryGetProperty("supportedEffortLevels", out JsonElement e) && e.ValueKind == JsonValueKind.Array
+                ? e.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToArray()
+                : [];
+            if (Str(m, "value").Length > 0) models.Add(new CliModel(Str(m, "value"), Str(m, "displayName"), Str(m, "description"), efforts));
+        }
+        return models;
     }
 
     private static string Str(JsonElement e, string key) =>

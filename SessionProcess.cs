@@ -43,9 +43,13 @@ public sealed class SessionProcess : IDisposable
     private TaskCompletionSource<bool>? _turn;
     private string? _lastUuid;
     private int _next;
+    private double _costSoFar;
     private bool _closed;
 
     public SessionLaunch Launch { get; }
+
+    /// <summary>The model it runs now: the one it started with, then the one set_model switched it to.</summary>
+    public string? Model { get; set; }
 
     /// <summary>The reply to initialize: the commands, the models and more.</summary>
     public JsonElement InitReply { get; private set; }
@@ -56,6 +60,10 @@ public sealed class SessionProcess : IDisposable
     public bool Usable => !_closed && !_process.HasExited;
     public bool Working => _turn != null;
     public DateTime LastActivity { get; private set; } = DateTime.Now;
+
+    /// <summary>What the last turn cost. Measured: a result's total_cost_usd is the process's total so far (0.0047, 0.0101,
+    /// 0.0106 over three turns), so a turn's cost is the difference.</summary>
+    public double LastTurnCost { get; private set; }
 
     /// <summary>A step of the turn, as the per-turn runner reports them (notes, tools, the answer, done, an error).</summary>
     public event Action<SessionEntry>? Entry;
@@ -78,6 +86,7 @@ public sealed class SessionProcess : IDisposable
     {
         _process = process;
         Launch = launch;
+        Model = launch.Model;
     }
 
     /// <summary>Starts the process in the session's folder and initializes it.</summary>
@@ -99,6 +108,8 @@ public sealed class SessionProcess : IDisposable
         foreach (string arg in Arguments(launch)) start.ArgumentList.Add(arg);
         Process process = await Task.Run(() => Process.Start(start)) ?? throw new InvalidOperationException("could not start claude");
         var session = new SessionProcess(process, launch);
+        // a resumed session's results go on from its recorded total
+        if (!launch.IsNew) session._costSoFar = ClaudeSessions.LastCost(launch.Id);
         process.ErrorDataReceived += (_, e) =>
         {
             if (e.Data == null) return;
@@ -296,7 +307,14 @@ public sealed class SessionProcess : IDisposable
                 break;
         }
         if (Str(root, "uuid") is { Length: > 0 } seen && type is "user" or "assistant") _lastUuid = seen;
-        if (ClaudeSessions.ReadLine(line, e => Entry?.Invoke(e), null))
+        if (type == "result" && root.TryGetProperty("total_cost_usd", out JsonElement total) && total.ValueKind == JsonValueKind.Number)
+        {
+            // a total below the recorded one: this process did not carry the session's total on, it counts from 0
+            if (total.GetDouble() < _costSoFar) _costSoFar = 0;
+            LastTurnCost = total.GetDouble() - _costSoFar;
+            _costSoFar = total.GetDouble();
+        }
+        if (ClaudeSessions.ReadLine(line, e => Entry?.Invoke(e.Kind == SessionEntryKind.Done ? e with { Text = Done(root) } : e), null))
         {
             Result?.Invoke(root);
             TaskCompletionSource<bool>? turn = _turn;
@@ -335,6 +353,13 @@ public sealed class SessionProcess : IDisposable
         JsonElement? suggestions = request.TryGetProperty("permission_suggestions", out JsonElement s) ? s : null;
         lock (_openAsks) _openAsks.Add(id);
         Ask?.Invoke(new PermissionAsk(id, Str(request, "tool_name"), input, suggestions));
+    }
+
+    // the done line with this turn's own cost
+    private string Done(JsonElement root)
+    {
+        double seconds = root.TryGetProperty("duration_ms", out JsonElement ms) && ms.ValueKind == JsonValueKind.Number ? ms.GetDouble() / 1000 : 0;
+        return $"{seconds:0.#} s · ${LastTurnCost:0.00}";
     }
 
     private static bool IsToolResult(JsonElement root) =>

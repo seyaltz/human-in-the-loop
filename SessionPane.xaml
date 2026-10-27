@@ -3,6 +3,21 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:DevBreak"
         >
+    <UserControl.Resources>
+        <Style x:Key="BarButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Margin" Value="0,0,6,4" />
+            <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
+        </Style>
+        <Style x:Key="CardButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+        </Style>
+    </UserControl.Resources>
     <!-- the outline marks the active pane when the screen is split -->
     <Border x:Name="Outline" BorderThickness="2.5" CornerRadius="20" BorderBrush="Transparent" Padding="0">
         <ContentControl Style="{StaticResource ShadowCard}" Padding="20,16,16,14">
@@ -99,6 +114,18 @@
                         </DockPanel>
                         <TextBlock Text="Enter to send, Shift+Enter for a new line. / for commands and skills. Ctrl+V, drop or + to add files. Claude may edit files and run commands in this folder."
                                    Style="{StaticResource Caption}" FontSize="11.5" Margin="2,6,0,0" TextWrapping="Wrap" />
+                        <!-- like the CLI's footer: permission mode, model, effort, context, cost, background tasks -->
+                        <WrapPanel x:Name="StatusBar" Margin="0,6,0,0" Visibility="Collapsed">
+                            <Button x:Name="ModeButton" Style="{StaticResource BarButton}" Click="ModeButton_Click"
+                                    ToolTip="Permission mode - Shift+Tab in the box cycles it" />
+                            <Button x:Name="ModelButton" Style="{StaticResource BarButton}" Click="ModelButton_Click" ToolTip="Model (Alt+P)" />
+                            <Button x:Name="EffortButton" Style="{StaticResource BarButton}" Click="EffortButton_Click"
+                                    ToolTip="How hard Claude thinks - applies from the next message" />
+                            <Button x:Name="ContextButton" Style="{StaticResource BarButton}" Click="ContextButton_Click" Visibility="Collapsed" />
+                            <TextBlock x:Name="CostText" FontSize="12" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"
+                                       Margin="4,0,8,0" ToolTip="What the turns of this session cost since Dev break started" />
+                            <WrapPanel x:Name="TaskChips" VerticalAlignment="Center" />
+                        </WrapPanel>
                     </StackPanel>
                 </DockPanel>
 
