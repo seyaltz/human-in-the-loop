@@ -32,6 +32,9 @@ public static class Selftest
             LearnCases();
             ReviewFixCases();
             ContextCases();
+            Check(CliSetup.CompactWindowOf("{\"autoCompactWindow\": 200000}") == "200000", "Compact window: read from the user's settings");
+            Check(CliSetup.CompactWindowOf("{\"env\": {}}") == null, "Compact window: none set -> none passed");
+            Check(CliSetup.CompactWindowOf("not json") == null, "Compact window: unreadable settings -> none passed");
             Check(Watch.IsQuickStep("commit and push"), "Quick step: \"commit and push\"");
             Check(Watch.IsQuickStep("rebuild and restart dev break"), "Quick step: \"rebuild and restart dev break\"");
             Check(!Watch.IsQuickStep("design a watcher that coaches long turns"), "Quick step: a design ask is not one");

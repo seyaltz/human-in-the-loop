@@ -273,6 +273,7 @@ public static class ClaudeSessions
             start.ArgumentList.Add(isNew ? "--session-id" : "--resume");
             start.ArgumentList.Add(id);
             foreach (string arg in extra) start.ArgumentList.Add(arg);
+            CliSetup.UseCompactWindow(start);
             Process process = Process.Start(start) ?? throw new InvalidOperationException("could not start claude");
             var live = new LiveSession(process, KeyOf(folder, id, extra)) { _costSoFar = isNew ? 0 : LastCost(id) };
             process.ErrorDataReceived += (_, e) =>
