@@ -11,7 +11,15 @@ public sealed class SessionSetting
     public string Mode { get; set; } = SessionSettings.Bypass;
     public string? Model { get; set; }
     public string? Effort { get; set; }
+
+    /// <summary>
+    /// The conversation rewinds made here: the message cut from and the line the session went on from (null: its
+    /// start). The file keeps the cut branch; reading the session back leaves it out.
+    /// </summary>
+    public List<RewindCut> Rewinds { get; set; } = [];
 }
+
+public sealed record RewindCut(string From, string? At);
 
 /// <summary>
 /// The mode, model and effort of each session, kept next to the app in session-settings.json (the user's own data,
@@ -55,8 +63,17 @@ public static class SessionSettings
 
     public static SessionSetting Of(string id)
     {
-        if (!All.TryGetValue(id, out SessionSetting? setting)) All[id] = setting = new SessionSetting();
-        return setting;
+        lock (All)
+        {
+            if (!All.TryGetValue(id, out SessionSetting? setting)) All[id] = setting = new SessionSetting();
+            return setting;
+        }
+    }
+
+    /// <summary>The session's rewind cuts, without adding a setting for it (safe off the UI thread).</summary>
+    public static List<RewindCut> RewindsOf(string id)
+    {
+        lock (All) return All.TryGetValue(id, out SessionSetting? setting) ? [.. setting.Rewinds] : [];
     }
 
     public static void Save()

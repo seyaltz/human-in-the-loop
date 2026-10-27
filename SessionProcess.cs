@@ -15,8 +15,9 @@ namespace DevBreak;
 /// <param name="Effort">low, medium, high, xhigh, or null for the CLI's own (auto)</param>
 /// <param name="ResumeAt">resume the session cut after this message (a conversation rewind)</param>
 /// <param name="Fork">resume into a new session (a branch), keeping the old one as it is</param>
+/// <param name="ForkId">with Fork: the new session's id (measured: --fork-session takes --session-id for it)</param>
 public sealed record SessionLaunch(string Folder, string Id, bool IsNew, string Mode, string? Model, string? Effort,
-    string? ResumeAt = null, bool Fork = false);
+    string? ResumeAt = null, bool Fork = false, string? ForkId = null);
 
 /// <summary>A tool Claude wants to run that the CLI asks about (can_use_tool): Ask mode, a plan to approve, Claude's questions.</summary>
 public sealed record PermissionAsk(string RequestId, string Tool, JsonElement Input, JsonElement? Suggestions);
@@ -151,6 +152,7 @@ public sealed class SessionProcess : IDisposable
             args.AddRange(["--resume", launch.Id]);
             if (launch.ResumeAt != null) args.AddRange(["--resume-session-at", launch.ResumeAt]);
             if (launch.Fork) args.Add("--fork-session");
+            if (launch.Fork && launch.ForkId != null) args.AddRange(["--session-id", launch.ForkId]);
         }
         return args;
     }

@@ -87,6 +87,11 @@ public partial class SessionsView : UserControl
         pane.Activated += Activate;
         pane.CloseRequested += Close;
         pane.SessionSaved += RefreshList;
+        pane.NewSessionRequested += StartSession;
+        pane.Renamed += state =>
+        {
+            if (_titles.TryGetValue(state.Info.Id, out TextBlock? title)) title.Text = state.Info.Title;
+        };
         _panes.Add(pane);
         Panes.Children.Add(pane);
         return pane;
@@ -295,6 +300,28 @@ public partial class SessionsView : UserControl
             _sessions[info.Id] = state;
         }
         return state;
+    }
+
+    // /clear (a new session, in the pane) or Branch (a fork of the pane's session, in a new pane when there is room)
+    private void StartSession(SessionPane from, SessionInfo info, string? forkFrom, bool newPane)
+    {
+        SessionState state = StateOf(info, isNew: forkFrom == null);
+        if (forkFrom != null)
+        {
+            state.ForkFrom = forkFrom;
+            state.StartedHere = true;
+        }
+        ListBoxItem row = Row(info);
+        SessionList.Items.Insert(0, row);
+        SessionPane target = from;
+        if (newPane && _panes.Count < MaxPanes)
+        {
+            target = NewPane();
+            target.Clear();
+            Layout();
+        }
+        target.Show(state);
+        Activate(target);
     }
 
     private void New_Click(object sender, RoutedEventArgs e)

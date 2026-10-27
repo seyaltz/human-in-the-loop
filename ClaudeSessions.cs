@@ -76,9 +76,13 @@ public static class ClaudeSessions
         var entries = new List<SessionEntry>();
         string? file = FileOf(id);
         if (file == null) return entries;
+        // the branches Dev break rewound: from the cut message until the line that goes on from where it resumed
+        List<RewindCut> cuts = SessionSettings.RewindsOf(id);
+        RewindCut? skipping = null;
         using var reader = new StreamReader(new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
         while (reader.ReadLine() is { } line)
         {
+            if (cuts.Count > 0 && Cut(line, cuts, ref skipping)) continue;
             bool user = line.Contains("\"type\":\"user\"", StringComparison.Ordinal);
             // a "/command"'s output, in newer files a system line of its own
             bool local = !user && line.Contains("\"subtype\":\"local_command\"", StringComparison.Ordinal);
@@ -119,6 +123,35 @@ public static class ClaudeSessions
         }
         AnswerPerTurn(entries);
         return entries.Count > MaxEntries ? entries[^MaxEntries..] : entries;
+    }
+
+    // true when the line is in a rewound branch: from the line with the cut's uuid until a message whose parent is
+    // where the session resumed (a message with no parent, for a rewind to the start)
+    private static bool Cut(string line, List<RewindCut> cuts, ref RewindCut? skipping)
+    {
+        if (!line.Contains("\"uuid\"", StringComparison.Ordinal)) return skipping != null;
+        string uuid = "", parent = "";
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(line);
+            if (doc.RootElement.TryGetProperty("uuid", out JsonElement u) && u.ValueKind == JsonValueKind.String) uuid = u.GetString()!;
+            if (doc.RootElement.TryGetProperty("parentUuid", out JsonElement p) && p.ValueKind == JsonValueKind.String) parent = p.GetString()!;
+        }
+        catch (JsonException)
+        {
+            return skipping != null;
+        }
+        if (skipping == null)
+        {
+            skipping = cuts.FirstOrDefault(c => c.From == uuid);
+            return skipping != null;
+        }
+        if (parent == (skipping.At ?? "") && line.Contains("\"type\":\"user\"", StringComparison.Ordinal))
+        {
+            skipping = cuts.FirstOrDefault(c => c.From == uuid);
+            return skipping != null;
+        }
+        return true;
     }
 
     // a saved turn has no separate result: its last text is the answer, the texts before it were notes on the way
@@ -474,6 +507,34 @@ public static class ClaudeSessions
             }
         }
         return (folder, prompt);
+    }
+
+    /// <summary>
+    /// The line a message follows in the session file (its parentUuid). Measured: the echo of a message
+    /// (--replay-user-messages) carries its uuid but no parentUuid, and a process that just resumed has seen no line
+    /// before it - the file has it.
+    /// </summary>
+    public static string? ParentOf(string id, string uuid)
+    {
+        if (FileOf(id) is not { } file) return null;
+        using var reader = new StreamReader(new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+        while (reader.ReadLine() is { } line)
+        {
+            if (!line.Contains(uuid, StringComparison.Ordinal)) continue;
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(line);
+                JsonElement root = doc.RootElement;
+                if (root.TryGetProperty("uuid", out JsonElement u) && u.GetString() == uuid)
+                {
+                    return root.TryGetProperty("parentUuid", out JsonElement p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+        return null;
     }
 
     /// <summary>

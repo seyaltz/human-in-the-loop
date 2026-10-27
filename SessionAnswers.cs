@@ -156,7 +156,8 @@ internal sealed class TurnFold
     public BlockUIContainer Line { get; }
 
     /// <summary>Takes the turn's blocks - <paramref name="start"/> to the end of the document - out, and puts the line in their place.</summary>
-    public TurnFold(FlowDocument document, Block start, string question, string result, string done, bool failed, FrameworkElement resources)
+    public TurnFold(FlowDocument document, Block start, string question, string result, string done, bool failed, FrameworkElement resources,
+        Action? rewind = null)
     {
         Brush Res(string key) => (Brush)resources.FindResource(key);
         _document = document;
@@ -173,7 +174,27 @@ internal sealed class TurnFold
             header.Inlines.Add(new Run(Short(result, 140)) { Foreground = failed ? Res("CoralInkBrush") : Res("InkSoftBrush") });
         }
         if (done.Length > 0) header.Inlines.Add(new Run("  ·  " + done) { FontSize = 11.5, Foreground = Res("MutedBrush") });
-        var expander = new Expander { Header = header, IsExpanded = false, ToolTip = "Show this turn" };
+        object head = header;
+        if (rewind != null)
+        {
+            // the turn's way back, as Esc Esc offers it
+            var back = new Button
+            {
+                Content = "↶", Style = (Style)resources.FindResource("SecondaryButton"), Height = 24, Width = 30, Padding = new Thickness(0),
+                FontSize = 13, Margin = new Thickness(8, 0, 0, 0), ToolTip = "Rewind to before this message (code, conversation or both)",
+            };
+            back.Click += (_, e) =>
+            {
+                e.Handled = true;
+                rewind();
+            };
+            var row = new DockPanel { LastChildFill = true };
+            DockPanel.SetDock(back, Dock.Right);
+            row.Children.Add(back);
+            row.Children.Add(header);
+            head = row;
+        }
+        var expander = new Expander { Header = head, IsExpanded = false, ToolTip = "Show this turn", HorizontalContentAlignment = HorizontalAlignment.Stretch };
         expander.Expanded += (_, _) => Open();
         expander.Collapsed += (_, _) => Close();
         Line = new BlockUIContainer(new Border

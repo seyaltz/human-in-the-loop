@@ -41,6 +41,12 @@ public partial class SessionPane : UserControl
 
     public SessionState? State => _state;
 
+    /// <summary>A session to start: its info, the session it branches from (null: a new one), in a new pane or this one.</summary>
+    public event Action<SessionPane, SessionInfo, string?, bool>? NewSessionRequested;
+
+    /// <summary>The session got a new title.</summary>
+    public event Action<SessionState>? Renamed;
+
     public SessionPane()
     {
         InitializeComponent();
@@ -83,7 +89,7 @@ public partial class SessionPane : UserControl
         SessionTitle.Text = state.Info.Title;
         SessionFolder.Text = state.Info.Folder + "   ·   session " + state.Info.Id;
         Transcript.Document = state.Document;
-        CopyResumeButton.IsEnabled = OpenFolderButton.IsEnabled = SetupButton.IsEnabled = true;
+        CopyResumeButton.IsEnabled = OpenFolderButton.IsEnabled = SetupButton.IsEnabled = MoreButton.IsEnabled = true;
         ShowSetup(false);
         Update();
         UpdateQueued();
@@ -91,7 +97,9 @@ public partial class SessionPane : UserControl
         if (!state.Loaded)
         {
             Loading.Visibility = Visibility.Visible;
-            IReadOnlyList<SessionEntry> entries = await Task.Run(() => ClaudeSessions.Transcript(state.Info.Id));
+            // a branch not started yet shows the session it branches from
+            string from = state.ForkFrom ?? state.Info.Id;
+            IReadOnlyList<SessionEntry> entries = await Task.Run(() => ClaudeSessions.Transcript(from));
             if (!state.Loaded)
             {
                 state.Loaded = true;
@@ -110,7 +118,7 @@ public partial class SessionPane : UserControl
         Transcript.Document = CodeRenderer.Render("");
         SessionTitle.Text = "Pick a session";
         SessionFolder.Text = "Pick one on the left for this pane.";
-        CopyResumeButton.IsEnabled = OpenFolderButton.IsEnabled = SetupButton.IsEnabled = false;
+        CopyResumeButton.IsEnabled = OpenFolderButton.IsEnabled = SetupButton.IsEnabled = MoreButton.IsEnabled = false;
         ShowSetup(false);
         Update();
     }
@@ -273,6 +281,20 @@ public partial class SessionPane : UserControl
             else WorkingText.Text = "A shell command waits for the turn to end - run it after.";
             return;
         }
+        if (text.Equals("/clear", StringComparison.OrdinalIgnoreCase) && _pending.Count == 0)
+        {
+            // as in the CLI: a fresh session in the same folder; the old one stays in the list
+            InputBox.Clear();
+            NewSessionRequested?.Invoke(this, new SessionInfo(Guid.NewGuid().ToString(), state.Info.Folder,
+                "New session in " + System.IO.Path.GetFileName(state.Info.Folder.TrimEnd('\\')), DateTime.Now), null, false);
+            return;
+        }
+        if (text.StartsWith("/rename ", StringComparison.OrdinalIgnoreCase) && text.Length > 8 && _pending.Count == 0)
+        {
+            InputBox.Clear();
+            _ = Rename(state, text[8..].Trim());
+            return;
+        }
         if (text.StartsWith("/btw ", StringComparison.OrdinalIgnoreCase) && text.Length > 5)
         {
             InputBox.Clear();
@@ -335,7 +357,11 @@ public partial class SessionPane : UserControl
             SessionProcess process = await ProcessFor(state);
             bool finished = await process.TurnAsync(message);
             if (!finished && state.Stopping) Add(state, new SessionEntry(SessionEntryKind.Error, "Stopped."));
-            if (finished || ClaudeSessions.FileOf(state.Info.Id) != null) state.IsNew = false;
+            if (finished || ClaudeSessions.FileOf(state.Info.Id) != null)
+            {
+                state.IsNew = false;
+                state.ForkFrom = null;
+            }
         }
         catch (Exception ex)
         {
@@ -375,8 +401,13 @@ public partial class SessionPane : UserControl
         }
         process?.Dispose();
         state.Process = null;
-        process = await SessionProcess.StartAsync(new SessionLaunch(state.Info.Folder, state.Info.Id, state.IsNew, setting.Mode,
-            setting.Model, setting.Effort));
+        // a branch's first process forks the session it branches from into this one's id; after a conversation rewind
+        // the session goes on from the line before the cut message
+        SessionLaunch launch = state.ForkFrom is { } from
+            ? new SessionLaunch(state.Info.Folder, from, false, setting.Mode, setting.Model, setting.Effort, Fork: true, ForkId: state.Info.Id)
+            : new SessionLaunch(state.Info.Folder, state.Info.Id, state.IsNew, setting.Mode, setting.Model, setting.Effort, state.ResumeAt);
+        process = await SessionProcess.StartAsync(launch);
+        state.ResumeAt = null;
         Wire(state, process);
         state.Process = process;
         return process;
@@ -545,10 +576,18 @@ public partial class SessionPane : UserControl
             case SessionEntryKind.Done:
                 state.TurnDone = entry.Text;
                 state.Group = null;
-                document.Blocks.Add(new Paragraph(new Run("✓ done · " + entry.Text))
+                var done = new Paragraph(new Run("✓ done · " + entry.Text))
                 {
                     FontSize = 11.5, Foreground = Res("InkSoftBrush"), Margin = new Thickness(0, 2, 0, 8),
-                });
+                };
+                if (state.Marks.FirstOrDefault(m => m.Start == state.TurnStart) is { } mark)
+                {
+                    var rewind = new Hyperlink(new Run("↶ rewind")) { Foreground = Res("VioletBrush"), ToolTip = "Go back to before this message (code, conversation or both)" };
+                    rewind.Click += (_, _) => OpenRewind(mark);
+                    done.Inlines.Add(new Run("   "));
+                    done.Inlines.Add(rewind);
+                }
+                document.Blocks.Add(done);
                 return;
             case SessionEntryKind.Error:
                 state.Group = null;
@@ -567,7 +606,12 @@ public partial class SessionPane : UserControl
     private void FoldTurn(SessionState state)
     {
         if (state.TurnStart != null && state.TurnStart.Parent == state.Document)
-            new TurnFold(state.Document, state.TurnStart, state.TurnQuestion, state.TurnResult, state.TurnDone, state.TurnFailed, this);
+        {
+            TurnMark? mark = state.Marks.FirstOrDefault(m => m.Start == state.TurnStart);
+            var fold = new TurnFold(state.Document, state.TurnStart, state.TurnQuestion, state.TurnResult, state.TurnDone, state.TurnFailed, this,
+                mark == null ? null : () => OpenRewind(mark));
+            if (mark != null) mark.Line = fold.Line;
+        }
         state.TurnStart = null;
         state.TurnQuestion = state.TurnResult = state.TurnDone = "";
         state.TurnFailed = false;

@@ -14,7 +14,13 @@ public sealed class SessionState
 {
     public required SessionInfo Info { get; set; }
     public bool IsNew { get; set; }
-    public bool StartedHere { get; init; }
+    public bool StartedHere { get; set; }
+
+    /// <summary>A branch not started yet: the session it branches from (its first process forks it).</summary>
+    internal string? ForkFrom { get; set; }
+
+    /// <summary>After a conversation rewind: the line the next process resumes the session at.</summary>
+    internal string? ResumeAt { get; set; }
     public bool Loaded { get; set; }
     public FlowDocument Document { get; } = CodeRenderer.Render("");
     public CancellationTokenSource? Running { get; set; }
@@ -94,4 +100,8 @@ public sealed class SessionState
 }
 
 /// <summary>A turn of this run that can be rewound: its first block, its message, its uuid and the uuid of the line before it.</summary>
-internal sealed record TurnMark(Block Start, string Message, string Uuid, string? Before);
+internal sealed record TurnMark(Block Start, string Message, string Uuid, string? Before)
+{
+    /// <summary>The turn's one line once it is folded (its blocks are then out of the document).</summary>
+    public Block? Line { get; set; }
+}

@@ -29,6 +29,9 @@
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                     <!-- right of the title; under it when the pane is narrow (several panes) -->
                     <StackPanel x:Name="HeaderButtons" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top">
+                        <Button x:Name="MoreButton" Content="⋯" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Padding="14,0"
+                                IsEnabled="False" Click="More_Click" ToolTip="Rewind, branch, rename, keys and tips"
+                                AutomationProperties.Name="More" />
                         <Button x:Name="SetupButton" Content="Setup" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
                                 IsEnabled="False" Click="Setup_Click"
                                 ToolTip="Memory, skills, plugins, MCP servers and agents Claude Code has in this folder" />
@@ -54,6 +57,19 @@
                                    Text="Continue one on the left, or start a new one in a folder. Claude works there with your full setup - memory, skills, plugins, hooks - and full access, like your CLI." />
                     </StackPanel>
                 </DockPanel>
+
+                <!-- like the CLI's footer: permission mode, model, effort, context, cost, background tasks -->
+                <WrapPanel x:Name="StatusBar" DockPanel.Dock="Bottom" Margin="0,6,0,0" Visibility="Collapsed">
+                    <Button x:Name="ModeButton" Style="{StaticResource BarButton}" Click="ModeButton_Click"
+                            ToolTip="Permission mode - Shift+Tab in the box cycles it" />
+                    <Button x:Name="ModelButton" Style="{StaticResource BarButton}" Click="ModelButton_Click" ToolTip="Model (Alt+P)" />
+                    <Button x:Name="EffortButton" Style="{StaticResource BarButton}" Click="EffortButton_Click"
+                            ToolTip="How hard Claude thinks - applies from the next message" />
+                    <Button x:Name="ContextButton" Style="{StaticResource BarButton}" Click="ContextButton_Click" Visibility="Collapsed" />
+                    <TextBlock x:Name="CostText" FontSize="12" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"
+                               Margin="4,0,8,0" ToolTip="What the turns of this session cost since Dev break started" />
+                    <WrapPanel x:Name="TaskChips" VerticalAlignment="Center" />
+                </WrapPanel>
 
                 <DockPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top" Margin="10,0,0,0">
@@ -96,6 +112,11 @@
                                                           IsToolBarVisible="False" Margin="0,2,0,0" />
                             </DockPanel>
                         </Border>
+                        <!-- rewind, rename: a small in-pane panel above the box -->
+                        <Border x:Name="ActionBox" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource VioletBrush}"
+                                BorderThickness="1.5" CornerRadius="12" Padding="12,8,12,10" Margin="0,0,0,8" Visibility="Collapsed">
+                            <StackPanel x:Name="ActionBody" />
+                        </Border>
                         <TextBlock x:Name="QueuedText" FontSize="12" Foreground="{StaticResource VioletDarkBrush}" Margin="2,0,0,6"
                                    TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
                         <TextBlock x:Name="WorkingText" Style="{StaticResource HandNote}" FontSize="19" Margin="2,0,0,4"
@@ -130,18 +151,7 @@
                         </DockPanel>
                         <TextBlock Text="Enter to send, Shift+Enter for a new line. / for commands and skills. Ctrl+V, drop or + to add files. Claude may edit files and run commands in this folder."
                                    Style="{StaticResource Caption}" FontSize="11.5" Margin="2,6,0,0" TextWrapping="Wrap" />
-                        <!-- like the CLI's footer: permission mode, model, effort, context, cost, background tasks -->
-                        <WrapPanel x:Name="StatusBar" Margin="0,6,0,0" Visibility="Collapsed">
-                            <Button x:Name="ModeButton" Style="{StaticResource BarButton}" Click="ModeButton_Click"
-                                    ToolTip="Permission mode - Shift+Tab in the box cycles it" />
-                            <Button x:Name="ModelButton" Style="{StaticResource BarButton}" Click="ModelButton_Click" ToolTip="Model (Alt+P)" />
-                            <Button x:Name="EffortButton" Style="{StaticResource BarButton}" Click="EffortButton_Click"
-                                    ToolTip="How hard Claude thinks - applies from the next message" />
-                            <Button x:Name="ContextButton" Style="{StaticResource BarButton}" Click="ContextButton_Click" Visibility="Collapsed" />
-                            <TextBlock x:Name="CostText" FontSize="12" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"
-                                       Margin="4,0,8,0" ToolTip="What the turns of this session cost since Dev break started" />
-                            <WrapPanel x:Name="TaskChips" VerticalAlignment="Center" />
-                        </WrapPanel>
+
                     </StackPanel>
                 </DockPanel>
 
