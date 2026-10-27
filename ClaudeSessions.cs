@@ -172,61 +172,6 @@ public static class ClaudeSessions
         }
     }
 
-    /// <summary>
-    /// Runs one turn of a session in its folder: <paramref name="isNew"/> starts it with that id, otherwise it resumes.
-    /// Each step is reported as it streams in. Cancelling stops claude and everything it started.
-    /// <paramref name="extraArgs"/> go to claude as they are (the factory denies pushing with them); <paramref name="onLine"/>
-    /// sees every streamed line as it is parsed (the factory's trace), valid only during the call.
-    /// </summary>
-    public static async Task RunTurnAsync(string folder, string id, bool isNew, string prompt, Action<SessionEntry> onEntry,
-        CancellationToken cancel, IEnumerable<string>? extraArgs = null, Action<JsonElement>? onLine = null)
-    {
-        var start = new ProcessStartInfo("claude")
-        {
-            WorkingDirectory = folder,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(false),
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (string arg in new[] { "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions" })
-        {
-            start.ArgumentList.Add(arg);
-        }
-        start.ArgumentList.Add(isNew ? "--session-id" : "--resume");
-        start.ArgumentList.Add(id);
-        foreach (string arg in extraArgs ?? []) start.ArgumentList.Add(arg);
-
-        using Process process = await Task.Run(() => Process.Start(start)) ?? throw new InvalidOperationException("could not start claude");
-        using CancellationTokenRegistration stop = cancel.Register(() =>
-        {
-            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-        });
-        await process.StandardInput.WriteAsync(prompt);
-        process.StandardInput.Close();
-        Task<string> stderr = process.StandardError.ReadToEndAsync();
-
-        bool finished = false;
-        while (await process.StandardOutput.ReadLineAsync() is { } line)
-        {
-            finished |= ReadLine(line, onEntry, onLine);
-        }
-        await process.WaitForExitAsync();
-        if (cancel.IsCancellationRequested)
-        {
-            onEntry(new SessionEntry(SessionEntryKind.Error, "Stopped."));
-        }
-        else if (!finished)
-        {
-            string err = (await stderr).Trim();
-            onEntry(new SessionEntry(SessionEntryKind.Error, $"claude exited with {process.ExitCode}" + (err.Length > 0 ? ": " + err : "")));
-        }
-    }
-
     // one streamed line of a turn: its steps and answer go to onEntry; true when it is the line that ends the turn
     internal static bool ReadLine(string line, Action<SessionEntry> onEntry, Action<JsonElement>? onLine)
     {
@@ -287,10 +232,23 @@ public static class ClaudeSessions
 
         public bool Usable => !_broken && !_process.HasExited;
 
+        // the process's running total at its last result (a resumed one may carry on the session's recorded total)
+        private double _costSoFar;
+
         private LiveSession(Process process, string key)
         {
             _process = process;
             Key = key;
+        }
+
+        /// <summary>What a turn cost, from its result's total_cost_usd - the process's total so far, not the turn's.</summary>
+        public double TurnCost(double total)
+        {
+            // a total below the recorded one: this process did not carry the session's total on, it counts from 0
+            if (total < _costSoFar) _costSoFar = 0;
+            double cost = total - _costSoFar;
+            _costSoFar = total;
+            return cost;
         }
 
         public static LiveSession Start(string folder, string id, bool isNew, IEnumerable<string>? extraArgs)
@@ -316,7 +274,7 @@ public static class ClaudeSessions
             start.ArgumentList.Add(id);
             foreach (string arg in extra) start.ArgumentList.Add(arg);
             Process process = Process.Start(start) ?? throw new InvalidOperationException("could not start claude");
-            var live = new LiveSession(process, KeyOf(folder, id, extra));
+            var live = new LiveSession(process, KeyOf(folder, id, extra)) { _costSoFar = isNew ? 0 : LastCost(id) };
             process.ErrorDataReceived += (_, e) =>
             {
                 if (e.Data != null) lock (live._stderr) live._stderr.AppendLine(e.Data);

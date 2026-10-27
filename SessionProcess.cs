@@ -66,7 +66,7 @@ public sealed class SessionProcess : IDisposable
     /// 0.0106 over three turns), so a turn's cost is the difference.</summary>
     public double LastTurnCost { get; private set; }
 
-    /// <summary>A step of the turn, as the per-turn runner reports them (notes, tools, the answer, done, an error).</summary>
+    /// <summary>A step of the turn, as ClaudeSessions.ReadLine reports them (notes, tools, the answer, done, an error).</summary>
     public event Action<SessionEntry>? Entry;
 
     /// <summary>A message of the user, echoed with its uuid, and the uuid of the line before it (where a rewind of its conversation resumes).</summary>

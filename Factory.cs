@@ -2830,9 +2830,11 @@ public static class Factory
             // a turn going round in circles is stopped, not waited out (the manager takes it from there)
             using var turn = CancellationTokenSource.CreateLinkedTokenSource(cancel);
             string? stuck = null;
-            await LiveFor(run, isNew, args).TurnAsync(prompt, onEntry, turn.Token, root =>
+            ClaudeSessions.LiveSession live = LiveFor(run, isNew, args);
+            await live.TurnAsync(prompt, onEntry, turn.Token, root =>
             {
                 Observe(run, span, root);
+                if (root.TryGetProperty("type", out JsonElement type) && type.GetString() == "result") span.Cost = live.TurnCost(span.Cost);
                 if (stuck == null && Stuck(span) is { } why)
                 {
                     stuck = why;
