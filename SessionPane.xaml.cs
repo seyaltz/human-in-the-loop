@@ -402,6 +402,10 @@ public partial class SessionPane : UserControl
         Stamp(state);
         StampLater(state);
         await RefreshContext(state);
+        if (state.Log is { } done)
+        {
+            Log($"turn ({state.Info.Id[..8]}): " + Watch.TurnSummary(done, state.LastTurnSeconds, state.LastTurnCost, state.ContextTokens, state.CompactAt, state.AiChecks));
+        }
         if (state.Queued.Count > 0)
         {
             string next = state.Queued[0];
@@ -466,7 +470,9 @@ public partial class SessionPane : UserControl
             if (root.TryGetProperty("duration_ms", out System.Text.Json.JsonElement ms) && ms.ValueKind == System.Text.Json.JsonValueKind.Number)
             {
                 SessionStats.RecordPaneTurn(state.Info.Id, state.TurnStartedAt, ms.GetDouble() / 1000);
+                state.LastTurnSeconds = ms.GetDouble() / 1000;
             }
+            state.LastTurnCost = process.LastTurnCost;
             state.Cost += process.LastTurnCost;
             state.Notify();
         });

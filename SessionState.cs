@@ -72,6 +72,13 @@ public sealed class SessionState
     /// <summary>The context's size in tokens after the last turn - what every step of the next turn re-sends.</summary>
     public double ContextTokens { get; set; }
 
+    /// <summary>Where the CLI compacts on its own (autoCompactThreshold), 0 before it is known.</summary>
+    public double CompactAt { get; set; }
+
+    /// <summary>The last turn's time and cost, from its result line (for its devbreak.log line).</summary>
+    public double LastTurnSeconds { get; set; }
+    public double LastTurnCost { get; set; }
+
     /// <summary>The categories behind <see cref="ContextPercent"/>, one per line.</summary>
     public string ContextDetail { get; set; } = "";
 

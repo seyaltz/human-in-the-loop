@@ -32,6 +32,7 @@ public static class Selftest
             LearnCases();
             ReviewFixCases();
             ContextCases();
+            TelemetryCases();
             Check(CliSetup.CompactWindowOf("{\"autoCompactWindow\": 200000}") == "200000", "Compact window: read from the user's settings");
             Check(CliSetup.CompactWindowOf("{\"env\": {}}") == null, "Compact window: none set -> none passed");
             Check(CliSetup.CompactWindowOf("not json") == null, "Compact window: unreadable settings -> none passed");
@@ -123,6 +124,18 @@ public static class Selftest
         Check(Watch.ContextLabel(149_999, 74).Heavy == false, "Context: just under 150k is light");
         Check(Watch.ContextLabel(150_000, 75).Heavy, "Context: 150k is heavy");
         Check(Watch.ContextLabel(120_000, 80).Heavy, "Context: 80% full is heavy even under 150k");
+    }
+
+    // one devbreak.log line per finished turn: what it did, what it cost, what Dev break spent watching it
+    private static void TelemetryCases()
+    {
+        TurnLog log = LogOf(("Bash", "npm test", true, "e"), ("Read", "a.cs", false, "x"));
+        log.Read(ToolUse("w1", "Edit", new { file_path = @"C:\r\a.cs", old_string = "a", new_string = "1\n2\n3" }));
+        Check(Watch.TurnSummary(log, 324, 1.234, 129_354, 167_000, 6) ==
+              "3 steps, 1 failed, 1 file / 3 lines, 5.4 min, $1.23, context 129k (compacts at 167k), 6 ai checks",
+            "Telemetry: a turn's summary line");
+        Check(Watch.TurnSummary(new TurnLog("q"), 2, 0, 0, 0, 0) == "0 steps, 0 failed, 0 files / 0 lines, 0.0 min, $0.00, context ?, 0 ai checks",
+            "Telemetry: an empty turn, context unknown");
     }
 
     private static void FlagCases()

@@ -148,6 +148,18 @@ public static class Watch
         return text;
     }
 
+    /// <summary>
+    /// A finished turn in one devbreak.log line: its own steps and failures, what it changed, how long, what it cost, the
+    /// context the next turn starts from, and the AI checks Dev break spent watching it.
+    /// </summary>
+    public static string TurnSummary(TurnLog log, double seconds, double cost, double context, double compactAt, int aiChecks)
+    {
+        int steps = log.Steps.Count(s => !s.Sub), failed = log.Steps.Count(s => !s.Sub && s.Error);
+        string files = log.Changed.Count == 1 ? "1 file" : $"{log.Changed.Count} files";
+        string size = context <= 0 ? "?" : $"{Math.Round(context / 1000):0}k" + (compactAt > 0 ? $" (compacts at {Math.Round(compactAt / 1000):0}k)" : "");
+        return $"{steps} steps, {failed} failed, {files} / {log.LinesChanged} lines, {seconds / 60:0.0} min, ${cost:0.00}, context {size}, {aiChecks} ai checks";
+    }
+
     /// <summary>What a fresh session starts from instead of the whole history.</summary>
     public const string HandoverQuestion =
         "Write a handover of this conversation for a new session that will not see it. Plain text, under 300 words: " +

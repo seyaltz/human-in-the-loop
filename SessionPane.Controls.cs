@@ -214,6 +214,7 @@ public partial class SessionPane
                 lines.Add($"{t.GetDouble() / 1000:0.#}k of {m.GetDouble() / 1000:0.#}k tokens ({state.ContextPercent}%) - every step re-reads all of it");
                 if (usage.TryGetProperty("autoCompactThreshold", out JsonElement at) && at.ValueKind == JsonValueKind.Number)
                 {
+                    state.CompactAt = at.GetDouble();
                     lines.Add($"compacts on its own at {at.GetDouble() / 1000:0.#}k");
                 }
             }
