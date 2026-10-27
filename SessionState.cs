@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Windows.Documents;
 
@@ -38,6 +39,27 @@ public sealed class SessionState
     public string LastNote { get; set; } = "";
     public DateTime LastNoteAt { get; set; }
 
+    /// <summary>The session's kept-open claude process, while it has one.</summary>
+    internal SessionProcess? Process { get; set; }
+
+    /// <summary>The session file's size and time when its process last finished writing: another change means another writer.</summary>
+    internal (long Length, DateTime Time)? FileStamp { get; set; }
+
+    /// <summary>Stop was pressed for the running turn.</summary>
+    internal bool Stopping { get; set; }
+
+    /// <summary>Messages written while a turn ran, sent one by one when it ends.</summary>
+    internal List<string> Queued { get; } = [];
+
+    /// <summary>The turns of this run that can be rewound: where each starts in the document, its message's uuid, and the uuid before it.</summary>
+    internal List<TurnMark> Marks { get; } = [];
+
+    /// <summary>What the turns cost in this run of the app.</summary>
+    public double Cost { get; set; }
+
+    /// <summary>How full the context was after the last turn (percent), or -1 before it is known.</summary>
+    public int ContextPercent { get; set; } = -1;
+
     /// <summary>The pane showing this session, if any.</summary>
     internal SessionPane? ShownIn { get; set; }
 
@@ -48,3 +70,6 @@ public sealed class SessionState
 
     public void Notify() => Changed?.Invoke(this);
 }
+
+/// <summary>A turn of this run that can be rewound: its first block, its message, its uuid and the uuid of the line before it.</summary>
+internal sealed record TurnMark(Block Start, string Message, string Uuid, string? Before);

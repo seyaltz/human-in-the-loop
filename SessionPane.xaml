@@ -65,6 +65,8 @@
                                            Visibility="Collapsed" />
                             </StackPanel>
                         </Border>
+                        <TextBlock x:Name="QueuedText" FontSize="12" Foreground="{StaticResource VioletDarkBrush}" Margin="2,0,0,6"
+                                   TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
                         <TextBlock x:Name="WorkingText" Style="{StaticResource HandNote}" FontSize="19" Margin="2,0,0,4"
                                    Visibility="Collapsed" />
                         <!-- files pasted, dropped or picked, sent with the next message -->

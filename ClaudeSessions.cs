@@ -90,7 +90,7 @@ public static class ClaudeSessions
                 if (!root.TryGetProperty("message", out JsonElement message) || !message.TryGetProperty("content", out JsonElement content)) continue;
                 if (user)
                 {
-                    if (content.ValueKind == JsonValueKind.String && IsHuman(root)) entries.Add(new SessionEntry(SessionEntryKind.You, content.GetString()!));
+                    if (IsHuman(root) && Typed(content) is { Length: > 0 } typed) entries.Add(new SessionEntry(SessionEntryKind.You, typed));
                     continue;
                 }
                 if (content.ValueKind != JsonValueKind.Array) continue;
@@ -179,7 +179,7 @@ public static class ClaudeSessions
     }
 
     // one streamed line of a turn: its steps and answer go to onEntry; true when it is the line that ends the turn
-    private static bool ReadLine(string line, Action<SessionEntry> onEntry, Action<JsonElement>? onLine)
+    internal static bool ReadLine(string line, Action<SessionEntry> onEntry, Action<JsonElement>? onLine)
     {
         if (!line.StartsWith('{')) return false;
         try
@@ -397,6 +397,23 @@ public static class ClaudeSessions
             }
         }
         return "";
+    }
+
+    // what the user typed: a string (a message from the terminal or -p) or text blocks (a message written as stream-json,
+    // as Sessions and the Factory send them); a line of tool results, or the CLI's "[Request interrupted ...]", is not
+    private static string? Typed(JsonElement content)
+    {
+        if (content.ValueKind == JsonValueKind.String) return content.GetString();
+        if (content.ValueKind != JsonValueKind.Array) return null;
+        var text = new StringBuilder();
+        foreach (JsonElement block in content.EnumerateArray())
+        {
+            string kind = block.TryGetProperty("type", out JsonElement k) ? k.GetString() ?? "" : "";
+            if (kind == "tool_result") return null;
+            if (kind == "text" && block.TryGetProperty("text", out JsonElement t)) text.Append(t.GetString());
+        }
+        string typed = text.ToString();
+        return typed.StartsWith("[Request interrupted", StringComparison.Ordinal) ? null : typed;
     }
 
     private static bool IsHuman(JsonElement root) =>
