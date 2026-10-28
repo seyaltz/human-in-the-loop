@@ -431,6 +431,10 @@ public static class Selftest
               && asks[0].Suggested == "yes. Today's numbers come from a warm JVM.", "Digest: a question splits into the ask and its suggested answer - got: " + (asks.Count > 0 ? asks[0] : null));
         Check(asks.Count == 2 && asks[1].Suggested == "only as a proposal, since core library changes need it.", "Digest: a question that wraps onto the next line is read whole - got: " + (asks.Count > 1 ? asks[1].Suggested : ""));
         Check(FactoryDigest.Questions("1. Should the caches go into Redis? I suggest yes, after a check.").Count == 0, "Digest: numbered lines outside QUESTIONS: are not questions");
+        bool overflowSafe;
+        try { overflowSafe = FactoryDigest.Questions("QUESTIONS:\n99999999999. Too big a number?\n2. Fine?").Count == 1; }
+        catch (OverflowException) { overflowSafe = false; }
+        Check(overflowSafe, "Digest: a question number too big for an int is skipped, not thrown on every refresh");
         List<FactoryQuestion> suggest = FactoryDigest.Questions("QUESTIONS:\n1. Should the caches go into Redis? I suggest yes, after a check.");
         Check(suggest.Count == 1 && suggest[0].Suggested == "yes, after a check.", "Digest: 'I suggest' reads as the suggested answer");
 

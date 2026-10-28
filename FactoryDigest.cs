@@ -54,7 +54,11 @@ public static class FactoryDigest
         {
             string line = lines[i];
             if (line.Trim().Length == 0) continue;
-            if (Item.Match(line) is { Success: true } m) items.Add((int.Parse(m.Groups[1].Value), m.Groups[2].Value.Trim()));
+            // the answer is the model's text: a number that does not fit is not a question, never an exception
+            if (Item.Match(line) is { Success: true } m)
+            {
+                if (int.TryParse(m.Groups[1].Value, out int number)) items.Add((number, m.Groups[2].Value.Trim()));
+            }
             else if (items.Count > 0 && char.IsWhiteSpace(line[0]) && !Field.IsMatch(line)) items[^1] = (items[^1].Item1, items[^1].Item2 + " " + line.Trim());
             else break;
             end = i;
