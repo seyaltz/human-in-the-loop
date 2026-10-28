@@ -1032,6 +1032,15 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
       the chats (tables, lists, code - `CodeRenderer`) without the title, the questions and the EVIDENCE line, and its
       "Not verified" bullets folded into **⚠ Not verified (N)**. The card scrolls inside the room the header, the line
       and the tabs leave (`FitCard`), and the wheel over its text scrolls the card.
+    - **Tell it now** (while a task works): a box under the card's line with **Tell it now** (Ctrl+Enter). `Factory.Steer`
+      writes the words into the Claude turn that runs now (`LiveSession.Steer`, as "The developer adds this while you
+      work - take it into account from your next step on: ..."); measured with `claude -p` stream-json: the message is
+      taken in at Claude's next tool step and the same turn ends with one result. With `--replay-user-messages` each
+      message is echoed when it is taken in (`SteerTracker`); one not echoed before the result came too late, so the
+      turn reads on to the result of the turn it gets (no stray result is left for the next step). When no Claude turn
+      runs (the manager, Learn, a check), the words are held (`FactoryRun.Steers`) and go first in the task's next turn
+      ("The developer told you this while the task worked - it overrides what follows where they differ"). Both are
+      logged ("You told it while it works: ..."); the caption under the box says "Sent" or "Held". Nothing stops.
     Then the tabs **Activity** (the log, rendered like the chats) · **Evidence (N)** (the proof chosen and what was
     not produced; a card per piece: kind, ✓ pass / ✗ fail / – skipped, what it proves, its numbers, an image shown
     (click to open), **Open <file>** for a video, report or any file, a note when the file is missing) · **Trace (N)**

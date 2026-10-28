@@ -236,6 +236,19 @@
                                 </DockPanel>
                                 <TextBox x:Name="NextText" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0"
                                          FontSize="13.5" Margin="0,4,0,0" PreviewMouseWheel="CardWheel" AutomationProperties.Name="What it needs" />
+                                <!-- while it works: your words go into the running step (or the next one) - it does not stop -->
+                                <StackPanel x:Name="SteerPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                                    <DockPanel>
+                                        <Button x:Name="SteerButton" DockPanel.Dock="Right" Content="Tell it now" Style="{StaticResource PrimaryButton}"
+                                                Height="40" Padding="16,0" Margin="8,0,0,0" VerticalAlignment="Top" Click="Steer_Click"
+                                                ToolTip="It takes your words in at its next step and goes on - nothing stops (Ctrl+Enter)" />
+                                        <TextBox x:Name="SteerBox" Style="{StaticResource NotebookBox}" FontSize="13" MinHeight="40" MaxHeight="110" Padding="10,7"
+                                                 TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" PreviewKeyDown="SteerBox_KeyDown"
+                                                 AutomationProperties.Name="Tell it while it works"
+                                                 ToolTip="Steer it while it works - e.g. do everything locally, use the prod read access, skip X" />
+                                    </DockPanel>
+                                    <TextBlock x:Name="SteerSent" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="2,4,0,0" Visibility="Collapsed" />
+                                </StackPanel>
                                 <!-- the questions its answer asks you: one click each, then one message back -->
                                 <StackPanel x:Name="QuestionsPanel" Visibility="Collapsed" Margin="0,8,0,0">
                                     <TextBlock x:Name="QuestionsLabel" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,2" />

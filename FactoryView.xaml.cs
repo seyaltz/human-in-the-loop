@@ -760,6 +760,8 @@ public partial class FactoryView : UserControl
         // the actions: one primary for the state, and only the others that apply
         Visibility On(bool on) => on ? Visibility.Visible : Visibility.Collapsed;
         StopButton.Visibility = On(working);
+        SteerPanel.Visibility = On(working);
+        if (!working) SteerSent.Visibility = Visibility.Collapsed;
         ContinueButton.Visibility = On(waiting);
         WorktreeButton.Visibility = On(waiting && !run.InCheckout && !run.UseWorktree && run.Stage == FactoryStage.NeedsYou
             && run.Note.Contains("Use a separate worktree", StringComparison.Ordinal));
@@ -1029,6 +1031,25 @@ public partial class FactoryView : UserControl
     {
         NextScroll.ScrollToVerticalOffset(NextScroll.VerticalOffset - e.Delta / 3.0);
         e.Handled = true;
+    }
+
+    // --- while it works: your words go into the step that runs now, or the next one; nothing stops ---
+
+    private void Steer_Click(object sender, RoutedEventArgs e)
+    {
+        string text = SteerBox.Text.Trim();
+        if (_shown == null || text.Length == 0) return;
+        bool now = Factory.Steer(_shown, text);
+        SteerBox.Clear();
+        SteerSent.Text = (now ? "Sent - it takes it in at its next step: " : "Held - it goes in with its next step: ") + Short(text, 120);
+        SteerSent.Visibility = Visibility.Visible;
+    }
+
+    private void SteerBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter || (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0) return;
+        e.Handled = true;
+        Steer_Click(sender, e);
     }
 
     // --- the questions its answer asks: yes as suggested, no, or your own words - sent back as one message ---

@@ -28,6 +28,7 @@ public static class Selftest
             WaitCases();
             ResendCases();
             DigestCases();
+            SteerCases();
             FreshCases();
             BackgroundCases();
             FlagCases();
@@ -463,6 +464,31 @@ public static class Selftest
         Check(FactoryDigest.Ago(new DateTime(2026, 10, 28, 11, 58, 0), now) == "11:58 · 2 h ago", "Digest: when it stopped - got: " + FactoryDigest.Ago(new DateTime(2026, 10, 28, 11, 58, 0), now));
         Check(FactoryDigest.Ago(new DateTime(2026, 10, 28, 13, 55, 0), now) == "13:55 · 5 min ago", "Digest: minutes ago");
         Check(FactoryDigest.Ago(new DateTime(2026, 10, 27, 9, 0, 0), now) == "27/10 09:00 · 1 d ago", "Digest: another day");
+    }
+
+    private static void SteerCases()
+    {
+        // measured 2026-10-28 (claude -p stream-json, --replay-user-messages): a message written mid-turn is echoed back
+        // when Claude takes it in, at its next tool step, and the same turn ends with one result that follows it
+        var steers = new ClaudeSessions.SteerTracker();
+        Check(steers.TurnEnds(), "Steer: with nothing sent, a result ends the turn");
+        steers.Sent("do it all locally");
+        Check(!steers.TurnEnds(), "Steer: a message not taken in yet - the result is not the end, its own turn follows");
+        Check(!steers.Echoed("Run the search twice."), "Steer: the turn's own prompt echoed back is not a steer");
+        Check(steers.Echoed("do it all locally") && steers.TurnEnds(), "Steer: once it is echoed back, the next result ends the turn");
+
+        string Echo(string content) => """{"type":"user","message":{"role":"user","content":""" + content + "}}";
+        JsonElement Root(string json) => JsonDocument.Parse(json).RootElement;
+        Check(ClaudeSessions.SteerTracker.EchoText(Root(Echo("\"do it all locally\""))) == "do it all locally", "Steer: an echo with text content is read");
+        Check(ClaudeSessions.SteerTracker.EchoText(Root(Echo("""[{"type":"text","text":"do it all locally"}]"""))) == "do it all locally", "Steer: an echo with text blocks is read");
+        Check(ClaudeSessions.SteerTracker.EchoText(Root(Echo("""[{"type":"tool_result","tool_use_id":"t1","content":"one"}]"""))) == null, "Steer: a tool result is not an echo");
+        Check(ClaudeSessions.SteerTracker.EchoText(Root("""{"type":"assistant","message":{"content":[]}}""")) == null, "Steer: an assistant line is not an echo");
+
+        Check(Factory.SteerMessage("do it all locally").EndsWith("do it all locally") && Factory.SteerMessage("x").Contains("while you work"),
+            "Steer: the message says it comes from the developer while the task works");
+        Check(Factory.WithSteers("Plan the change.", ["use the local stack", "no prod calls"]) is var p
+              && p.Contains("- use the local stack") && p.Contains("- no prod calls") && p.EndsWith("Plan the change."), "Steer: held messages go first in the next turn - got: " + Factory.WithSteers("Plan.", ["a"]));
+        Check(Factory.WithSteers("Plan the change.", []) == "Plan the change.", "Steer: no held messages, the prompt as it is");
     }
 
     private static void ResendCases()

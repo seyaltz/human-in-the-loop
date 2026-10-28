@@ -229,6 +229,9 @@ public sealed class FactoryRun
     public List<string> FactoryFixes { get; set; } = [];
     /// <summary>Files the run changed outside its folder, as it reported them: path - what - backup.</summary>
     public List<string> OutsideChanges { get; set; } = [];
+
+    /// <summary>What the developer told the task while it worked, held for its next turn (no Claude turn ran just then).</summary>
+    public List<string> Steers { get; set; } = [];
     /// <summary>Decisions the run took on its own (the plan's questions, answered with its suggestions).</summary>
     public string Decisions { get; set; } = "";
     /// <summary>The plan found nothing to change: the run hands back an answer (a curl, an explanation), no PR.</summary>
@@ -2830,6 +2833,12 @@ public static class Factory
     private static async Task<(string Answer, string? Error)> TurnAsync(FactoryRun run, bool isNew, string prompt, string title,
         CancellationToken cancel, bool publish = false)
     {
+        // what the developer said while no turn ran goes first
+        lock (run.Steers)
+        {
+            prompt = WithSteers(prompt, run.Steers);
+            run.Steers.Clear();
+        }
         string asked = prompt;
         bool fast = !publish && run.Lane == FactoryHarness.Fast;
         prompt += (run.Autonomous ? AutonomousRule : OutsideRule) + EditRule + (fast ? FastLaneRule : "");
@@ -3157,6 +3166,31 @@ public static class Factory
             Live[run.Id] = live;
             return live;
         }
+    }
+
+    internal static string SteerMessage(string text) =>
+        "The developer adds this while you work - take it into account from your next step on:\n" + text.Trim();
+
+    internal static string WithSteers(string prompt, IReadOnlyList<string> steers) => steers.Count == 0 ? prompt
+        : "The developer told you this while the task worked - it overrides what follows where they differ:\n"
+          + string.Join("\n", steers.Select(s => "- " + s.Trim())) + "\n\n" + prompt;
+
+    /// <summary>
+    /// The developer's words while the task works: into the Claude turn that runs now (it takes them in at its next
+    /// step), else held for the task's next turn. True when they went in now.
+    /// </summary>
+    public static bool Steer(FactoryRun run, string text)
+    {
+        text = text.Trim();
+        if (text.Length == 0) return false;
+        bool now;
+        lock (Live) now = Live.TryGetValue(run.Id, out ClaudeSessions.LiveSession? live) && live.Steer(SteerMessage(text));
+        if (!now)
+        {
+            lock (run.Steers) run.Steers.Add(text);
+        }
+        Log(run, (now ? "You told it while it works: " : "You told it while it works - held for its next step: ") + text);
+        return now;
     }
 
     private static void CloseLive(FactoryRun run)
