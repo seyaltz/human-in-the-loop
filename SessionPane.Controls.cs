@@ -247,16 +247,24 @@ public partial class SessionPane
             if (subtype == "task_started" && id.Length > 0)
             {
                 state.Tasks[id] = line.TryGetProperty("description", out JsonElement d) && d.GetString() is { Length: > 0 } what ? what : "a task";
+                ShowBackground(state, id, line.TryGetProperty("tool_use_id", out JsonElement u) ? u.GetString() ?? "" : "", state.Tasks[id]);
                 state.Notify();
             }
             else if (subtype is "task_notification" or "task_updated" && id.Length > 0
-                     && line.TryGetProperty("status", out JsonElement s) && s.GetString() is "completed" or "failed" or "stopped" or "killed")
+                     && Status(line) is "completed" or "failed" or "stopped" or "killed")
             {
                 state.Tasks.Remove(id);
+                EndBackground(state, id, Status(line), line.TryGetProperty("summary", out JsonElement sum) ? sum.GetString() ?? "" : "");
                 state.Notify();
             }
         });
     }
+
+    // a task's status: task_notification has it, task_updated in its patch (measured: {"patch":{"status":"completed"}})
+    private static string Status(JsonElement line) =>
+        line.TryGetProperty("status", out JsonElement s) ? s.GetString() ?? ""
+        : line.TryGetProperty("patch", out JsonElement p) && p.ValueKind == JsonValueKind.Object && p.TryGetProperty("status", out JsonElement ps) ? ps.GetString() ?? ""
+        : "";
 
     /// <summary>Dev break's own "/" commands, listed with the CLI's: /btw is the terminal's aside, which -p does not have.</summary>
     internal static readonly SlashCommand[] OwnCommands =

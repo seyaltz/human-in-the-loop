@@ -412,9 +412,17 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   of a 1M window hid that (`get_context_usage`: `totalTokens`, `maxTokens`, `percentage`, `autoCompactThreshold`,
   `categories`; tooltip and menu list them, coral from 150k or 80%; the menu offers "/compact " and "Fresh session
   from a handover": a side question writes a short handover, and a new session in the folder starts with it in the
-  box, unsent); "$x.xx this run"; and a
-  "⧗ <what>  ×" chip per background task (`task_started`, gone at `task_notification` / `task_updated` with a final
-  status; × sends `stop_task`). Mode, model and effort are kept per session in `session-settings.json` next to the app
+  box, unsent). A session idle at 120k+ (`Watch.GoFresh`: no background task, nothing queued) gets that handover asked
+  for when its turn ends, and the next message starts the fresh session with "handover + the message" (compaction
+  left 66k and refilled to 167k in 30-45 min; `DEVBREAK_FRESH_AT` lowers the limit for a test copy); "$x.xx this
+  run"; and a "⧗ <what>  ×" chip per background task (`task_started`, gone at `task_notification` / `task_updated`
+  with a final status in its `patch`; × sends `stop_task`). Each background task also gets a **card** in the chat
+  (`SessionPane.Background`, `BackgroundWatch`), folded to "⧗ <what> · m:ss · <last output line>": every 2 s it reads
+  the task's output file (`%TEMP%\claude\<project>\<session>\tasks\<id>.output`), and when the command runs or waits
+  on a Cloud Build (`gcloud builds` + a build id in the command or output) or a Cloud Deploy rollout, every 15 s
+  `gcloud builds describe` / `gcloud deploy rollouts describe` on this machine - steps with ✓ ⧗ ✗ and "build 9/15".
+  Open, it shows the command, those steps and the last 12 lines; it ends "✓ <the notification's summary> · m:ss".
+  Nothing is asked of Claude. Mode, model and effort are kept per session in `session-settings.json` next to the app
   (the user's data); a session never set starts in Bypass with the CLI's default model and effort.
   **Cards** (`SessionPane.Controls`) - the CLI's `can_use_tool` questions, in the transcript (violet tint, violet
   edge, rounded); the live box says "Waiting for you: ...". A tool: "Claude wants to use <tool>", the whole of what it
@@ -885,8 +893,11 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   **Request changes** puts each unticked decision ("Your decision "..." is not what I want: <how>") into the feedback
   box and picks "Change design" unless a kind chip is chosen (Wrong behaviour, Missing, Change design, Bug).
   Send (`FeedbackAsync(text, kind)`) records it as `FactoryFeedback { Kind, Revision = Revision + 1 }`, clears the
-  report (each revision writes its own) and: an answered run (`NoChange` with a Result) gets a turn "reviewed your
-  answer (revision N) and asks for changes" that starts with `UNDERSTOOD:`, then the answer check again; a built run
+  report (each revision writes its own) and: an answered run (`NoChange` with a Result) is revised without its branch
+  (`NeedsBranch`: an answer-only run deletes its empty branch when it finishes, so switching to it failed with
+  "invalid reference") and gets a turn "reviewed your answer (revision N) and asks for changes" with the latest
+  answer, its report and its evidence to build on (`LatestArtifact`, read from disk), that starts with
+  `UNDERSTOOD:`, then the answer check again; a built run
   goes to `ReviseAsync`: one turn that first says `UNDERSTOOD: <what done now means>`, names an earlier decision it
   overturns (and follows the developer), adds `OTHER_REPO: <folder> - <task>` for a part in another repository, then
   changes the files - verify, prove, review and the PR update follow, and `Revision` becomes N. Not autonomous, that

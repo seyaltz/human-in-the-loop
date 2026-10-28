@@ -101,6 +101,8 @@ public sealed class SessionState
     internal bool FollowUp { get; set; }
     /// <summary>The handover a heavy session's next message starts fresh from (asked for when its last turn ended).</summary>
     internal System.Threading.Tasks.Task<string>? Handover { get; set; }
+    /// <summary>The background tasks' cards in the chat, by task id.</summary>
+    internal Dictionary<string, BackgroundCard> Cards { get; } = [];
 
     /// <summary>The "!" shell command running, if one does.</summary>
     internal CancellationTokenSource? Shell { get; set; }

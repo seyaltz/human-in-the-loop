@@ -28,6 +28,7 @@ public static class Selftest
             WaitCases();
             ResendCases();
             FreshCases();
+            BackgroundCases();
             FlagCases();
             QualityCases();
             LessonCases();
@@ -336,6 +337,42 @@ public static class Selftest
         List<SessionStats.CommandFamily> left = SessionStats.Uncovered(families, skills);
         Check(left.Select(f => f.Key).SequenceEqual(["docker compose"]),
             "Learn: a family a skill already names (gcloud run) and an ad-hoc one (python -) are left out - got: " + string.Join(", ", left.Select(f => f.Key)));
+    }
+
+    private static void BackgroundCases()
+    {
+        // measured: the CLI writes a background task's output to %TEMP%\claude\<project>\<session>\tasks\<id>.output
+        string root = Path.Combine(Path.GetTempPath(), "devbreak-selftest-bg");
+        string tasks = Path.Combine(root, "C--some-folder", "sess-1", "tasks");
+        Directory.CreateDirectory(tasks);
+        File.WriteAllText(Path.Combine(tasks, "b1.output"), "x");
+        try
+        {
+            Check(BackgroundWatch.OutputFile(root, "sess-1", "b1") == Path.Combine(tasks, "b1.output"), "Background: the task's output file is found by session and task id");
+            Check(BackgroundWatch.OutputFile(root, "sess-1", "b2") == null, "Background: no file yet -> null");
+        }
+        finally { Directory.Delete(root, true); }
+
+        Check(BackgroundWatch.Tail("a\n\nb\r50%\r100%\nc\n", 2).SequenceEqual(["100%", "c"]),
+            "Background: the tail keeps the last lines, a progress line as it ends (after its last \\r), no blanks - got: " +
+            string.Join("|", BackgroundWatch.Tail("a\n\nb\r50%\r100%\nc\n", 2)));
+
+        const string waitOnBuild = "id=502f6581-c16f-4e20-8fb7-f941fc479266; until s=$(gcloud builds describe $id --project=my-project --region=me-west1 --format=\"value(status)\"); do sleep 10; done";
+        Check(BackgroundWatch.CloudBuild(waitOnBuild, "") == ("502f6581-c16f-4e20-8fb7-f941fc479266", "my-project", "me-west1"),
+            "Background: a wait on a Cloud Build gives its id, project and region");
+        Check(BackgroundWatch.CloudBuild("gcloud builds triggers run t1 --project=p1 --region=r1", "1282b8f8-526d-4f56-9af1-ee30f0863344\tabc") == ("1282b8f8-526d-4f56-9af1-ee30f0863344", "p1", "r1"),
+            "Background: a triggered build's id is read from its output");
+        Check(BackgroundWatch.CloudBuild("npm run build", "") == null, "Background: a local build is not a Cloud Build");
+
+        List<(string Name, string Status)> steps = BackgroundWatch.BuildSteps(
+            """{"status":"WORKING","steps":[{"id":"build","status":"SUCCESS"},{"name":"gcr.io/cloud-builders/docker","status":"WORKING"},{"id":"push"}]}""");
+        Check(steps.SequenceEqual([("build", "SUCCESS"), ("docker", "WORKING"), ("push", "QUEUED")]),
+            "Background: build steps by id, else the builder's last name; no status yet is QUEUED - got: " + string.Join(", ", steps));
+
+        Check(BackgroundWatch.Rollout("gcloud deploy rollouts describe ro-1 --release=r-1 --delivery-pipeline=pipe --project=p --region=r --format=\"value(state)\"")
+              == ("ro-1", "r-1", "pipe", "p", "r"), "Background: a wait on a Cloud Deploy rollout gives its rollout, release, pipeline, project and region");
+        Check(BackgroundWatch.Rollout("ro=r-c55-0001; until s=$(gcloud deploy rollouts describe $ro --release=r-c55 --delivery-pipeline=web --project=p --region=r); do sleep 5; done")
+              == ("r-c55-0001", "r-c55", "web", "p", "r"), "Background: the rollout name is read from the variable it was set in");
     }
 
     private static void FreshCases()
