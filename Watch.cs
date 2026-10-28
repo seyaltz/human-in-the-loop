@@ -176,6 +176,22 @@ public static class Watch
         "commands that work here; anything that failed and must not be retried. No preamble.";
 
     /// <summary>
+    /// A session this heavy starts the next message fresh, from a handover: compaction left 66k (an 18k summary over
+    /// 47k fixed) and refilled to 167k in 30-45 min, and every step re-sends all of it. Only when nothing still
+    /// belongs to this session - a running turn, a background task's result, a queued message.
+    /// </summary>
+    public static bool GoFresh(double tokens, bool working, int backgroundTasks, int queued) =>
+        tokens >= FreshAt && !working && backgroundTasks == 0 && queued == 0;
+
+    // DEVBREAK_FRESH_AT lowers it, to see the switch in a test copy without filling 120k first
+    public static readonly double FreshAt = double.TryParse(Environment.GetEnvironmentVariable("DEVBREAK_FRESH_AT"), out double at) ? at : 120_000;
+
+    /// <summary>The fresh session's first message: the handover, then what the developer wrote.</summary>
+    public static string FreshMessage(string handover, string message) =>
+        "Continue this task. A handover from the previous session (it ran out of room):\n\n" + handover.Trim() +
+        "\n\nThe developer's next message:\n" + message;
+
+    /// <summary>
     /// The footer's context: every step re-sends the whole conversation, so the size in tokens is what each step costs -
     /// a percent of a 1M window hid that (51% was 511k re-read per step). Heavy from 150k, or 80% full.
     /// </summary>

@@ -317,7 +317,12 @@ public partial class SessionPane : UserControl
         _pending.Clear();
         Attachments.Children.Clear();
         Attachments.Visibility = Visibility.Collapsed;
-        if (!state.Working)
+        if (!state.Working && state.Handover is { } handover && !text.StartsWith('/'))
+        {
+            state.Handover = null;
+            Logged(GoFresh(state, handover, message), "fresh session");
+        }
+        else if (!state.Working)
         {
             _ = RunTurn(state, message);
         }
@@ -346,6 +351,8 @@ public partial class SessionPane : UserControl
 
     private async Task RunTurn(SessionState state, string message)
     {
+        // a turn here after all (a queued message, a /command): the handover would miss it
+        state.Handover = null;
         Add(state, new SessionEntry(SessionEntryKind.You, message));
         state.Running = new CancellationTokenSource();
         state.Steps = 0;
@@ -419,6 +426,13 @@ public partial class SessionPane : UserControl
         if (state.Log is { } done)
         {
             Log($"turn ({state.Info.Id[..8]}): " + Watch.TurnSummary(done, state.LastTurnSeconds, state.LastTurnCost, state.ContextTokens, state.CompactAt, state.AiChecks));
+        }
+        // heavy and idle: the handover is written now, while nothing waits on it, and the next message starts fresh
+        if (state.Handover == null && Watch.GoFresh(state.ContextTokens, state.Working, state.Tasks.Count, state.Queued.Count))
+        {
+            state.Handover = AskHandover(state);
+            Add(state, new SessionEntry(SessionEntryKind.Note,
+                $"Context {Math.Round(state.ContextTokens / 1000):0}k - your next message starts a fresh session from a short handover, instead of re-sending all of this."));
         }
         if (state.Queued.Count > 0)
         {

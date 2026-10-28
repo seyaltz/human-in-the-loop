@@ -99,6 +99,8 @@ public sealed class SessionState
 
     /// <summary>The CLI carries on by itself after a background task ended: a message now joins that turn.</summary>
     internal bool FollowUp { get; set; }
+    /// <summary>The handover a heavy session's next message starts fresh from (asked for when its last turn ended).</summary>
+    internal System.Threading.Tasks.Task<string>? Handover { get; set; }
 
     /// <summary>The "!" shell command running, if one does.</summary>
     internal CancellationTokenSource? Shell { get; set; }

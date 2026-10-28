@@ -884,7 +884,7 @@ public static class Factory
         run.ReportFile = "";
         run.Feedback.Add(new FactoryFeedback { At = DateTime.Now, Text = text.Trim(), Kind = kind, Revision = run.Revision + 1 });
         if (!Directory.Exists(run.Worktree)) return Wait(run, "The run's worktree is gone, so the feedback has nowhere to go.");
-        if (!run.FolderWide && !await OnRunBranchAsync(run)) return true;
+        if (NeedsBranch(run) && !await OnRunBranchAsync(run)) return true;
         // an answered run (troubleshooting, research, management, or an answer with no change): the answer is revised
         // and checked again as the next revision - nothing in the repo changes
         if (run.NoChange && run.Result.Length > 0)
@@ -895,6 +895,8 @@ public static class Factory
             (string redo, string? redoError) = await TurnAsync(run, isNew: false, $"""
                 The developer reviewed your answer (revision {run.Revision}) and asks for changes{asked}:
                 {ask.Text.Trim()}
+
+                {LatestArtifact(run)}
 
                 First, in one or two lines, say what the answer must now cover: a line UNDERSTOOD: <...>. If it overturns a
                 decision you took earlier, say which, and follow the developer. Then work it out with the tools on this
@@ -939,6 +941,27 @@ public static class Factory
         }
         return await ReviseAsync(run, cancel, confirmed: false);
     });
+
+    /// <summary>
+    /// Whether a round of changes needs the run's branch: an answered run changes no file, and its branch was deleted
+    /// when it finished (an empty answer-only branch goes), so switching to it fails with "invalid reference".
+    /// </summary>
+    internal static bool NeedsBranch(FactoryRun run) => !run.FolderWide && !(run.NoChange && run.Result.Length > 0);
+
+    // one report per run, written over by each revision
+    private static string ReportPath(FactoryRun run) => Path.Combine(AppContext.BaseDirectory, "traces", run.Id + "-report.html");
+
+    /// <summary>
+    /// What the revision builds on: the latest answer, its report and its evidence - read from disk, since a failed
+    /// round of changes has already cleared the run's report link.
+    /// </summary>
+    internal static string LatestArtifact(FactoryRun run)
+    {
+        string manifest = Path.Combine(ProofDir(run), ManifestName), report = ReportPath(run);
+        return $"Your latest answer (revision {run.Revision}), to build on - not to redo:\n{run.Result.Trim()}\n" +
+               (File.Exists(report) ? $"Its report: {report}\n" : "") +
+               (File.Exists(manifest) ? $"Its evidence: {manifest} - reuse what still holds, add only what the change asks for.\n" : "");
+    }
 
     private static bool IsOk(string text) =>
         text.Trim().TrimEnd('.', '!').ToLowerInvariant() is "ok" or "yes" or "go" or "confirm" or "confirmed" or "build it" or "כן" or "אוקיי";
@@ -2371,7 +2394,7 @@ public static class Factory
             if (start < 0) start = answer.IndexOf("<html", StringComparison.OrdinalIgnoreCase);
             int end = answer.LastIndexOf("</html>", StringComparison.OrdinalIgnoreCase);
             if (start < 0 || end < start) throw new InvalidOperationException("Claude did not reply with an HTML page");
-            string file = Path.Combine(AppContext.BaseDirectory, "traces", run.Id + "-report.html");
+            string file = ReportPath(run);
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
             File.WriteAllText(file, SafeReport(answer[start..(end + "</html>".Length)]));
             run.ReportFile = file;

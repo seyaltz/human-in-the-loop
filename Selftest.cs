@@ -26,6 +26,8 @@ public static class Selftest
             TurnLogCases();
             StatsCases();
             WaitCases();
+            ResendCases();
+            FreshCases();
             FlagCases();
             QualityCases();
             LessonCases();
@@ -334,6 +336,39 @@ public static class Selftest
         List<SessionStats.CommandFamily> left = SessionStats.Uncovered(families, skills);
         Check(left.Select(f => f.Key).SequenceEqual(["docker compose"]),
             "Learn: a family a skill already names (gcloud run) and an ad-hoc one (python -) are left out - got: " + string.Join(", ", left.Select(f => f.Key)));
+    }
+
+    private static void FreshCases()
+    {
+        Check(Watch.GoFresh(165_000, working: false, backgroundTasks: 0, queued: 0), "Fresh: an idle session at 165k goes fresh on the next message");
+        Check(!Watch.GoFresh(119_000, false, 0, 0), "Fresh: under 120k it stays");
+        Check(!Watch.GoFresh(165_000, true, 0, 0), "Fresh: not while a turn runs");
+        Check(!Watch.GoFresh(165_000, false, 1, 0), "Fresh: not while a background task runs - its result comes back to this session");
+        Check(!Watch.GoFresh(165_000, false, 0, 1), "Fresh: not with a queued message - it goes to this session first");
+        string first = Watch.FreshMessage("Goal: deploy.", "now check the logs");
+        Check(first.Contains("Goal: deploy.") && first.EndsWith("now check the logs"), "Fresh: the first message is the handover, then what you wrote - got: " + first);
+    }
+
+    private static void ResendCases()
+    {
+        // an answered run's branch is deleted when it finishes; its changes ask for no branch (10:32 "invalid reference")
+        var answered = new FactoryRun { Id = "t1", Department = FactoryDepartment.Research, NoChange = true, Result = "The first search is slow." };
+        Check(!Factory.NeedsBranch(answered), "Resend: an answered run is revised without its (deleted) branch");
+        var built = new FactoryRun { Id = "t2", Department = FactoryDepartment.Development, Result = "" };
+        Check(Factory.NeedsBranch(built), "Resend: a run that built a change is revised on its branch");
+        Check(!Factory.NeedsBranch(new FactoryRun { Id = "t3", FolderWide = true }), "Resend: a folder-wide run has no branch");
+
+        Check(Factory.LatestArtifact(answered).Contains("The first search is slow.") && !Factory.LatestArtifact(answered).Contains("report:"),
+            "Resend: the revision carries the latest answer, and no report line while there is no report");
+        string report = Path.Combine(AppContext.BaseDirectory, "traces", "t1-report.html");
+        Directory.CreateDirectory(Path.GetDirectoryName(report)!);
+        File.WriteAllText(report, "<html></html>");
+        try
+        {
+            Check(Factory.LatestArtifact(answered).Contains("Its report: " + report),
+                "Resend: the report on disk is named even after a failed round cleared the run's link - got: " + Factory.LatestArtifact(answered));
+        }
+        finally { File.Delete(report); }
     }
 
     private static void WaitCases()
