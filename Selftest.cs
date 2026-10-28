@@ -373,6 +373,13 @@ public static class Selftest
               == ("ro-1", "r-1", "pipe", "p", "r"), "Background: a wait on a Cloud Deploy rollout gives its rollout, release, pipeline, project and region");
         Check(BackgroundWatch.Rollout("ro=r-c55-0001; until s=$(gcloud deploy rollouts describe $ro --release=r-c55 --delivery-pipeline=web --project=p --region=r); do sleep 5; done")
               == ("r-c55-0001", "r-c55", "web", "p", "r"), "Background: the rollout name is read from the variable it was set in");
+        // the values go back into a gcloud command: anything a shell would read as code means no poll at all
+        Check(BackgroundWatch.Rollout("ro=$(touch x); gcloud deploy rollouts describe $ro --release=r --delivery-pipeline=p --project=p --region=r") == null,
+            "Background: a rollout name with shell code in it is not polled");
+        Check(BackgroundWatch.Rollout("gcloud deploy rollouts describe r1 --release=`id` --delivery-pipeline=p --project=p --region=r") == null,
+            "Background: a flag with shell code in it is not polled");
+        Check(BackgroundWatch.CloudBuild("gcloud builds describe 502f6581-c16f-4e20-8fb7-f941fc479266 --project=$(id) --region=r", "") == null,
+            "Background: a build with shell code in its project is not polled");
     }
 
     private static void FreshCases()

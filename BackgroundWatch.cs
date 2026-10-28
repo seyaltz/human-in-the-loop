@@ -43,6 +43,12 @@ public static class BackgroundWatch
         return reader.ReadToEnd();
     }
 
+    // the values go back into a gcloud command run by a shell: only plain names pass (letters, digits, . _ -), so nothing
+    // in them can be read as shell code; an empty flag (not given) passes, as the command then leaves it out
+    private static readonly Regex Plain = new(@"^[A-Za-z0-9._-]*$", RegexOptions.Compiled);
+
+    private static bool AllPlain(params string[] values) => values.All(v => Plain.IsMatch(v));
+
     private static string Flag(string command, string name) =>
         Regex.Match(command, $@"--{name}[= ]""?([^\s""';)]+)") is { Success: true } m ? m.Groups[1].Value : "";
 
@@ -52,7 +58,8 @@ public static class BackgroundWatch
         if (!command.Contains("gcloud builds", StringComparison.Ordinal)) return null;
         Match id = Uuid.Match(command);
         if (!id.Success) id = Uuid.Match(output);
-        return id.Success ? (id.Value, Flag(command, "project"), Flag(command, "region")) : null;
+        (string Id, string Project, string Region) build = (id.Value, Flag(command, "project"), Flag(command, "region"));
+        return id.Success && AllPlain(build.Project, build.Region) ? build : null;
     }
 
     /// <summary>The steps of a build (<c>gcloud builds describe --format=json</c>): by id, else the builder's last name.</summary>
@@ -77,8 +84,9 @@ public static class BackgroundWatch
             string name = rollout.TrimStart('$').Trim('{', '}', '"');
             rollout = Regex.Match(command, $@"\b{Regex.Escape(name)}=""?([^\s;""]+)") is { Success: true } v ? v.Groups[1].Value : "";
         }
-        return rollout.Length > 0
-            ? (rollout, Flag(command, "release"), Flag(command, "delivery-pipeline"), Flag(command, "project"), Flag(command, "region"))
+        var found = (rollout, Flag(command, "release"), Flag(command, "delivery-pipeline"), Flag(command, "project"), Flag(command, "region"));
+        return rollout.Length > 0 && AllPlain(found.rollout, found.Item2, found.Item3, found.Item4, found.Item5)
+            ? found
             : null;
     }
 
