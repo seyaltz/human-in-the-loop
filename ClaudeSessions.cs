@@ -270,7 +270,7 @@ public static class ClaudeSessions
             {
                 start.ArgumentList.Add(arg);
             }
-            start.ArgumentList.Add(isNew ? "--session-id" : "--resume");
+            start.ArgumentList.Add(StartsNew(isNew, FileOf(id)) ? "--session-id" : "--resume");
             start.ArgumentList.Add(id);
             foreach (string arg in extra) start.ArgumentList.Add(arg);
             CliSetup.UseCompactWindow(start);
@@ -283,6 +283,10 @@ public static class ClaudeSessions
             process.BeginErrorReadLine();
             return live;
         }
+
+        // measured: --session-id on an id that already has a transcript fails "Session ID ... is already in use", so a new
+        // turn on a session that has one resumes it - as it does when the session's open process is reused
+        internal static bool StartsNew(bool isNew, string? transcript) => isNew && transcript == null;
 
         public static string KeyOf(string folder, string id, IEnumerable<string>? extraArgs) =>
             folder + "|" + id + "|" + string.Join(" ", extraArgs ?? []);

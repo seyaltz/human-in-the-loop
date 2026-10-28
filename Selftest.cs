@@ -395,6 +395,12 @@ public static class Selftest
 
     private static void ResendCases()
     {
+        // measured: claude --session-id on an id that has a transcript fails "Session ID ... is already in use"; a reply
+        // to an investigation asks for a new session on the run's own id (13:18, after a restart closed the open process)
+        Check(!ClaudeSessions.LiveSession.StartsNew(isNew: true, transcript: @"C:\x\0a1b2c3d.jsonl"), "Session: a new turn on a session with a transcript resumes it");
+        Check(ClaudeSessions.LiveSession.StartsNew(isNew: true, transcript: null), "Session: a new turn with no transcript yet starts the session");
+        Check(!ClaudeSessions.LiveSession.StartsNew(isNew: false, transcript: null), "Session: a resume stays a resume");
+
         // an answered run's branch is deleted when it finishes; its changes ask for no branch (10:32 "invalid reference")
         var answered = new FactoryRun { Id = "t1", Department = FactoryDepartment.Research, NoChange = true, Result = "The first search is slow." };
         Check(!Factory.NeedsBranch(answered), "Resend: an answered run is revised without its (deleted) branch");
