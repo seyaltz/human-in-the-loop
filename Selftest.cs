@@ -401,6 +401,14 @@ public static class Selftest
         var built = new FactoryRun { Id = "t2", Department = FactoryDepartment.Development, Result = "" };
         Check(Factory.NeedsBranch(built), "Resend: a run that built a change is revised on its branch");
         Check(!Factory.NeedsBranch(new FactoryRun { Id = "t3", FolderWide = true }), "Resend: a folder-wide run has no branch");
+        // Continue takes the same rule (11:57 "invalid reference" on Continue)
+        answered.InCheckout = built.InCheckout = true;
+        Check(!Factory.ResumesOnBranch(answered), "Continue: an answered run in the checkout goes on without its (deleted) branch");
+        Check(Factory.ResumesOnBranch(built), "Continue: a run that built a change goes on on its branch");
+        string gone = Factory.SwitchFailed("devbreak/x-1", "fatal: invalid reference: devbreak/x-1");
+        Check(gone.Contains("no longer exists") && !gone.Contains("fatal:"), "Continue: a deleted branch is said plainly - got: " + gone);
+        Check(Factory.SwitchFailed("devbreak/x-1", "error: your local changes would be overwritten").Contains("would be overwritten"),
+            "Continue: another switch failure keeps git's words");
 
         Check(Factory.LatestArtifact(answered).Contains("The first search is slow.") && !Factory.LatestArtifact(answered).Contains("report:"),
             "Resend: the revision carries the latest answer, and no report line while there is no report");

@@ -532,7 +532,7 @@ public static class Factory
         FactoryStage stoppedAt = run.Log.LastOrDefault(s => s.Stage is not (FactoryStage.NeedsYou or FactoryStage.Stopped or FactoryStage.Learn))?.Stage ?? FactoryStage.Queued;
         string why = run.Note;
         if (run.Repo.Length == 0 && !await LocateAsync(run, cancel)) return false;
-        if (run.InCheckout)
+        if (ResumesOnBranch(run))
         {
             if (!await OnRunBranchAsync(run)) return false;
         }
@@ -947,6 +947,14 @@ public static class Factory
     /// when it finished (an empty answer-only branch goes), so switching to it fails with "invalid reference".
     /// </summary>
     internal static bool NeedsBranch(FactoryRun run) => !run.FolderWide && !(run.NoChange && run.Result.Length > 0);
+
+    // Continue goes on in the developer's checkout on the run's branch - unless the run has none to go on (an answered run)
+    internal static bool ResumesOnBranch(FactoryRun run) => run.InCheckout && NeedsBranch(run);
+
+    // a failed switch to the run's branch, in plain words when the branch is gone
+    internal static string SwitchFailed(string branch, string output) => output.Contains("invalid reference", StringComparison.Ordinal)
+        ? $"The run's branch {branch} no longer exists, so the run cannot go on in your checkout. Start a new run for the task."
+        : $"Could not switch your checkout to {branch}: {Tail(output.Trim(), 800)}";
 
     // one report per run, written over by each revision
     private static string ReportPath(FactoryRun run) => Path.Combine(AppContext.BaseDirectory, "traces", run.Id + "-report.html");
@@ -1470,7 +1478,7 @@ public static class Factory
         if (await CheckoutProblemAsync(run, "switch to its branch " + run.Branch) is { } problem) return Wait(run, problem);
         run.ReturnTo = await HeadAsync(run.Repo);
         (int exit, string output) = await GitSpanAsync(run, run.Repo, "switch", run.Branch);
-        if (exit != 0) return Wait(run, $"Could not switch your checkout to {run.Branch}: {Tail(output.Trim(), 800)}");
+        if (exit != 0) return Wait(run, SwitchFailed(run.Branch, output));
         TakeLock(run);
         Log(run, $"Your checkout is on {run.Branch} again; it goes back to {run.ReturnTo} when this is done.");
         return true;
