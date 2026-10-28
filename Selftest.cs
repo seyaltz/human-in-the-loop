@@ -33,6 +33,7 @@ public static class Selftest
             ReviewFixCases();
             ContextCases();
             TelemetryCases();
+            JudgeCases();
             Check(CliSetup.CompactWindowOf("{\"autoCompactWindow\": 200000}") == "200000", "Compact window: read from the user's settings");
             Check(CliSetup.CompactWindowOf("{\"env\": {}}") == null, "Compact window: none set -> none passed");
             Check(CliSetup.CompactWindowOf("not json") == null, "Compact window: unreadable settings -> none passed");
@@ -138,12 +139,40 @@ public static class Selftest
             "Telemetry: an empty turn, context unknown");
     }
 
+    // the grade is only as good as its record: a judge shown "ok" for every step flagged a right answer's numbers 5
+    // times; a turn waiting on a background task is not over; a session's cost total can be far back in a big file
+    private static void JudgeCases()
+    {
+        var log = new TurnLog("recheck the map page");
+        log.Read(ToolUse("r1", "mcp__playwright__browser_run_code_unsafe", new { code = "open the map page" }));
+        log.Read(ToolResult("r1", false, new string('.', 400) + "39 destinations, from $138"));
+        string prompt = Rubric.Prompt(log, "The page shows 39 items from $138.");
+        Check(prompt.Contains("39 destinations, from $138"), "Judge: a step's result is in the record, not just \"ok\"");
+        Check(prompt.Contains("open the map page"), "Judge: a step with a blank summary shows its input");
+
+        var finished = new TurnLog("restart") { Answer = "Restarted, 12/12 up." };
+        for (int i = 0; i < SessionPane.GradeFrom; i++) finished.Read(ToolUse("g" + i, "Read", new { file_path = "f" + i }));
+        Check(SessionPane.Gradable(finished, 0), "Judge: a finished turn is graded");
+        Check(!SessionPane.Gradable(finished, 1), "Judge: a turn with a background task still running is not graded yet");
+
+        string file = Path.Combine(Path.GetTempPath(), "devbreak-cost-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        File.WriteAllText(file, "{\"type\":\"cost-state\",\"totalCostUSD\":7.53}\n" + string.Concat(Enumerable.Repeat("{\"type\":\"user\",\"pad\":\"" + new string('x', 1000) + "\"}\n", 400)));
+        try
+        {
+            Check(Math.Abs(ClaudeSessions.LastCostIn(file) - 7.53) < 1e-9, "Cost: the session's total is found 400 KB before the end");
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
     // 4 different Playwright scripts: the tool keeps its script in "code", which the summary does not show (it is blank),
     // so only the whole input tells them apart - the case that flagged real progress as stuck
     private static void SameInputCases()
     {
         string[] scripts = ["open the deal link", "close the other tabs, go to the page", "take a screenshot", "type into the chat box"];
-        TurnLog different = new("check the radar"), same = new("check the radar");
+        TurnLog different = new("check the map page"), same = new("check the map page");
         for (int i = 0; i < 4; i++)
         {
             different.Read(ToolUse("d" + i, "mcp__playwright__browser_run_code_unsafe", new { code = scripts[i] }));

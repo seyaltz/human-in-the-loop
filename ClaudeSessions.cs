@@ -500,15 +500,20 @@ public static class ClaudeSessions
     /// The session's running cost as its file last recorded it (the last cost-state line's totalCostUSD), 0 without one.
     /// Measured: a process resuming the session carries this total on in its results' total_cost_usd.
     /// </summary>
-    public static double LastCost(string id)
+    public static double LastCost(string id) => FileOf(id) is { } file ? LastCostIn(file) : 0;
+
+    // the end of the file first; the CLI writes the line rarely, so it can lie further back (424 KB from the end of a
+    // 13 MB session: missed, its next turn showed the whole session's $7.53 as its own cost) - then the whole file
+    internal static double LastCostIn(string file) => LastCostIn(file, 256 * 1024) ?? LastCostIn(file, long.MaxValue) ?? 0;
+
+    private static double? LastCostIn(string file, long tail)
     {
-        if (FileOf(id) is not { } file) return 0;
         try
         {
             using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            stream.Seek(Math.Max(0, stream.Length - 256 * 1024), SeekOrigin.Begin);
+            stream.Seek(Math.Max(0, stream.Length - tail), SeekOrigin.Begin);
             using var reader = new StreamReader(stream);
-            double cost = 0;
+            double? cost = null;
             while (reader.ReadLine() is { } line)
             {
                 if (!line.Contains("\"cost-state\"", StringComparison.Ordinal)) continue;
@@ -525,7 +530,7 @@ public static class ClaudeSessions
         }
         catch (IOException)
         {
-            return 0;
+            return null;
         }
     }
 

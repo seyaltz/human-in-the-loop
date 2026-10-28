@@ -44,6 +44,9 @@ public partial class QuestionWindow : Window
     {
         _pool = pool;
         InitializeComponent();
+        // on top only to get the hourly question seen: once you click elsewhere it goes behind like any window, until
+        // the next question puts it back on top
+        Deactivated += (_, _) => Topmost = false;
         AddTopicChips();
         // a factory run's session continues in Sessions
         FactoryView.OpenSessionRequested += info =>

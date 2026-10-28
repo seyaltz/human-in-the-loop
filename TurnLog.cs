@@ -91,7 +91,7 @@ public sealed class TurnLog
                     ? body.ValueKind == JsonValueKind.String ? body.GetString()! : string.Join(" ", body.ValueKind == JsonValueKind.Array
                         ? body.EnumerateArray().Select(b => Str(b, "text")) : [])
                     : "";
-                step.Result = text.Length > 300 ? text[..300] : text;
+                step.Result = text.Length > 1000 ? text[..1000] : text;
             }
         }
     }
