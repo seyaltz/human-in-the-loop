@@ -75,6 +75,10 @@ public sealed class SessionState
     /// <summary>Where the CLI compacts on its own (autoCompactThreshold), 0 before it is known.</summary>
     public double CompactAt { get; set; }
 
+    /// <summary>The compaction running now (its live line in the chat), and when the recent ones ended.</summary>
+    internal CompactLine? Compacting { get; set; }
+    internal List<DateTime> Compactions { get; } = [];
+
     /// <summary>The last turn's time and cost, from its result line (for its devbreak.log line).</summary>
     public double LastTurnSeconds { get; set; }
     public double LastTurnCost { get; set; }

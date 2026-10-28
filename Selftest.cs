@@ -43,6 +43,14 @@ public static class Selftest
             Check(CliSetup.CompactWindowOf("{\"autoCompactWindow\": 200000}") == "200000", "Compact window: read from the user's settings");
             Check(CliSetup.CompactWindowOf("{\"env\": {}}") == null, "Compact window: none set -> none passed");
             Check(CliSetup.CompactWindowOf("not json") == null, "Compact window: unreadable settings -> none passed");
+            // the compaction line: numbers from compact_metadata (measured: pre 43480, post 14212, 6755 ms, manual)
+            Check(Compaction.Running(TimeSpan.FromSeconds(83)) == "⧗ Compacting the conversation · 1:23", "Compaction: the live line counts up");
+            string once = Compaction.Done(43480, 14212, 6755, "manual", 1);
+            Check(once == "✓ Compacted 43k → 14k in 7 s (/compact)", "Compaction: one compaction says what it did - got: " + once);
+            string twice = Compaction.Done(97000, 22000, 38000, "auto", 2);
+            Check(twice.EndsWith("· 2 in the last 10 min") && !twice.Contains("loop"), "Compaction: two close together are counted - got: " + twice);
+            Check(Compaction.Done(97000, 22000, 38000, "auto", 3).Contains("a loop"), "Compaction: three in 10 min are called a loop");
+            Check(Compaction.Done(0, 0, 0, "", 1) == "✓ Compacted", "Compaction: no metadata - no invented numbers");
             Check(Watch.IsQuickStep("commit and push"), "Quick step: \"commit and push\"");
             Check(Watch.IsQuickStep("rebuild and restart dev break"), "Quick step: \"rebuild and restart dev break\"");
             Check(!Watch.IsQuickStep("design a watcher that coaches long turns"), "Quick step: a design ask is not one");

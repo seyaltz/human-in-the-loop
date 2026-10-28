@@ -414,7 +414,14 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   from a handover": a side question writes a short handover, and a new session in the folder starts with it in the
   box, unsent). A session idle at 120k+ (`Watch.GoFresh`: no background task, nothing queued) gets that handover asked
   for when its turn ends, and the next message starts the fresh session with "handover + the message" (compaction
-  left 66k and refilled to 167k in 30-45 min; `DEVBREAK_FRESH_AT` lowers the limit for a test copy); "$x.xx this
+  left 66k and refilled to 167k in 30-45 min; `DEVBREAK_FRESH_AT` lowers the limit for a test copy). A compaction
+  gets a line in the chat, since nothing else shows while it runs (30-60 s on a big session): "⧗ Compacting the
+  conversation · m:ss", counting up from the `status: "compacting"` system line, then "✓ Compacted 98k → 22k in 38 s
+  (auto)" from `compact_boundary`'s `compact_metadata` (`pre_tokens`, `post_tokens`, `duration_ms`, `trigger`), or "✗
+  Compaction failed: <why>" from a `compact_result` that is not success. Two within 10 minutes add "· N in the last 10
+  min"; three are called a loop - what loads again after each one fills the context back to the limit (measured: 7 in
+  7 minutes, 79k right after each against a 97k limit) - with the way out: a fresh session from a handover, or a
+  bigger `autoCompactWindow`, which a running process keeps the old value of until it restarts; "$x.xx this
   run"; and a "⧗ <what>  ×" chip per background task (`task_started`, gone at `task_notification` / `task_updated`
   with a final status in its `patch`; × sends `stop_task`). Each background task also gets a **card** in the chat
   (`SessionPane.Background`, `BackgroundWatch`), folded to "⧗ <what> · m:ss · <last output line>": every 2 s it reads

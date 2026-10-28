@@ -243,6 +243,7 @@ public partial class SessionPane
         process.Ask += ask => Dispatcher.Invoke(() => ShowAsk(state, process, ask));
         process.SystemEvent += (subtype, line) => Dispatcher.Invoke(() =>
         {
+            OnCompactEvent(state, subtype, line);
             string id = line.TryGetProperty("task_id", out JsonElement t) ? t.GetString() ?? "" : "";
             if (subtype == "task_started" && id.Length > 0)
             {
