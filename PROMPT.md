@@ -1013,13 +1013,25 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
       what to do, through `FeedbackAsync`) when the task has a session; **Continue**, and only when they apply **Use a
       separate worktree** and **Draft PR anyway** (Development, with a plan, no PR).
     - **Done**: "Review revision N - the draft PR / report / answer is ready" (violet while it waits for the review),
-      or "Accepted - revision N"; the note; the **Result** (marker yellow, mono, **Copy**); the decisions it took on
+      or "Accepted - revision N"; the note; the **Result** (see "Reading the result" below, **Copy** copies it whole); the decisions it took on
       its own as ticked boxes (unticking one opens "How should it be instead?" and the change box); **Accept**
       (primary - `AcceptAsync` marks it accepted, records the rating good and learns from it) and **Request changes**
       (shows the kinds - Wrong behaviour / Missing / Change design / Bug - and the box; **Send to the next revision**
       sends the unticked decisions and the words, kind "change design" when only decisions were unticked); **Open PR**
       / **Open report** (secondary next to Accept); **Fix it in Development** for a troubleshooting diagnosis.
       There is no separate Good/Bad rating: Accept and Request changes are the verdict.
+    - **Reading the result** (`FactoryDigest`, tested in `DigestCases`): the task's title and its list row show the
+      answer's headline - its `TITLE:` line, else its opening bold sentence, else the words it was started with (those
+      go to the meta line, "asked: ..."). The card's title says what to do ("Needs you - what to do"), with when it
+      stopped on the right ("stopped 11:58 · 2 h ago"). The manager's note is split: what to do stays, its
+      "Why it stopped:" folds into **Why it stopped (technical)**, the proposals into **Factory improvements proposed
+      (N)** (Copy / Got it inside). The answer's `QUESTIONS:` become rows - the ask, "Suggested: ...", and
+      **Yes, as suggested** / **No** / **Answer…** (a box for your words); **Send answers (n of m)** sends the answered
+      ones as one message through `FeedbackAsync` (the next revision). **Accept** reads "Accept - N questions
+      unanswered" while there are some. The **Result** box: RESULT, the headline in bold, the findings rendered like
+      the chats (tables, lists, code - `CodeRenderer`) without the title, the questions and the EVIDENCE line, and its
+      "Not verified" bullets folded into **⚠ Not verified (N)**. The card scrolls inside the room the header, the line
+      and the tabs leave (`FitCard`), and the wheel over its text scrolls the card.
     Then the tabs **Activity** (the log, rendered like the chats) · **Evidence (N)** (the proof chosen and what was
     not produced; a card per piece: kind, ✓ pass / ✗ fail / – skipped, what it proves, its numbers, an image shown
     (click to open), **Open <file>** for a video, report or any file, a note when the file is missing) · **Trace (N)**

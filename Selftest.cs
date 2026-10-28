@@ -27,6 +27,7 @@ public static class Selftest
             StatsCases();
             WaitCases();
             ResendCases();
+            DigestCases();
             FreshCases();
             BackgroundCases();
             FlagCases();
@@ -391,6 +392,73 @@ public static class Selftest
         Check(!Watch.GoFresh(165_000, false, 0, 1), "Fresh: not with a queued message - it goes to this session first");
         string first = Watch.FreshMessage("Goal: deploy.", "now check the logs");
         Check(first.Contains("Goal: deploy.") && first.EndsWith("now check the logs"), "Fresh: the first message is the handover, then what you wrote - got: " + first);
+    }
+
+    private static void DigestCases()
+    {
+        // the shapes of two real answers (2026-10-28): one with TITLE:, one opening with a bold sentence
+        const string answer = """
+            TITLE: Hotel search reproduced locally: about 2 s on a warm search service
+
+            **I reproduced it locally.** I sent the search three times.
+
+            | Call | Time |
+            |---|---|
+            | 1 | 1925 ms |
+
+            **Not verified:**
+            - **A cold-JVM first call.** It needs a restart of its PID.
+            - Which jar the JVM loaded.
+
+            The rerun script is `time-search.ps1`.
+
+            QUESTIONS:
+            1. Should I restart search service and run the script right after startup? Suggested answer: yes. Today's numbers come from a warm JVM.
+            2. Should a follow-up task look at the Redis list at `CacheConfig.java:100-102`? Suggested answer: only as a proposal,
+               since core library changes need it.
+
+            EVIDENCE: api, logs, perf
+            """;
+        Check(FactoryDigest.Headline(answer, "resend the request") == "Hotel search reproduced locally: about 2 s on a warm search service",
+            "Digest: the headline is the answer's TITLE - got: " + FactoryDigest.Headline(answer, "x"));
+        Check(FactoryDigest.Headline("**The first search is slow only on a fresh instance.** About four caches...", "https://x/y") == "The first search is slow only on a fresh instance.",
+            "Digest: with no TITLE, the answer's opening bold sentence");
+        Check(FactoryDigest.Headline("Plain answer.", "the task title") == "the task title", "Digest: else the task's own title");
+
+        List<FactoryQuestion> asks = FactoryDigest.Questions(answer);
+        Check(asks.Count == 2, "Digest: both questions are found - got " + asks.Count);
+        Check(asks.Count == 2 && asks[0].Ask == "Should I restart search service and run the script right after startup?"
+              && asks[0].Suggested == "yes. Today's numbers come from a warm JVM.", "Digest: a question splits into the ask and its suggested answer - got: " + (asks.Count > 0 ? asks[0] : null));
+        Check(asks.Count == 2 && asks[1].Suggested == "only as a proposal, since core library changes need it.", "Digest: a question that wraps onto the next line is read whole - got: " + (asks.Count > 1 ? asks[1].Suggested : ""));
+        Check(FactoryDigest.Questions("1. Should the caches go into Redis? I suggest yes, after a check.").Count == 0, "Digest: numbered lines outside QUESTIONS: are not questions");
+        List<FactoryQuestion> suggest = FactoryDigest.Questions("QUESTIONS:\n1. Should the caches go into Redis? I suggest yes, after a check.");
+        Check(suggest.Count == 1 && suggest[0].Suggested == "yes, after a check.", "Digest: 'I suggest' reads as the suggested answer");
+
+        (string body, string notVerified) = FactoryDigest.Body(answer);
+        Check(!body.Contains("TITLE:") && !body.Contains("QUESTIONS:") && !body.Contains("EVIDENCE:") && !body.Contains("Should I restart"),
+            "Digest: the body leaves out the title, the questions and the evidence line - got: " + body);
+        Check(body.Contains("I reproduced it locally") && body.Contains("| 1 | 1925 ms |") && body.Contains("time-search.ps1"), "Digest: the body keeps the findings, tables and what follows");
+        Check(!body.Contains("Not verified") && notVerified.Contains("A cold-JVM first call") && notVerified.Contains("Which jar"),
+            "Digest: 'Not verified' is set apart - got: " + notVerified);
+
+        const string note = "Read the report and answer questions 1-4.\n\nWhy it stopped: Could not switch your checkout: fatal: invalid reference\n\nProposed changes to the factory (for you to approve):\n- Retry a busy session.";
+        (string action, string why) = FactoryDigest.SplitNote(note);
+        Check(action == "Read the report and answer questions 1-4." && why == "Could not switch your checkout: fatal: invalid reference",
+            $"Digest: the manager's note splits into what to do and why it stopped - got: {action} | {why}");
+        Check(FactoryDigest.SplitNote("Claude needs you: sign in.") == ("Claude needs you: sign in.", ""), "Digest: a note with no 'Why it stopped' is all action");
+
+        string sent = FactoryDigest.Answers(asks, new Dictionary<int, string> { [1] = FactoryDigest.Yes, [2] = "no - leave the core library as it is" });
+        Check(sent.Contains("1. Should I restart search service") && sent.Contains("Yes, as you suggested: yes. Today's numbers")
+              && sent.Contains("2. Should a follow-up task") && sent.Contains("no - leave the core library as it is"), "Digest: the answers go back as one message - got: " + sent);
+        Check(FactoryDigest.Answers(asks, new Dictionary<int, string> { [2] = FactoryDigest.No }) is var one && !one.Contains("1.") && one.Contains("No."),
+            "Digest: only the answered questions are sent");
+
+        Check(FactoryDigest.Clean("Add them to `CacheConfig.java:100-102`, **then** check") == "Add them to CacheConfig.java:100-102, then check",
+            "Digest: plain text for a label has no markdown marks - got: " + FactoryDigest.Clean("Add them to `CacheConfig.java:100-102`, **then** check"));
+        DateTime now = new(2026, 10, 28, 14, 0, 0);
+        Check(FactoryDigest.Ago(new DateTime(2026, 10, 28, 11, 58, 0), now) == "11:58 · 2 h ago", "Digest: when it stopped - got: " + FactoryDigest.Ago(new DateTime(2026, 10, 28, 11, 58, 0), now));
+        Check(FactoryDigest.Ago(new DateTime(2026, 10, 28, 13, 55, 0), now) == "13:55 · 5 min ago", "Digest: minutes ago");
+        Check(FactoryDigest.Ago(new DateTime(2026, 10, 27, 9, 0, 0), now) == "27/10 09:00 · 1 d ago", "Digest: another day");
     }
 
     private static void ResendCases()
