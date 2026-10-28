@@ -29,6 +29,7 @@ public static class Selftest
             ResendCases();
             DigestCases();
             SteerCases();
+            HandOffCases();
             FreshCases();
             BackgroundCases();
             FlagCases();
@@ -467,6 +468,32 @@ public static class Selftest
         Check(FactoryDigest.Ago(new DateTime(2026, 10, 28, 11, 58, 0), now) == "11:58 · 2 h ago", "Digest: when it stopped - got: " + FactoryDigest.Ago(new DateTime(2026, 10, 28, 11, 58, 0), now));
         Check(FactoryDigest.Ago(new DateTime(2026, 10, 28, 13, 55, 0), now) == "13:55 · 5 min ago", "Digest: minutes ago");
         Check(FactoryDigest.Ago(new DateTime(2026, 10, 27, 9, 0, 0), now) == "27/10 09:00 · 1 d ago", "Digest: another day");
+    }
+
+    private static void HandOffCases()
+    {
+        // a research run that proved a change by editing another repo (2026-10-28): Development takes it in that repo
+        static bool IsRepo(string dir) => dir == @"C:\r\core";
+        const string outside = @"C:\r\core\ext\src\Cache.java - added ""Places"" to the Redis list, plus its registration - C:\r\core\ext\src\Cache.java.bak";
+        Check(Factory.OutsideRepo([outside], IsRepo) == @"C:\r\core", "Hand off: the repo of the change it made outside its own - got " + Factory.OutsideRepo([outside], IsRepo));
+        Check(Factory.OutsideRepo(["changed the proxy settings"], IsRepo) == null, "Hand off: an outside change with no path names no repo");
+        Check(Factory.OutsideRepo([@"D:\elsewhere\x.txt - y"], IsRepo) == null, "Hand off: a path in no repo names none");
+
+        var research = new FactoryRun
+        {
+            Id = "r1", Title = "First search slow", Department = FactoryDepartment.Research, Task = "reproduce it locally",
+            Repo = @"C:\r\search", BaseBranch = "main", Folder = @"C:\r", Result = "Places in Redis: the first search 14 s -> 6 s.",
+        };
+        research.OutsideChanges.Add(outside);
+        (string task, string folder, string branch) = Factory.HandOffTask(research, IsRepo);
+        Check(folder == @"C:\r\core" && branch == "", "Hand off: research goes to the repo it changed, on that repo's own branch - got " + folder + " / " + branch);
+        Check(task.Contains("research run \"First search slow\"") && task.Contains("Places in Redis: the first search 14 s -> 6 s.")
+              && task.Contains("Cache.java - added \"Places\"") && task.Contains("draft PR"), "Hand off: the task carries the findings and the change it tested - got: " + task);
+        research.OutsideChanges.Clear();
+        (_, string ownFolder, string ownBranch) = Factory.HandOffTask(research, IsRepo);
+        Check(ownFolder == @"C:\r\search" && ownBranch == "main", "Hand off: with no outside change, the run's own repo and base");
+        var diagnosed = new FactoryRun { Id = "d1", Title = "Login fails", Department = FactoryDepartment.Troubleshooting, Task = "login 500", Repo = @"C:\r\web", BaseBranch = "dev", Result = "Null session." };
+        Check(Factory.HandOffTask(diagnosed, IsRepo).Task.Contains("Fix the problem diagnosed by the troubleshooting run"), "Hand off: a diagnosis is still handed over as a fix");
     }
 
     private static void SteerCases()

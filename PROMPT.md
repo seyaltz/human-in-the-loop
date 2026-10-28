@@ -1018,7 +1018,7 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
       (primary - `AcceptAsync` marks it accepted, records the rating good and learns from it) and **Request changes**
       (shows the kinds - Wrong behaviour / Missing / Change design / Bug - and the box; **Send to the next revision**
       sends the unticked decisions and the words, kind "change design" when only decisions were unticked); **Open PR**
-      / **Open report** (secondary next to Accept); **Fix it in Development** for a troubleshooting diagnosis.
+      / **Open report** (secondary next to Accept); **Fix it in Development** for a troubleshooting diagnosis; **Build it in Development** for research findings (`HandOffTask`: the change the research proved, made again properly on its own branch with tests and a draft PR - in the repo of the change it made outside its own (`OutsideRepo`: the nearest folder holding .git above the path the change names), on that repo's own branch; with no such change, the run's repo and base).
       There is no separate Good/Bad rating: Accept and Request changes are the verdict.
     - **Reading the result** (`FactoryDigest`, tested in `DigestCases`): the task's title and its list row show the
       answer's headline - its `TITLE:` line, else its opening bold sentence, else the words it was started with (those

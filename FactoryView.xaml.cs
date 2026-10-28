@@ -772,7 +772,13 @@ public partial class FactoryView : UserControl
         AcceptButton.Content = questions.Count > 0 ? $"Accept - {questions.Count} question{(questions.Count > 1 ? "s" : "")} unanswered" : "Accept";
         ChangesButton.Visibility = On(done && canTalk && !_changing);
         CancelChangeButton.Visibility = On(change);
-        FixItButton.Visibility = On(done && run.Department == FactoryDepartment.Troubleshooting && run.Result.Length > 0);
+        // a diagnosis goes to Development as its fix; research findings as the change they proved (a PR to approve)
+        bool research = run.Department == FactoryDepartment.Research;
+        FixItButton.Visibility = On(done && (research || run.Department == FactoryDepartment.Troubleshooting) && run.Result.Length > 0);
+        FixItButton.Content = research ? "Build it in Development" : "Fix it in Development";
+        FixItButton.ToolTip = research
+            ? "Start a Development task from these findings: it makes the change they proved on its own branch, in the repo the research changed, proves it and opens a draft PR"
+            : "Start a Development task from this diagnosis: the root cause and the fix it named";
         // the first action shown is the primary one; a PR or report next to Accept steps back to secondary
         OpenPrButton.Style = ReportButton.Style = (Style)FindResource(reviewable ? "SecondaryButton" : "PrimaryButton");
         NextButtons.Visibility = NextButtons.Children.OfType<Button>().Any(b => b.Visibility == Visibility.Visible) ? Visibility.Visible : Visibility.Collapsed;

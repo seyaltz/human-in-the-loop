@@ -417,18 +417,61 @@ public static class Factory
     /// </summary>
     public static FactoryRun HandOff(FactoryRun diagnosed)
     {
-        string task = $"""
-            Fix the problem diagnosed by the troubleshooting run "{diagnosed.Title}" ({diagnosed.Id}).
-            The case as reported: {diagnosed.Task}
+        (string task, string folder, string baseBranch) = HandOffTask(diagnosed, dir => Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git")));
+        return Create(FactorySource.Typed, task, folder, baseBranch, "", diagnosed.Autonomous, diagnosed.Report, FactoryDepartment.Development);
+    }
 
-            THE DIAGNOSIS (checked against the running system):
-            {diagnosed.Result}
+    /// <summary>
+    /// What Development is handed: a troubleshooting run's diagnosis, as the fix it names; a research run's findings, as
+    /// the change it proved - in the repo of the change it made outside its own (a research run edits no repo of its own,
+    /// so a change it tried lives elsewhere), on that repo's own branch; else in the run's repo and base.
+    /// </summary>
+    internal static (string Task, string Folder, string BaseBranch) HandOffTask(FactoryRun run, Func<string, bool> isRepoRoot)
+    {
+        string ownRepo = run.Repo.Length > 0 ? run.Repo : run.Folder;
+        if (run.Department != FactoryDepartment.Research)
+        {
+            string fix = $"""
+                Fix the problem diagnosed by the troubleshooting run "{run.Title}" ({run.Id}).
+                The case as reported: {run.Task}
 
-            Make the fix it names in this repo; prove it where the problem was reproduced - the problem is gone there,
-            and the control still works.
+                THE DIAGNOSIS (checked against the running system):
+                {run.Result}
+
+                Make the fix it names in this repo; prove it where the problem was reproduced - the problem is gone there,
+                and the control still works.
+                """;
+            return (fix, ownRepo, run.BaseBranch);
+        }
+        string? changedRepo = OutsideRepo(run.OutsideChanges, isRepoRoot);
+        string tried = run.OutsideChanges.Count > 0
+            ? "\n\nWHAT IT CHANGED TO PROVE IT (outside its repo, never committed - make it again here, properly):\n" + string.Join("\n", run.OutsideChanges.Select(c => "- " + c))
+            : "";
+        string build = $"""
+            Build the change found by the research run "{run.Title}" ({run.Id}).
+            The question it answered: {run.Task}
+
+            THE FINDINGS (checked against the running system):
+            {run.Result}{tried}
+
+            Make the change in this repo on its own branch, with tests; prove it the way the research measured it (the same
+            numbers, before and after); then open a draft PR.
             """;
-        return Create(FactorySource.Typed, task, diagnosed.Repo.Length > 0 ? diagnosed.Repo : diagnosed.Folder, diagnosed.BaseBranch, "",
-            diagnosed.Autonomous, diagnosed.Report, FactoryDepartment.Development);
+        return changedRepo != null ? (build, changedRepo, "") : (build, ownRepo, run.BaseBranch);
+    }
+
+    /// <summary>The repo of the first outside change that names a file path: the nearest folder above it that is a git repo.</summary>
+    internal static string? OutsideRepo(IEnumerable<string> outside, Func<string, bool> isRepoRoot)
+    {
+        foreach (string change in outside)
+        {
+            if (Regex.Match(change, @"^\s*([A-Za-z]:\\[^\s]+)") is not { Success: true } m) continue;
+            for (string? dir = Path.GetDirectoryName(m.Groups[1].Value); !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
+            {
+                if (isRepoRoot(dir)) return dir;
+            }
+        }
+        return null;
     }
 
     /// <summary>The branch a repo has checked out now: the default base for a run.</summary>
