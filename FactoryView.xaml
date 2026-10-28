@@ -343,10 +343,7 @@
                                     <Button x:Name="ReportButton" Content="Open report" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" Click="Report_Click"
                                             ToolTip="The designed report, in your browser" />
                                     <Button x:Name="FixItButton" Content="Fix it in Development" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="FixIt_Click"
-                                            ToolTip="Start a Development task from this diagnosis: the root cause and the fix it named" />
-                                    <Button x:Name="WorktreeButton" Content="Use a separate worktree" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
-                                            Click="Worktree_Click" ToolTip="Leave your checkout as it is: the task goes on in its own worktree beside the repo" />
-                                    <Button x:Name="AnywayButton" Content="Draft PR anyway" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
+                                            ToolTip="Start a Development task from this diagnosis: the root cause and the fix it named" />                                    <Button x:Name="AnywayButton" Content="Draft PR anyway" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
                                             Click="Anyway_Click" ToolTip="Open the draft PR even though a check failed - its description says what failed" />
                                 </WrapPanel>
                             </StackPanel>

@@ -603,29 +603,33 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      only `Read,Grep,Glob` (read-only, enforced); a Jira issue or a spec needs the machine's own tools to be read, so
      it gets the developer's setup with bypass minus `Edit`, `Write`, `NotebookEdit` and the publish denies (the
      shell can still change files - the same access the plan turn has). Then the base branch and the remembered verify command for it.
-  1. **Workspace - the developer's own checkout by default** (no copy: its dependencies and build output are already
-     there; a worktree is a second copy of the files - 603 MB with a fresh `npm ci` in a measured run - and a deep
-     repo can pass Windows' 260-character path limit under a longer folder). The run checks the checkout can be used
+  1. **Workspace - always the developer's own checkout, never a worktree** (no copy: its dependencies and build output
+     are already there, and what runs locally is served from it; a worktree is a second copy of the files - 603 MB with
+     a fresh `npm ci` in a measured run - whose work had to be merged back by hand). The run checks the checkout can be used
      and **asks when it cannot** (stops at Needs you with the question): another run working in it ("... Wait for it
-     and press Continue - or press Use a separate worktree ...") or git cannot read it. Then it notes the branch the checkout is on (or its commit when
+     and press Continue.") or git cannot read it. Then it notes the branch the checkout is on (or its commit when
      detached), `git switch -c devbreak/<slug>-<id> <base commit>` (or `git switch` to it when the branch exists) and
      works there. **The developer's own local changes do not block it** (temp files, local settings - modified,
-     staged or untracked): their paths are noted with a SHA-256 fingerprint of the content and logged ("Your N local
-     changes stay yours ..."); the switch carries them along untouched. They are never committed: "did the run change
+     staged or untracked): their paths are noted with a SHA-256 fingerprint of the content, a snapshot of them is taken
+     with `git stash create` (nothing in the checkout changes), and they are logged ("Your N local changes stay in place
+     ..."); the switch carries them along untouched. They are never committed: "did the run change
      anything" and "is its work committed" count only the run's own changes (a noted file counts only once its
      content differs); the review diff is `git diff <base> -- . :(exclude,literal)<each local file>` with the run's new
      files marked `--intent-to-add -- :(literal)<file>` (no `git add -A`, so the developer's index is untouched;
      literal, because a plain pathspec is a glob: excluding `f[1].txt` also hid `f1.txt` from the reviewer in a test); the PR step is told the files
-     and to stage only the change's files by name. Before verify and before the PR, a local change whose content
-     differs stops the run and asks ("The change touched files that hold your own local changes: ... undo the run's
-     edits there and press Continue - or commit or stash your own changes first, or run it in a separate worktree").
-     A switch git refuses (a local change in the way) stops it too. When a run (or its continue, feedback, PR anyway)
+     and to stage only the change's files by name. **On a conflict the developer's changes are stashed, not the run
+     stopped.** Before verify and before the PR, a local change whose content differs (the run edited that file): the
+     run's edits alone are worked out with `git merge-file --object-id <branch blob> <their blob from the snapshot>
+     <the file now>`, their version is put back (`git restore --source=<snapshot>`) and stashed by path (`git stash
+     push -m "devbreak <id>: your local changes in N files the run needed" -- <files>`), and the merged file is
+     written (`git cat-file --filters`, so line endings stay); the files leave the local list and are logged. Only an
+     overlapping edit (merge-file reports conflicts) or a file that was not in git stops the run and asks. A switch git
+     refuses ("would be overwritten by checkout") stashes all local changes (`git stash push --include-untracked -m
+     "devbreak <id>: your local changes, stashed to switch to <branch>"`), notes them again and switches. When a run (or its continue, feedback, PR anyway)
      is done, the checkout goes back to that branch - local changes carried along - if the run's own work is
      committed; otherwise it stays on the run's branch and the run says so. Continue, feedback and PR anyway first
      switch the checkout to the run's branch.
-     **Use a separate worktree** (when the run asked): `git -c core.longpaths=true worktree add <beside the repo:
-     <repo>-<4 of the id>> -b <branch> <base commit>` (or the existing branch), and the run goes on there, the
-     checkout untouched. A worktree shares its repo's Claude memory (verified: both report the same `memory_paths.auto`).
+     Old records with a separate worktree still show and clean up; no new run makes one.
   2. **Plan**: a new Claude Code session in the worktree (as in Sessions: full setup, bypass) reads the task - Jira
      and spec with the tools on the machine - first understands the mission with the machine's skills, MCP servers
      and tools (running the app or its services, reading logs or data, inspecting or debugging a running service),
@@ -670,7 +674,7 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   4b. **Prove**: the session proves the change - starts the app and the services it needs with the machine's skills,
      MCP servers and tools, from the worktree; exercises what the task changed; stops what it started - and produces
      **the proof the plan chose** for this feature. The plan ends with `EVIDENCE: <kinds>` from **screenshots** (the
-     running app at the sizes that matter, a "before" from the base commit in a separate worktree when it helps),
+     running app at the sizes that matter, a "before" taken before the change when it helps - never in a worktree),
      **video** (a short recording of the interaction), **red-green** (the new tests fail without the change and pass
      with it, both outputs), **coverage** (of the changed lines, with the uncovered ones), **mutation** (scoped to the
      changed files - the score and surviving mutants), **crap** (complexity and coverage of the changed methods),
@@ -739,7 +743,7 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
     service's config): each file copied to `<file>.bak-devbreak` first and reported as `OUTSIDE: <path> - <what> -
     <backup>`, logged and listed in the PR; never secrets, credentials or logins. `NEEDS_YOU:` is only for what no tool
     can do (a login in a browser, a credential, an access grant).
-  - Another run working in the checkout: this one goes on in a separate worktree.
+  - Another run working in the checkout: this one waits for it (Needs you, then Continue) - never a separate worktree.
   - Stuck on its checks (verify, prove or review still failing): one **fresh attempt** - a new session plans again with
     what went wrong (the note, the last verify, review findings and app check), builds, checks, PR. Stuck again, or
     NEEDS_YOU: it stops - the developer is told by a Windows notification - and Learn is asked what would have let it
@@ -818,7 +822,7 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
     its backend existed, and a run restarted a service another was proving against).
   - **One run per checkout across Dev breaks**: a lock file `.git\devbreak-run.lock` (pid, app folder, run, title),
     taken when a run works in the checkout and freed when its drive ends; a live lock of another run makes the
-    checkout busy (autonomous: a separate worktree); a dead holder is free. `Busy` is saved with the run while it is
+    checkout busy (autonomous too); a dead holder is free. `Busy` is saved with the run while it is
     driven (also during Learn and the manager), and a restart marks a busy run stopped.
   - **Proof scripts kept**: each repo has `factory-knowledge\<repo>\proof-scripts`; prove and answer checks are told
     to reuse and adapt those and save new ones there, and to keep evidence to the manifest and about 15 files.
@@ -1010,8 +1014,8 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
     - **Working** (violet): "Working · <station> · <time at it>", the step and its latest tool call; **Stop**.
     - **Needs you** (coral): "Needs you" (or "Stopped", or "Needs you - the department manager could not get it
       going" with the manager's case); the whole reason; a **reply** box ("Send reply" - answers its question or says
-      what to do, through `FeedbackAsync`) when the task has a session; **Continue**, and only when they apply **Use a
-      separate worktree** and **Draft PR anyway** (Development, with a plan, no PR).
+      what to do, through `FeedbackAsync`) when the task has a session; **Continue**, and only when it applies
+      **Draft PR anyway** (Development, with a plan, no PR).
     - **Done**: "Review revision N - the draft PR / report / answer is ready" (violet while it waits for the review),
       or "Accepted - revision N"; the note; the **Result** (see "Reading the result" below, **Copy** copies it whole); the decisions it took on
       its own as ticked boxes (unticking one opens "How should it be instead?" and the change box); **Accept**

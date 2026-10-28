@@ -417,10 +417,6 @@ public partial class FactoryView : UserControl
         if (_shown is { Result.Length: > 0 } run) Clipboard.SetText(run.Result);
     }
 
-    private async void Worktree_Click(object sender, RoutedEventArgs e)
-    {
-        if (_shown != null) await Factory.UseWorktreeAsync(_shown);
-    }
 
     // a clean up shows what it deletes - and any work that would be lost - before it does
     private async void Clean_Click(object sender, RoutedEventArgs e)
@@ -763,8 +759,6 @@ public partial class FactoryView : UserControl
         SteerPanel.Visibility = On(working);
         if (!working) SteerSent.Visibility = Visibility.Collapsed;
         ContinueButton.Visibility = On(waiting);
-        WorktreeButton.Visibility = On(waiting && !run.InCheckout && !run.UseWorktree && run.Stage == FactoryStage.NeedsYou
-            && run.Note.Contains("Use a separate worktree", StringComparison.Ordinal));
         AnywayButton.Visibility = On(waiting && run.Department == FactoryDepartment.Development && run.Plan.Length > 0 && run.PrUrl.Length == 0);
         OpenPrButton.Visibility = On(!working && run.PrUrl.Length > 0);
         ReportButton.Visibility = On(!working && run.ReportFile.Length > 0 && File.Exists(run.ReportFile));

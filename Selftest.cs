@@ -546,6 +546,12 @@ public static class Selftest
         Check(Factory.ResumesOnBranch(built), "Continue: a run that built a change goes on on its branch");
         string gone = Factory.SwitchFailed("devbreak/x-1", "fatal: invalid reference: devbreak/x-1");
         Check(gone.Contains("no longer exists") && !gone.Contains("fatal:"), "Continue: a deleted branch is said plainly - got: " + gone);
+        // git's own words (2.52) when local changes block a switch: then they are stashed and the switch tried again
+        Check(Factory.SwitchBlockedByLocalChanges("error: Your local changes to the following files would be overwritten by checkout:\n\tb.txt\nAborting"),
+            "Checkout: a switch blocked by local changes is seen");
+        Check(Factory.SwitchBlockedByLocalChanges("error: The following untracked working tree files would be overwritten by checkout:\n\tc.txt"),
+            "Checkout: a switch blocked by untracked files is seen");
+        Check(!Factory.SwitchBlockedByLocalChanges("fatal: invalid reference: devbreak/x-1"), "Checkout: a missing branch is not stashed for");
         Check(Factory.SwitchFailed("devbreak/x-1", "error: your local changes would be overwritten").Contains("would be overwritten"),
             "Continue: another switch failure keeps git's words");
 

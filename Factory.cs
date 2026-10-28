@@ -260,9 +260,11 @@ public sealed class FactoryRun
     public string ReturnTo { get; set; } = "";
     /// <summary>
     /// The developer's own uncommitted changes in their checkout when the run started (path → a fingerprint of its
-    /// content): never committed by the run; the run stops and asks when its change touches one of them.
+    /// content): never committed by the run; when its change touches one of them, the developer's version is stashed.
     /// </summary>
     public Dictionary<string, string> LocalChanges { get; set; } = [];
+    /// <summary>A commit of the developer's local changes when they were noted (git stash create), to stash their version from.</summary>
+    public string LocalSnapshot { get; set; } = "";
 
     [System.Text.Json.Serialization.JsonIgnore] public CancellationTokenSource? Running { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public bool Working => Running != null;
@@ -275,7 +277,7 @@ public sealed class FactoryRun
 /// The software factory: a task enters at the gate, which picks its department; Development goes plan → build →
 /// verify → review → prove → draft PR, the other departments investigate and hand over a checked answer and a
 /// report; then what the run learned goes into the repo's Claude harness. A run works in the developer's checkout on
-/// a new branch (or a separate worktree beside it), and the developer's own uncommitted files never ship. Claude works
+/// a new branch (never a worktree), and the developer's own uncommitted files never ship. Claude works
 /// with the developer's full setup there (as in Sessions), but may not push or open a PR until the checks passed -
 /// that is the last step, done on purpose. The verify command
 /// is run by Dev break itself, and the reviewer is a fresh Claude that can only read.
@@ -288,7 +290,7 @@ public static class Factory
     private static readonly string[] EvidenceKinds = ["screenshots", "video", "red-green", "coverage", "mutation", "crap", "api", "logs", "trace", "perf", "other"];
     private const string EvidenceGuide = """
         - screenshots: the changed UI in the running app, at the sizes that matter (desktop and phone for a web page);
-          a "before" too when it helps, from the base commit in a separate worktree - never the developer's checkout.
+          a "before" too when it helps, taken before you change the code - never in a git worktree (do not create one).
         - video: a short recording (webm/mp4/gif) of the interaction the task changed, e.g. a browser tool's video recording.
         - red-green: the new or changed tests fail without the change (on the base commit, or with the change stashed
           and restored) and pass with it - save both outputs.
@@ -1298,9 +1300,9 @@ public static class Factory
         return null;
     }
 
-    // where the run works: the developer's own checkout (the default) on the run's new branch - no copy, its
-    // dependencies already there - and when the checkout cannot be used, the run asks; or, when the developer chose
-    // it, a separate worktree beside the repo
+    // where the run works: always the developer's own checkout, on the run's new branch - never a worktree (what runs
+    // locally is served from the checkout; a worktree's work had to be merged back by hand). A dirty checkout is
+    // worked in as it is; only a conflict with the developer's changes stashes them.
     private static async Task<bool> WorktreeAsync(FactoryRun run, CancellationToken cancel)
     {
         (int exit, string output) = await GitSpanAsync(run, run.Repo, "rev-parse", run.BaseBranch);
@@ -1308,42 +1310,17 @@ public static class Factory
         run.BaseCommit = output.Trim();
         cancel.ThrowIfCancellationRequested();
         bool branchExists = (await GitAsync(run.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/" + run.Branch)).Exit == 0;
-        if (run.UseWorktree)
-        {
-            // beside the repo, so paths are hardly longer than in the checkout (a deep repo passes Windows' 260
-            // characters under a long folder), and long paths on for the checkout of its files
-            run.Worktree = Path.Combine(Path.GetDirectoryName(run.Repo)!, $"{Path.GetFileName(run.Repo)}-{run.Id[..4]}");
-            Enter(run, FactoryStage.Worktree, $"New worktree {run.Worktree} on branch {run.Branch}, from {run.BaseBranch}.");
-            string[] add = branchExists
-                ? ["-c", "core.longpaths=true", "worktree", "add", run.Worktree, run.Branch]
-                : ["-c", "core.longpaths=true", "worktree", "add", run.Worktree, "-b", run.Branch, run.BaseCommit];
-            (exit, output) = await GitSpanAsync(run, run.Repo, add);
-            if (exit != 0) return Wait(run, "Could not create the worktree: " + Tail(output.Trim(), 1500));
-            await RememberRemoteAsync(run);
-            return true;
-        }
         Enter(run, FactoryStage.Worktree, $"Working in your checkout {run.Repo}, on a new branch {run.Branch} from {run.BaseBranch}.");
-        if (await CheckoutProblemAsync(run, "start") is { } problem)
-        {
-            // autonomous: another run in the checkout is no reason to wait - this one goes beside it
-            if (!run.Autonomous || !problem.StartsWith("Another run", StringComparison.Ordinal)) return Wait(run, problem);
-            Log(run, problem.Split(" Wait for it")[0] + " This run goes on in a separate worktree.");
-            run.UseWorktree = true;
-            return await WorktreeAsync(run, cancel);
-        }
-        // the developer's own local changes (temp files, local settings) stay theirs: noted with a fingerprint each
-        run.LocalChanges = [];
-        foreach (string path in await ChangedPathsAsync(run.Repo)) run.LocalChanges[path] = Fingerprint(run.Repo, path);
+        if (await CheckoutProblemAsync(run, "start") is { } problem) return Wait(run, problem);
+        await RememberLocalChangesAsync(run);
         if (run.LocalChanges.Count > 0)
         {
-            Log(run, $"Your {run.LocalChanges.Count} local change{(run.LocalChanges.Count == 1 ? "" : "s")} stay yours - not committed, and the run " +
-                "stops and asks if the change needs to touch them: " + string.Join(", ", run.LocalChanges.Keys.Take(20)) +
+            Log(run, $"Your {run.LocalChanges.Count} local change{(run.LocalChanges.Count == 1 ? "" : "s")} stay in place and are never committed; " +
+                "if the change needs one of these files, your changes there are stashed: " + string.Join(", ", run.LocalChanges.Keys.Take(20)) +
                 (run.LocalChanges.Count > 20 ? ", ..." : ""));
         }
         run.ReturnTo = await HeadAsync(run.Repo);
-        (exit, output) = branchExists
-            ? await GitSpanAsync(run, run.Repo, "switch", run.Branch)
-            : await GitSpanAsync(run, run.Repo, "switch", "-c", run.Branch, run.BaseCommit);
+        (exit, output) = await SwitchStashingAsync(run, branchExists ? ["switch", run.Branch] : ["switch", "-c", run.Branch, run.BaseCommit]);
         if (exit != 0) return Wait(run, $"Could not switch your checkout to {run.Branch}: {Tail(output.Trim(), 800)}");
         run.InCheckout = true;
         run.Worktree = run.Repo;
@@ -1389,13 +1366,13 @@ public static class Factory
         if (Runs.FirstOrDefault(r => r != run && r.Working && r.InCheckout && r.Repo.Equals(run.Repo, StringComparison.OrdinalIgnoreCase)) is { } other)
         {
             return $"Another run (\"{other.Title}\") is working in your checkout {run.Repo}, so this one cannot {what} there. " +
-                "Wait for it and press Continue - or press Use a separate worktree to run this one beside it.";
+                "Wait for it and press Continue.";
         }
         // a run of another Dev break on this machine (each keeps its own list): its lock file in the repo's .git
         if (LockHolder(run.Repo) is { } held && held.RunId != run.Id)
         {
             return $"Another run (\"{held.Title}\", in the Dev break at {held.App}) is working in your checkout {run.Repo}, so this one cannot {what} there. " +
-                "Wait for it and press Continue - or press Use a separate worktree to run this one beside it.";
+                "Wait for it and press Continue.";
         }
         (int code, string status) = await GitAsync(run.Repo, "status", "--porcelain");
         return code == 0 ? null : $"git cannot read your checkout {run.Repo}: {status.Trim()}";
@@ -1496,19 +1473,111 @@ public static class Factory
     private static List<string> TouchedLocalChanges(FactoryRun run) =>
         run.InCheckout ? run.LocalChanges.Where(kv => Fingerprint(run.Repo, kv.Key) != kv.Value).Select(kv => kv.Key).ToList() : [];
 
-    // stops the run when its change touched the developer's own local changes - they decide what happens to them
-    private static bool LocalChangesTouched(FactoryRun run)
+    // the developer's local changes now: each path with a fingerprint, and a snapshot commit of them (git stash create:
+    // nothing in the checkout changes) - so their own version of a file can be stashed later, when the run needs it
+    private static async Task RememberLocalChangesAsync(FactoryRun run)
+    {
+        run.LocalChanges = [];
+        foreach (string path in await ChangedPathsAsync(run.Repo)) run.LocalChanges[path] = Fingerprint(run.Repo, path);
+        (int code, string sha) = await GitAsync(run.Repo, "stash", "create");
+        run.LocalSnapshot = code == 0 ? sha.Trim() : "";
+    }
+
+    internal static bool SwitchBlockedByLocalChanges(string gitOutput) =>
+        gitOutput.Contains("would be overwritten by checkout", StringComparison.Ordinal);
+
+    // git switch; when git refuses because the developer's local changes are in the way, those changes are stashed
+    // (untracked ones too) and the switch is tried again - their changes wait in git stash list
+    private static async Task<(int Exit, string Output)> SwitchStashingAsync(FactoryRun run, string[] switchArgs)
+    {
+        (int exit, string output) = await GitSpanAsync(run, run.Repo, switchArgs);
+        if (exit == 0 || !SwitchBlockedByLocalChanges(output)) return (exit, output);
+        string message = $"devbreak {run.Id}: your local changes, stashed to switch to {run.Branch}";
+        (int stashed, string stashOut) = await GitSpanAsync(run, run.Repo, "stash", "push", "--include-untracked", "-m", message);
+        if (stashed != 0) return (exit, output + "\nThe stash of your local changes failed too: " + stashOut.Trim());
+        Log(run, $"Your local changes were in the way of {run.Branch}, so they were stashed (\"{message}\" in git stash list; " +
+            "git stash apply brings them back).", ok: false);
+        await RememberLocalChangesAsync(run);
+        return await GitSpanAsync(run, run.Repo, switchArgs);
+    }
+
+    // when the run's change touched files holding the developer's own local changes: their version of those files is
+    // stashed and the file keeps only the run's edits (a three-way merge of the run's file onto the branch's version,
+    // with theirs as the base). A file whose edits overlap theirs - a real conflict - or that was not in git (no
+    // version of theirs to stash) stops the run and asks. Returns false when the run must stop.
+    private static async Task<bool> StashTouchedLocalChangesAsync(FactoryRun run)
     {
         // files under .claude/ are Claude's own tooling state - a hook's log grows with every edit any session makes
         // (seen: .claude/session-changes.log stopped a run that never touched it). They still never get committed
-        // (they stay in LocalChanges for the commit check); they just do not stop the run.
+        // (they stay in LocalChanges for the commit check); they are not stashed either.
         List<string> touched = TouchedLocalChanges(run)
             .Where(p => !p.Replace('\\', '/').StartsWith(".claude/", StringComparison.OrdinalIgnoreCase)).ToList();
-        if (touched.Count == 0) return false;
-        Wait(run, $"The change touched {(touched.Count == 1 ? "a file that holds" : "files that hold")} your own local changes: {string.Join(", ", touched)}. " +
-            "The run does not commit your changes, so decide: undo the run's edits there and press Continue - or commit or " +
-            "stash your own changes first, or run it in a separate worktree.");
+        if (touched.Count == 0) return true;
+        var merged = new Dictionary<string, string>();
+        var cannot = new List<string>();
+        foreach (string path in touched)
+        {
+            string theirs = $"{run.LocalSnapshot}:{path}", branch = $"HEAD:{path}";
+            if (run.LocalSnapshot.Length == 0 || (await GitAsync(run.Repo, "cat-file", "-e", theirs)).Exit != 0
+                || (await GitAsync(run.Repo, "cat-file", "-e", branch)).Exit != 0 || !File.Exists(Path.Combine(run.Repo, path)))
+            {
+                cannot.Add(path + " (not in git)");
+                continue;
+            }
+            (int hashed, string now) = await GitAsync(run.Repo, "hash-object", "-w", "--", path);
+            (int merge, string result) = await GitAsync(run.Repo, "merge-file", "--object-id", "-L", "branch", "-L", "yours", "-L", "run",
+                (await GitAsync(run.Repo, "rev-parse", branch)).Output.Trim(), (await GitAsync(run.Repo, "rev-parse", theirs)).Output.Trim(), now.Trim());
+            if (hashed != 0 || merge != 0) cannot.Add(path + (merge > 0 ? " (the run's edits overlap yours)" : ""));
+            else merged[path] = result.Trim();
+        }
+        if (cannot.Count > 0)
+        {
+            return Wait(run, $"The change touched {(cannot.Count == 1 ? "a file that holds" : "files that hold")} your own local changes and they could not be " +
+                $"stashed apart from it: {string.Join(", ", cannot)}. The run does not commit your changes, so decide: undo the run's edits " +
+                "there and press Continue - or commit or stash your own changes first.");
+        }
+        // theirs back into the files, stashed by path (only these files), then the run's edits alone written in
+        string[] paths = [.. touched.Select(p => ":(literal)" + p)];
+        Dictionary<string, byte[]> runVersion = touched.ToDictionary(p => p, p => File.ReadAllBytes(Path.Combine(run.Repo, p)));
+        string message = $"devbreak {run.Id}: your local changes in {touched.Count} file{(touched.Count == 1 ? "" : "s")} the run needed";
+        (int restored, string restoreOut) = await GitSpanAsync(run, run.Repo, ["restore", "--source=" + run.LocalSnapshot, "--worktree", "--", .. paths]);
+        (int stashed, string stashOut) = restored == 0 ? await GitSpanAsync(run, run.Repo, ["stash", "push", "-m", message, "--", .. paths]) : (1, restoreOut);
+        if (stashed != 0)
+        {
+            foreach ((string p, byte[] bytes) in runVersion) File.WriteAllBytes(Path.Combine(run.Repo, p), bytes);
+            return Wait(run, $"Could not stash your local changes in {string.Join(", ", touched)}: {Tail(stashOut.Trim(), 600)} - the files are as the run left them.");
+        }
+        foreach ((string p, string blob) in merged)
+        {
+            try
+            {
+                File.WriteAllBytes(Path.Combine(run.Repo, p), await BlobAsync(run.Repo, blob, p));
+            }
+            catch (Exception e)
+            {
+                // yours are safe in the stash; the file goes back to what the run left (yours and the run's edits)
+                File.WriteAllBytes(Path.Combine(run.Repo, p), runVersion[p]);
+                return Wait(run, $"Your local changes in {string.Join(", ", touched)} are stashed (\"{message}\"), but {p} could not be " +
+                    $"written with the run's edits alone ({e.Message}): it holds yours and the run's now. Undo yours there and press Continue.");
+            }
+            run.LocalChanges.Remove(p);
+        }
+        Log(run, $"The change needed {string.Join(", ", touched)}, which held your own local changes: yours were stashed (\"{message}\" " +
+            "in git stash list; git stash apply brings them back) and the files keep only the run's edits.", ok: false);
         return true;
+    }
+
+    // a blob's content as it is checked out at a path (line endings and other filters applied)
+    private static async Task<byte[]> BlobAsync(string repo, string blob, string path)
+    {
+        var start = new ProcessStartInfo("git") { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+        foreach (string arg in new[] { "-C", repo, "cat-file", "--filters", "--path=" + path, blob }) start.ArgumentList.Add(arg);
+        using Process process = Process.Start(start) ?? throw new InvalidOperationException("could not start git");
+        using var bytes = new MemoryStream();
+        await process.StandardOutput.BaseStream.CopyToAsync(bytes);
+        await process.WaitForExitAsync();
+        if (process.ExitCode != 0) throw new InvalidOperationException($"git cat-file {blob} failed");
+        return bytes.ToArray();
     }
 
     // the branch the checkout is on, or its commit when it is detached
@@ -1531,7 +1600,7 @@ public static class Factory
         }
         if (await CheckoutProblemAsync(run, "switch to its branch " + run.Branch) is { } problem) return Wait(run, problem);
         run.ReturnTo = await HeadAsync(run.Repo);
-        (int exit, string output) = await GitSpanAsync(run, run.Repo, "switch", run.Branch);
+        (int exit, string output) = await SwitchStashingAsync(run, ["switch", run.Branch]);
         if (exit != 0) return Wait(run, SwitchFailed(run.Branch, output));
         TakeLock(run);
         Log(run, $"Your checkout is on {run.Branch} again; it goes back to {run.ReturnTo} when this is done.");
@@ -1558,15 +1627,6 @@ public static class Factory
         {
             await GitAsync(run.Repo, "branch", "-D", run.Branch);
         }
-    }
-
-    /// <summary>The developer's checkout could not be used: this run goes on in a separate worktree beside the repo.</summary>
-    public static Task UseWorktreeAsync(FactoryRun run)
-    {
-        if (run.Working || run.InCheckout) return Task.CompletedTask;
-        run.UseWorktree = true;
-        Save();
-        return ContinueAsync(run);
     }
 
     private static async Task<bool> PlanAsync(FactoryRun run, CancellationToken cancel)
@@ -1970,7 +2030,7 @@ public static class Factory
     {
         for (int attempt = 1; ; attempt++)
         {
-            if (LocalChangesTouched(run)) return false;
+            if (!await StashTouchedLocalChangesAsync(run)) return false;
             if ((await RunChangesAsync(run, run.Worktree)).Count == 0) return Wait(run, "Claude changed no files.");
             Enter(run, FactoryStage.Verify, $"Dev break runs the verify command: {run.Verify}");
             FactorySpan span = Begin(run, "verify", $"Verify (attempt {attempt})", run.Verify);
@@ -2244,7 +2304,7 @@ public static class Factory
               reviewer passed the change. Review notes:
               {run.Review}
               """;
-        if (LocalChangesTouched(run)) return false;
+        if (!await StashTouchedLocalChangesAsync(run)) return false;
         if (run.LocalChanges.Count > 0)
         {
             checks += "\nThese files hold the developer's own local changes - never stage or commit them, and leave them exactly " +
