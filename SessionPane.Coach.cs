@@ -73,14 +73,20 @@ public partial class SessionPane
         if (!state.Working || state.Log is not { } log || DateTime.Now - _lastWatch < TimeSpan.FromSeconds(2)) return;
         _lastWatch = DateTime.Now;
         bool busy = log.Running != null || state.Tasks.Count > 0;
-        if (state.Coach == null && Watch.FlagRule(log, DateTime.Now, busy) is { } flag && !state.CoachDismissed.Contains(flag.Rule))
+        TimeSpan? usual = log.Running is { IsShell: true } shell ? SessionStats.Usual(shell.Key) : null;
+        if (state.Coach == null && Watch.FlagRule(log, DateTime.Now, busy, usual) is { } flag && !state.CoachDismissed.Contains(flag.Rule))
         {
-            Raise(state, new CoachFlag(flag.Reason, Evidence(log), DefaultNudge(flag.Reason), flag.Rule));
+            bool slow = flag.Rule == "slow-step";
+            Raise(state, new CoachFlag(flag.Reason, Evidence(log), slow ? SlowNudge : DefaultNudge(flag.Reason), flag.Rule));
+            // it may be fine (a slow page, a long build), so it is yours to judge: told even when no wait was announced
+            if (slow && !WindowInFront()) App.Alert("Dev break", "Claude has been on one step a long time: " + Shorten(flag.Reason, 90));
         }
         SessionSetting setting = SessionSettings.Of(state.Info.Id);
         int steps = log.Steps.Count(s => !s.Sub);
+        // a new step since the last check - or one step running long, which the steps alone never show
+        bool moved = steps > state.AiCheckSteps || log.Running is { } long_ && DateTime.Now - long_.Start >= LongWait;
         if (setting.AiCheck && !state.AiChecking && state.Coach == null && state.AiChecks < AiChecksPerTurn
-            && DateTime.Now - log.Start >= AiCheckAfter && DateTime.Now - state.AiCheckAt >= AiCheckEvery && steps > state.AiCheckSteps)
+            && DateTime.Now - log.Start >= AiCheckAfter && DateTime.Now - state.AiCheckAt >= AiCheckEvery && moved)
         {
             Logged(AiCheck(state, log, steps), "ai check");
         }
@@ -88,6 +94,10 @@ public partial class SessionPane
 
     private static List<string> Evidence(TurnLog log) =>
         [.. log.Steps.Where(s => !s.Sub).TakeLast(5).Select(s => $"{s.Tool}: {Shorten(s.Summary, 90)}{(s.End == null ? "  (running)" : s.Error ? "  ✗ " + Shorten(s.Result, 80) : "  ✓")}")];
+
+    private const string SlowNudge =
+        "This step has run minutes with nothing back. If you are waiting on a page or a service that is not changing, stop " +
+        "waiting: find out why it does not load (the request still pending, the server's log, the error) and say so in two lines.";
 
     private static string DefaultNudge(string reason) =>
         $"You seem stuck ({reason}). Stop, say in two lines what you have tried and why it failed, then try a different approach.";
@@ -100,7 +110,7 @@ public partial class SessionPane
         state.AiCheckSteps = steps;
         state.AiCheckAt = DateTime.Now;
         string record = string.Join("\n", log.Steps.Where(s => !s.Sub).TakeLast(15)
-            .Select(s => $"- {s.Tool}: {Shorten(s.Summary, 120)} [{(s.End == null ? "running" : s.Error ? "error: " + Shorten(s.Result, 100) : "ok")}]"));
+            .Select(s => $"- {s.Tool}: {Shorten(s.Summary.Length > 0 ? s.Summary : s.Input, 120)} [{(s.End == null ? $"running for {(int)(DateTime.Now - s.Start).TotalSeconds} s" : s.Error ? "error: " + Shorten(s.Result, 100) : "ok")}]"));
         string prompt = $"""
             You watch a coding agent's turn for its user. The user asked:
             {Shorten(SessionAnswers.WithoutShape(log.Message), 1500)}
@@ -110,7 +120,7 @@ public partial class SessionPane
 
             Is it on track to do what the user asked? Answer with exactly one line: "on track", or
             "drifting: <why, one sentence>" followed by a second line "nudge: <one short message to the agent that would get it back on track>".
-            Say drifting only when the steps show it (repeating, wandering off the ask, fighting the same error); slow but sensible work is on track.
+            Say drifting only when the steps show it (repeating, wandering off the ask, fighting the same error, or one step running for minutes on something that is not changing, like a page that does not load); slow but sensible work is on track.
             """;
         string answer;
         var took = System.Diagnostics.Stopwatch.StartNew();

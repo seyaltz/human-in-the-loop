@@ -184,9 +184,31 @@ public static class Selftest
         Check(Watch.FlagRule(same, DateTime.Now, false)?.Rule == "same-4", "Flag: 4 identical scripts are the same call");
     }
 
+    // one step polling a page that never loads: 3 minutes in one browser call, which the step rules (they read finished
+    // steps) and "silent" (a running step is waiting) both let through
+    private static void SlowStepCases()
+    {
+        DateTime now = DateTime.Now;
+        TurnLog Running(string tool, string command, double minutes)
+        {
+            TurnLog log = LogOf(("Read", "a.cs", false, "x"));
+            log.Steps.Add(new TurnStep("r", tool, "", tool, now.AddMinutes(-minutes), false) { Command = command, Input = "{\"code\":\"poll the deal page\"}" });
+            return log;
+        }
+        (string Rule, string Reason)? polling = Watch.FlagRule(Running("mcp__playwright__browser_run_code_unsafe", "", 3), now, true);
+        Check(polling?.Rule == "slow-step" && polling.Value.Reason.Contains("3 min") && polling.Value.Reason.Contains("poll the deal page"),
+            "Slow step: one browser call 3 min with nothing back is flagged, with what it runs - got: " + polling?.Reason);
+        Check(Watch.FlagRule(Running("mcp__playwright__browser_run_code_unsafe", "", 1.5), now, true) == null, "Slow step: 1.5 min is not yet");
+        Check(Watch.FlagRule(Running("Bash", "npm run build", 4), now, true, TimeSpan.FromMinutes(6)) == null,
+            "Slow step: a build that usually takes 6 min is not slow at 4");
+        Check(Watch.FlagRule(Running("Bash", "npm run build", 10), now, true, TimeSpan.FromMinutes(6))?.Rule == "slow-step",
+            "Slow step: the same build at 10 min is");
+    }
+
     private static void FlagCases()
     {
         SameInputCases();
+        SlowStepCases();
         DateTime now = DateTime.Now;
         var failing = ("Bash", "npm run build", true, "error TS2304");
         Check(Watch.Flag(LogOf(failing, failing, failing), now.AddMinutes(-9.9), false)?.StartsWith("the same Bash call failed 3 times in a row") == true,

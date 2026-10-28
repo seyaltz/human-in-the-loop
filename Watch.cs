@@ -17,6 +17,7 @@ public static class Watch
         @"is not recognized as|unexpected EOF|ParserError|Unexpected token|command not found", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly TimeSpan Silent = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan SlowStep = TimeSpan.FromMinutes(2);
     private const int NoProgress = 12;
 
     /// <summary>
@@ -30,7 +31,7 @@ public static class Watch
     public static string? Flag(TurnLog log, DateTime now, bool busy) => FlagRule(log, now, busy)?.Reason;
 
     /// <summary>The flag with a fixed id for its rule (a reason can carry a live count; Dismiss keys on the id).</summary>
-    public static (string Rule, string Reason)? FlagRule(TurnLog log, DateTime now, bool busy)
+    public static (string Rule, string Reason)? FlagRule(TurnLog log, DateTime now, bool busy, TimeSpan? usual = null)
     {
         List<TurnStep> done = [.. log.Steps.Where(s => !s.Sub && s.End != null)];
         if (done.Count > 0)
@@ -42,6 +43,14 @@ public static class Watch
             if (Same(4, _ => true)) return ("same-4", $"it ran the same {last.Tool} call 4 times in a row: {last.Summary}");
             if (done.TakeLast(10).Count(s => s.Error) >= 5) return ("errors", "5 of its last 10 tool calls failed");
             if (last.Error && Dialect.IsMatch(last.Result)) return ("dialect", "a command written for another shell: " + Short(last.Result, 90));
+        }
+        // one step running long with nothing back - a page polled while it never loads ran 3 min in one browser call
+        // unflagged; a command is slow only past 1.5x its usual time
+        if (log.Running is { Sub: false } running && now - running.Start is var ran
+            && ran >= (usual is { } u && u * 1.5 > SlowStep ? u * 1.5 : SlowStep))
+        {
+            string what = LeadingCd.Replace(running.Command.Length > 0 ? running.Command : running.Summary.Length > 0 ? running.Summary : running.Input, "");
+            return ("slow-step", $"one {running.Tool} step has run {(int)ran.TotalMinutes} min with nothing back: {Short(what, 70)} - is it waiting on something stuck?");
         }
         DateTime lastMove = log.Steps.Where(s => !s.Sub).Select(s => s.End ?? s.Start).DefaultIfEmpty(log.Start).Max();
         if (!busy && now - lastMove >= Silent) return ("silent", "no new step for 5 minutes, and nothing is running");
