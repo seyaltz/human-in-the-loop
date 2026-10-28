@@ -94,8 +94,11 @@ public sealed class SessionState
     /// <summary>The pane showing this session, if any.</summary>
     internal SessionPane? ShownIn { get; set; }
 
-    /// <summary>A turn or a "!" shell command runs.</summary>
-    public bool Working => Running != null || Shell != null;
+    /// <summary>A turn, a turn the CLI started itself after a background task, or a "!" shell command runs.</summary>
+    public bool Working => Running != null || Shell != null || FollowUp;
+
+    /// <summary>The CLI carries on by itself after a background task ended: a message now joins that turn.</summary>
+    internal bool FollowUp { get; set; }
 
     /// <summary>The "!" shell command running, if one does.</summary>
     internal CancellationTokenSource? Shell { get; set; }
