@@ -460,6 +460,9 @@ public static class Selftest
 
         Check(FactoryDigest.Clean("Add them to `CacheConfig.java:100-102`, **then** check") == "Add them to CacheConfig.java:100-102, then check",
             "Digest: plain text for a label has no markdown marks - got: " + FactoryDigest.Clean("Add them to `CacheConfig.java:100-102`, **then** check"));
+        // 1920x1080, 2026-10-28: the card took ~650 of the ~760 px under the line and left Activity ~100 px
+        Check(FactoryView.CardMaxHeight(760) == 380, "Card: half the room under the line, the activity gets the other half - got " + FactoryView.CardMaxHeight(760));
+        Check(FactoryView.CardMaxHeight(300) == 180, "Card: never under 180 px on a small window");
         DateTime now = new(2026, 10, 28, 14, 0, 0);
         Check(FactoryDigest.Ago(new DateTime(2026, 10, 28, 11, 58, 0), now) == "11:58 · 2 h ago", "Digest: when it stopped - got: " + FactoryDigest.Ago(new DateTime(2026, 10, 28, 11, 58, 0), now));
         Check(FactoryDigest.Ago(new DateTime(2026, 10, 28, 13, 55, 0), now) == "13:55 · 5 min ago", "Digest: minutes ago");

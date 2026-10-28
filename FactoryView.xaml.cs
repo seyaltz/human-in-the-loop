@@ -1014,8 +1014,9 @@ public partial class FactoryView : UserControl
         await Factory.FeedbackAsync(_shown, text, kind);
     }
 
-    // the card takes the room under the header and the line, less what the activity tabs need, and scrolls
-    private const double ActivityRoom = 190;
+    // the room under the header and the line is shared: the card takes at most half and scrolls, the activity the rest
+    // (a fixed 190 px for the activity left it ~100 px of a 1080p screen once the tabs took theirs)
+    internal static double CardMaxHeight(double room) => Math.Max(180, Math.Round(room / 2));
 
     private void RunArea_SizeChanged(object sender, SizeChangedEventArgs e) => FitCard();
 
@@ -1023,7 +1024,7 @@ public partial class FactoryView : UserControl
     {
         if (!NextCard.IsVisible) return;
         double top = NextCard.TranslatePoint(new Point(0, 0), RunArea).Y;
-        NextScroll.MaxHeight = Math.Max(200, RunArea.ActualHeight - top - ActivityRoom);
+        NextScroll.MaxHeight = CardMaxHeight(RunArea.ActualHeight - top);
     }
 
     // the result's text boxes sit inside the card's scroll: the wheel scrolls the card, not a box that has nothing to scroll

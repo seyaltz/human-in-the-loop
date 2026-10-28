@@ -1030,8 +1030,9 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
       ones as one message through `FeedbackAsync` (the next revision). **Accept** reads "Accept - N questions
       unanswered" while there are some. The **Result** box: RESULT, the headline in bold, the findings rendered like
       the chats (tables, lists, code - `CodeRenderer`) without the title, the questions and the EVIDENCE line, and its
-      "Not verified" bullets folded into **⚠ Not verified (N)**. The card scrolls inside the room the header, the line
-      and the tabs leave (`FitCard`), and the wheel over its text scrolls the card.
+      "Not verified" bullets folded into **⚠ Not verified (N)**. The room under the header and the line is shared: the
+      card takes at most half and scrolls (`FitCard`, `CardMaxHeight`, at least 180 px), the activity the rest; the
+      wheel over its text scrolls the card.
     - **Tell it now** (while a task works): a box under the card's line with **Tell it now** (Ctrl+Enter). `Factory.Steer`
       writes the words into the Claude turn that runs now (`LiveSession.Steer`, as "The developer adds this while you
       work - take it into account from your next step on: ..."); measured with `claude -p` stream-json: the message is
