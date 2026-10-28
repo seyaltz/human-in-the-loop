@@ -475,9 +475,14 @@ public static class Selftest
         // a research run that proved a change by editing another repo (2026-10-28): Development takes it in that repo
         static bool IsRepo(string dir) => dir == @"C:\r\core";
         const string outside = @"C:\r\core\ext\src\Cache.java - added ""Places"" to the Redis list, plus its registration - C:\r\core\ext\src\Cache.java.bak";
-        Check(Factory.OutsideRepo([outside], IsRepo) == @"C:\r\core", "Hand off: the repo of the change it made outside its own - got " + Factory.OutsideRepo([outside], IsRepo));
-        Check(Factory.OutsideRepo(["changed the proxy settings"], IsRepo) == null, "Hand off: an outside change with no path names no repo");
-        Check(Factory.OutsideRepo([@"D:\elsewhere\x.txt - y"], IsRepo) == null, "Hand off: a path in no repo names none");
+        Check(Factory.OutsideRepo([outside], @"C:\r", IsRepo) == @"C:\r\core", "Hand off: the repo of the change it made outside its own - got " + Factory.OutsideRepo([outside], @"C:\r", IsRepo));
+        Check(Factory.OutsideRepo(["changed the proxy settings"], @"C:\r", IsRepo) == null, "Hand off: an outside change with no path names no repo");
+        Check(Factory.OutsideRepo([@"D:\elsewhere\x.txt - y"], @"C:\r", IsRepo) == null, "Hand off: a path in no repo names none");
+        // the path is the model's text: it may only pick a repo inside the folder the research ran in
+        static bool AnyRepo(string dir) => dir is @"C:\other\repo" or @"C:\r\core";
+        Check(Factory.OutsideRepo([@"C:\other\repo\a.cs - x"], @"C:\r", AnyRepo) == null, "Hand off: a repo outside the run's folder is never the target");
+        Check(Factory.OutsideRepo([@"C:\r\..\other\repo\a.cs - x"], @"C:\r", AnyRepo) == null, "Hand off: '..' cannot climb out of the run's folder");
+        Check(Factory.OutsideRepo([@"C:\rx\core\a.cs - x"], @"C:\r", d => d == @"C:\rx\core") == null, "Hand off: a sibling folder sharing the name's start is outside");
 
         var research = new FactoryRun
         {

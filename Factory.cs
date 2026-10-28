@@ -443,7 +443,7 @@ public static class Factory
                 """;
             return (fix, ownRepo, run.BaseBranch);
         }
-        string? changedRepo = OutsideRepo(run.OutsideChanges, isRepoRoot);
+        string? changedRepo = OutsideRepo(run.OutsideChanges, run.Folder, isRepoRoot);
         string tried = run.OutsideChanges.Count > 0
             ? "\n\nWHAT IT CHANGED TO PROVE IT (outside its repo, never committed - make it again here, properly):\n" + string.Join("\n", run.OutsideChanges.Select(c => "- " + c))
             : "";
@@ -460,13 +460,21 @@ public static class Factory
         return changedRepo != null ? (build, changedRepo, "") : (build, ownRepo, run.BaseBranch);
     }
 
-    /// <summary>The repo of the first outside change that names a file path: the nearest folder above it that is a git repo.</summary>
-    internal static string? OutsideRepo(IEnumerable<string> outside, Func<string, bool> isRepoRoot)
+    /// <summary>
+    /// The repo of the first outside change that names a file path: the nearest folder above it that is a git repo. The
+    /// path is the model's own report, so it only counts inside the folder the run worked in (normalized - ".." cannot
+    /// climb out): a misled run cannot send a Development task into some other repo on the machine.
+    /// </summary>
+    internal static string? OutsideRepo(IEnumerable<string> outside, string runFolder, Func<string, bool> isRepoRoot)
     {
+        string root = Path.GetFullPath(runFolder).TrimEnd('\\') + "\\";
         foreach (string change in outside)
         {
             if (Regex.Match(change, @"^\s*([A-Za-z]:\\[^\s]+)") is not { Success: true } m) continue;
-            for (string? dir = Path.GetDirectoryName(m.Groups[1].Value); !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
+            string path = Path.GetFullPath(m.Groups[1].Value);
+            if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+            for (string? dir = Path.GetDirectoryName(path); !string.IsNullOrEmpty(dir) && (dir + "\\").StartsWith(root, StringComparison.OrdinalIgnoreCase);
+                 dir = Path.GetDirectoryName(dir))
             {
                 if (isRepoRoot(dir)) return dir;
             }
