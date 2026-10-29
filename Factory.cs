@@ -268,6 +268,8 @@ public sealed class FactoryRun
 
     /// <summary>The session the run waits for before taking the checkout ("" when it does not wait), and the developer's go-ahead.</summary>
     [System.Text.Json.Serialization.JsonIgnore] public string WaitingFor { get; set; } = "";
+    /// <summary>The run that started this one for its part in this repo ("" for a run of its own).</summary>
+    public string LinkedFrom { get; set; } = "";
     [System.Text.Json.Serialization.JsonIgnore] public bool TakeAnyway { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public CancellationTokenSource? Running { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public bool Working => Running != null;
@@ -422,18 +424,23 @@ public static class Factory
     /// </summary>
     public static FactoryRun HandOff(FactoryRun diagnosed)
     {
-        (string task, string folder, string baseBranch) = HandOffTask(diagnosed, dir => Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git")));
-        return Create(FactorySource.Typed, task, folder, baseBranch, "", diagnosed.Autonomous, diagnosed.Report, FactoryDepartment.Development);
+        (string task, string folder, string repo, string baseBranch) = HandOffTask(diagnosed, dir => Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git")));
+        FactoryRun run = Create(FactorySource.Typed, task, folder, baseBranch, "", diagnosed.Autonomous, diagnosed.Report, FactoryDepartment.Development);
+        run.Repo = repo;
+        Save();
+        return run;
     }
 
     /// <summary>
     /// What Development is handed: a troubleshooting run's diagnosis, as the fix it names; a research run's findings, as
     /// the change it proved - in the repo of the change it made outside its own (a research run edits no repo of its own,
     /// so a change it tried lives elsewhere), on that repo's own branch; else in the run's repo and base.
+    /// The new run keeps the folder the developer gave (2026-10-29: given only the repo as its folder, a run could not
+    /// start the linked runs its change needed in two other repos); its repo is set, or "" for the run to find.
     /// </summary>
-    internal static (string Task, string Folder, string BaseBranch) HandOffTask(FactoryRun run, Func<string, bool> isRepoRoot)
+    internal static (string Task, string Folder, string Repo, string BaseBranch) HandOffTask(FactoryRun run, Func<string, bool> isRepoRoot)
     {
-        string ownRepo = run.Repo.Length > 0 ? run.Repo : run.Folder;
+        string folder = run.Folder.Length > 0 ? run.Folder : run.Repo;
         if (run.Department != FactoryDepartment.Research)
         {
             string fix = $"""
@@ -446,7 +453,7 @@ public static class Factory
                 Make the fix it names in this repo; prove it where the problem was reproduced - the problem is gone there,
                 and the control still works.
                 """;
-            return (fix, ownRepo, run.BaseBranch);
+            return (fix, folder, run.Repo, run.BaseBranch);
         }
         string? changedRepo = OutsideRepo(run.OutsideChanges, run.Folder, isRepoRoot);
         string tried = run.OutsideChanges.Count > 0
@@ -462,7 +469,7 @@ public static class Factory
             Make the change in this repo on its own branch, with tests; prove it the way the research measured it (the same
             numbers, before and after); then open a draft PR.
             """;
-        return changedRepo != null ? (build, changedRepo, "") : (build, ownRepo, run.BaseBranch);
+        return changedRepo != null ? (build, folder, changedRepo, "") : (build, folder, run.Repo, run.BaseBranch);
     }
 
     /// <summary>
@@ -504,6 +511,7 @@ public static class Factory
         // from here on there is something to learn from
         if (!await PlanAsync(run, cancel)) return true;
         if (run.NoChange) return await AnswerAsync(run, cancel);
+        if (await PlanPartsAsync(run, cancel)) return true;
         if (!await BuildAsync(run, cancel)) return true;
         if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
         else await FreshAttemptAsync(run, cancel);
@@ -605,6 +613,7 @@ public static class Factory
             run.SessionId = Guid.NewGuid().ToString();
             if (!await PlanAsync(run, cancel)) return true;
             if (run.NoChange) return await AnswerAsync(run, cancel);
+            if (await PlanPartsAsync(run, cancel)) return true;
             if (!await BuildAsync(run, cancel)) return true;
         }
         else if (run.NoChange)
@@ -994,6 +1003,7 @@ public static class Factory
             if (Questions(plan) is { Length: > 0 } open) throw new NeedsYouException("The plan still has questions for you:\n" + open);
             run.NoChange = (Line(plan, "CHANGE:") ?? "").StartsWith("none", StringComparison.OrdinalIgnoreCase);
             if (run.NoChange) return await AnswerAsync(run, cancel);
+            if (await PlanPartsAsync(run, cancel)) return true;
             if (!await BuildAsync(run, cancel)) return true;
             if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
             return true;
@@ -1073,16 +1083,7 @@ public static class Factory
         run.PendingChange = "";
         run.Revision = revision;
         Log(run, $"Revision {revision}:\n" + answer);
-        // the other repos' parts first, one after another in the order given (a library before what uses it), so this
-        // run's checks see the whole change and no two runs restart the same services at once
-        List<FactoryRun> linked = StartLinkedRuns(run, answer, revision);
-        foreach (FactoryRun part in linked)
-        {
-            Log(run, $"Waits for the linked run in {(part.Repo.Length > 0 ? part.Repo : part.Folder)} ({part.Id}).");
-            await RunAsync(part);
-            cancel.ThrowIfCancellationRequested();
-            Log(run, $"Linked run {part.Id}: {part.Stage} - {part.Note.Split('\n')[0]}", ok: part.Stage == FactoryStage.Done);
-        }
+        await RunLinkedAsync(run, answer, $"Revision {revision}", cancel);
         if (await CheckAsync(run, cancel)) await PullRequestAsync(run, cancel);
         return true;
     }
@@ -1090,45 +1091,108 @@ public static class Factory
     /// <summary>Another repo has to change too: a linked Development run there, its task the part this one cannot do.</summary>
     public static event Action<FactoryRun>? RunCreated;
 
-    private static List<FactoryRun> StartLinkedRuns(FactoryRun run, string answer, int revision)
+    // the other repos' parts first, one after another in the order given (a library before what uses it), so this
+    // run's checks see the whole change and no two runs restart the same services at once
+    private static async Task<List<FactoryRun>> RunLinkedAsync(FactoryRun run, string answer, string label, CancellationToken cancel)
+    {
+        List<FactoryRun> linked = StartLinkedRuns(run, answer, label);
+        foreach (FactoryRun part in linked)
+        {
+            Log(run, $"Waits for the linked run in {(part.Repo.Length > 0 ? part.Repo : part.Folder)} ({part.Id}).");
+            await RunAsync(part);
+            cancel.ThrowIfCancellationRequested();
+            Log(run, $"Linked run {part.Id}: {part.Stage} - {part.Note.Split('\n')[0]}", ok: part.Stage == FactoryStage.Done);
+        }
+        return linked;
+    }
+
+    private static List<FactoryRun> StartLinkedRuns(FactoryRun run, string answer, string label)
     {
         var started = new List<FactoryRun>();
+        IReadOnlyList<string>? repos = null;
         foreach (string line in answer.Replace("\r", "").Split('\n').Select(l => l.Trim().TrimStart('*', '-', ' '))
                      .Where(l => l.StartsWith("OTHER_REPO:", StringComparison.OrdinalIgnoreCase)))
         {
             string rest = line[11..].Trim();
-            int dash = rest.IndexOf(" - ", StringComparison.Ordinal);
-            string folder = (dash > 0 ? rest[..dash] : rest).Trim().Trim('`', '"');
-            string what = dash > 0 ? rest[(dash + 3)..].Trim() : rest;
-            // only a git repo under the folder the developer gave the run - never a path the model made up
-            string full;
-            try
+            (string named, string what) = OtherRepoLine(rest);
+            // a linked run's own other repos are left to the run that started it - two linked runs cannot start each other
+            if (run.LinkedFrom.Length > 0)
             {
-                full = Path.GetFullPath(Path.IsPathRooted(folder) ? folder : Path.Combine(run.Folder, folder)).TrimEnd('\\', '/');
-            }
-            catch (Exception)
-            {
-                full = "";
-            }
-            string? known = ClaudeProjects.ReposUnder(run.Folder, 3).FirstOrDefault(r => Path.GetFullPath(r).TrimEnd('\\', '/').Equals(full, StringComparison.OrdinalIgnoreCase));
-            if (known == null || known.Equals(run.Repo, StringComparison.OrdinalIgnoreCase))
-            {
-                Log(run, $"Revision {revision} names another repo ({rest}), but it is not a git repo under {run.Folder} - nothing was started; do it there yourself.", ok: false);
+                Log(run, $"{label} names another repo ({rest}); this is a linked run, so that is left to the run that started it ({run.LinkedFrom}).", ok: false);
                 continue;
             }
-            folder = known;
+            repos ??= ClaudeProjects.ReposUnder(run.Folder, 3);
+            if (OtherRepoTarget(named, run.Folder, run.Repo, repos) is not { } repo)
+            {
+                Log(run, $"{label} names another repo ({rest}), but it is not a git repo under {run.Folder} - nothing was started; do it there yourself.", ok: false);
+                continue;
+            }
             FactoryRun linked = Create(FactorySource.Typed, $"""
                 {what}
 
-                This is the part of revision {revision} of the run "{run.Title}" ({run.Id}) that belongs in this repo.
+                This is the part of {label.ToLowerInvariant()} of the run "{run.Title}" ({run.Id}) that belongs in this repo.
                 {(run.PrUrl.Length > 0 ? "That run's draft PR: " + run.PrUrl + " - say in this PR's description that the two go together." : "")}
-                """, folder, "", "", run.Autonomous, run.Report, FactoryDepartment.Development);
+                """, run.Folder, "", "", run.Autonomous, run.Report, FactoryDepartment.Development);
+            linked.Repo = repo;
+            linked.LinkedFrom = run.Id;
             run.LinkedRuns.Add(linked.Id);
-            Log(run, $"Revision {revision}: started a linked run in {folder} for: {what}");
+            Save();
+            Log(run, $"{label}: started a linked run in {repo} for: {what}");
             RunCreated?.Invoke(linked);
             started.Add(linked);
         }
         return started;
+    }
+
+    /// <summary>
+    /// The repo a plan or a revision names as another one to change, or null: only a git repo under the folder the
+    /// developer gave the run (the repos listed), never the run's own repo or a path the model made up.
+    /// </summary>
+    internal static string? OtherRepoTarget(string named, string runFolder, string runRepo, IEnumerable<string> repos)
+    {
+        string full;
+        try
+        {
+            full = Path.GetFullPath(Path.IsPathRooted(named) ? named : Path.Combine(runFolder, named)).TrimEnd('\\', '/');
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+        string? known = repos.FirstOrDefault(r => Path.GetFullPath(r).TrimEnd('\\', '/').Equals(full, StringComparison.OrdinalIgnoreCase));
+        return known == null || known.TrimEnd('\\', '/').Equals(runRepo.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase) ? null : known;
+    }
+
+    /// <summary>
+    /// An OTHER_REPO line's folder and task: "folder - task", with a hyphen, an en dash or an em dash (the model writes
+    /// either); a folder alone is its own task.
+    /// </summary>
+    internal static (string Folder, string Task) OtherRepoLine(string rest)
+    {
+        Match dash = Regex.Match(rest, @"\s[-–—]\s");
+        string folder = (dash.Success ? rest[..dash.Index] : rest).Trim().Trim('`', '"');
+        return (folder, dash.Success ? rest[(dash.Index + dash.Length)..].Trim() : folder);
+    }
+
+    /// <summary>The plan says this repo has no part of its own: the change is all in other repos (CHANGE: elsewhere).</summary>
+    internal static bool ElsewhereOnly(string plan) => (Line(plan, "CHANGE:") ?? "").StartsWith("elsewhere", StringComparison.OrdinalIgnoreCase);
+
+    // after a plan that names other repos: their linked runs go first; a plan with no part here ends with them. True
+    // when the run is over (nothing of its own to build).
+    private static async Task<bool> PlanPartsAsync(FactoryRun run, CancellationToken cancel)
+    {
+        List<FactoryRun> linked = await RunLinkedAsync(run, run.Plan, "The plan", cancel);
+        if (!ElsewhereOnly(run.Plan)) return false;
+        if (linked.Count == 0)
+        {
+            Wait(run, "The plan says the change belongs in other repos, but no linked run could be started there - see the log.");
+            return true;
+        }
+        bool allDone = linked.All(l => l.Stage == FactoryStage.Done);
+        string parts = string.Join("; ", linked.Select(l => $"{Path.GetFileName(l.Repo)} ({l.Id}): {l.Stage}"));
+        if (allDone) End(run, FactoryStage.Done, "No change in this repo - the change was made by its linked runs: " + parts);
+        else Wait(run, "No change in this repo; its linked runs did not all finish: " + parts);
+        return true;
     }
 
     /// <summary>The developer accepts the run's work as it is; after rounds of changes, it learns what they meant.</summary>
@@ -1220,8 +1284,17 @@ public static class Factory
     {
         Enter(run, FactoryStage.Locate, $"Finding the repo for the task in {run.Folder}.");
         if (!Directory.Exists(run.Folder)) return Wait(run, $"The folder {run.Folder} does not exist.");
-        (int exit, string top) = await GitAsync(run.Folder, "rev-parse", "--show-toplevel");
-        string? repo = exit == 0 ? Path.GetFullPath(top.Trim()).TrimEnd('\\') : null;
+        // a hand-over or a linked run names its repo: used as given when it is a repo's top folder
+        string? repo = null;
+        if (run.Repo.Length > 0 && Directory.Exists(run.Repo) && await GitAsync(run.Repo, "rev-parse", "--show-toplevel") is (0, var own)
+            && Path.GetFullPath(own.Trim()).TrimEnd('\\').Equals(Path.GetFullPath(run.Repo).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+        {
+            repo = Path.GetFullPath(run.Repo).TrimEnd('\\');
+        }
+        if (repo == null && await GitAsync(run.Folder, "rev-parse", "--show-toplevel") is (0, var top))
+        {
+            repo = Path.GetFullPath(top.Trim()).TrimEnd('\\');
+        }
         if (repo == null)
         {
             IReadOnlyList<string> repos = await System.Threading.Tasks.Task.Run(() => ClaudeProjects.ReposUnder(run.Folder, 3));
@@ -1843,7 +1916,11 @@ public static class Factory
             answer you suggest. {(run.Autonomous ? "No one will answer: the run goes on with your suggested answers, so make them the best choice and they are recorded as the decisions taken." : "The run waits for the answers before building.")} Leave QUESTIONS out when nothing is open.
             If the task needs no change to the repo - it asks for information, like a curl to try something, an
             explanation, where something is - add one line CHANGE: none, and plan how to check the answer against the
-            running app instead.{(run.RetryContext.Length > 0 ? "\n\nA FIRST ATTEMPT GOT STUCK - plan so this one finishes:\n" + run.RetryContext : "")}
+            running app instead.
+            If part of the change belongs in another repository under {run.Folder}, plan only this repo's part and add one
+            line per other repository: OTHER_REPO: <its folder> - <what must change there, as a task>, in the order they
+            must be done - a library before what uses it. Each gets its own run. If this repo needs no change of its own,
+            add the line CHANGE: elsewhere.{(run.RetryContext.Length > 0 ? "\n\nA FIRST ATTEMPT GOT STUCK - plan so this one finishes:\n" + run.RetryContext : "")}
             {verify}
             """;
         (string answer, string? error) = await TurnAsync(run, isNew: true, prompt, "Plan", cancel);
@@ -2141,6 +2218,7 @@ public static class Factory
         Enter(run, FactoryStage.Build, "Claude implements the plan.");
         (string answer, string? error) = await TurnAsync(run, isNew: false, """
             Now implement the plan in this folder. Change only what the task needs, and add or update tests for it.
+            Change only this repository: no edit, branch switch or stash in another one - its part has its own run.
             Keep it fast: run only the tests for what you changed - Dev break runs the full verify command right after -
             and do not reinstall dependencies that are already installed. Do not start or restart the app or its
             services and do not call it to try the change: the Prove step right after runs the app once with the

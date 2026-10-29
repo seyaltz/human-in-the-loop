@@ -925,7 +925,12 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   turn only states its understanding and the run waits ("Send "ok" to build it"); an "ok" (also yes, go, confirm)
   builds it. `OTHER_REPO` starts a linked Development run (`LinkedRuns`, shown in History at once via `RunCreated`)
   only for a git repo under the run's folder (full path, one of `ReposUnder(folder, 3)`, not the run's own); anything
-  else is logged and nothing starts. History shows "Revision N · ..." and "Accepted"; a run whose revision is done
+  else is logged and nothing starts. The folder and the task split on a hyphen, an en dash or an em dash
+  (`OtherRepoLine` - the model writes "–" too). The plan can name other repos the same way: their linked runs go
+  first, in order, and `CHANGE: elsewhere` (this repo has no part) ends the run Done with theirs. A linked run keeps
+  the developer's folder with its repo set (`Repo`, used as given by Locate) and its parent in `LinkedFrom`; its own
+  `OTHER_REPO` lines are logged, not started, so two runs never start each other. The build turn is told to change
+  only its own repository - no edit, switch or stash in another. History shows "Revision N · ..." and "Accepted"; a run whose revision is done
   raises "Dev break factory - revision ready". (Tested: a decision unticked with "new-customer revenue, not
   retention" came back as revision 2 that named the decision it overturned, with a new report; Accept learned.)
 - **Delete…** (a run's header, not while it works): deletes one run for good, after a diagnosis.
@@ -1039,7 +1044,7 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
       (primary - `AcceptAsync` marks it accepted, records the rating good and learns from it) and **Request changes**
       (shows the kinds - Wrong behaviour / Missing / Change design / Bug - and the box; **Send to the next revision**
       sends the unticked decisions and the words, kind "change design" when only decisions were unticked); **Open PR**
-      / **Open report** (secondary next to Accept); **Fix it in Development** for a troubleshooting diagnosis; **Build it in Development** for research findings (`HandOffTask`: the change the research proved, made again properly on its own branch with tests and a draft PR - in the repo of the change it made outside its own (`OutsideRepo`: the nearest folder holding .git above the path the change names), on that repo's own branch; with no such change, the run's repo and base).
+      / **Open report** (secondary next to Accept); **Fix it in Development** for a troubleshooting diagnosis; **Build it in Development** for research findings (`HandOffTask`: the change the research proved, made again properly on its own branch with tests and a draft PR - in the repo of the change it made outside its own (`OutsideRepo`: the nearest folder holding .git above the path the change names), on that repo's own branch; with no such change, the run's repo and base). The new run keeps the research run's folder (the one the developer gave) with that repo set, so the other repos the change needs stay reachable for linked runs.
       There is no separate Good/Bad rating: Accept and Request changes are the verdict.
     - **Reading the result** (`FactoryDigest`, tested in `DigestCases`): the task's title and its list row show the
       answer's headline - its `TITLE:` line, else its opening bold sentence, else the words it was started with (those

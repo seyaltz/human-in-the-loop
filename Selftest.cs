@@ -115,6 +115,12 @@ public static class Selftest
             Lines.Add($"real: week {w.Start:yyyy-MM-dd} active {w.ActiveH:0.0} h, wait {w.WaitH:0.0}, tools {w.ToolH:0.0}, model {w.ModelH:0.0}, you {w.UserH:0.0}, calls {w.Calls}, failed {w.Failed}, interrupts {w.Interrupts}, corrections {w.Corrections}");
         }
         Lines.Add($"real: families in 3+ sessions: {data.Families(3).Count}");
+        // DEVBREAK_LINK_CHECK="<folder>|<run's repo>|<an OTHER_REPO line's text>": which repo a linked run would start in
+        if (Environment.GetEnvironmentVariable("DEVBREAK_LINK_CHECK") is { Length: > 0 } link && link.Split('|') is [var folder, var runRepo, var text])
+        {
+            (string named, string what) = Factory.OtherRepoLine(text);
+            Lines.Add($"real: link from {folder}: {Factory.OtherRepoTarget(named, folder, runRepo, ClaudeProjects.ReposUnder(folder, 3)) ?? "none"} - task: {what}");
+        }
         // DEVBREAK_BUSY_CHECK="<transcript>|<repo>|<since, UTC>": replays the busy-repo check on a real transcript
         if (Environment.GetEnvironmentVariable("DEVBREAK_BUSY_CHECK") is { Length: > 0 } spec && spec.Split('|') is [var transcript, var repo, var since])
         {
@@ -505,13 +511,32 @@ public static class Selftest
             Repo = @"C:\r\search", BaseBranch = "main", Folder = @"C:\r", Result = "Places in Redis: the first search 14 s -> 6 s.",
         };
         research.OutsideChanges.Add(outside);
-        (string task, string folder, string branch) = Factory.HandOffTask(research, IsRepo);
-        Check(folder == @"C:\r\core" && branch == "", "Hand off: research goes to the repo it changed, on that repo's own branch - got " + folder + " / " + branch);
+        (string task, string folder, string repo, string branch) = Factory.HandOffTask(research, IsRepo);
+        Check(repo == @"C:\r\core" && branch == "", "Hand off: research goes to the repo it changed, on that repo's own branch - got " + repo + " / " + branch);
+        // measured 2026-10-29: the handed-over run got the research run's repo as its whole folder, so the two other
+        // repos the change needed were "not a git repo under" it and no linked run started
+        Check(folder == @"C:\r", "Hand off: the new run keeps the folder the developer gave, so other repos stay reachable - got " + folder);
         Check(task.Contains("research run \"First search slow\"") && task.Contains("Places in Redis: the first search 14 s -> 6 s.")
               && task.Contains("Cache.java - added \"Places\"") && task.Contains("draft PR"), "Hand off: the task carries the findings and the change it tested - got: " + task);
         research.OutsideChanges.Clear();
-        (_, string ownFolder, string ownBranch) = Factory.HandOffTask(research, IsRepo);
-        Check(ownFolder == @"C:\r\search" && ownBranch == "main", "Hand off: with no outside change, the run's own repo and base");
+        (_, string ownFolder, string ownRepo, string ownBranch) = Factory.HandOffTask(research, IsRepo);
+        Check(ownFolder == @"C:\r" && ownRepo == @"C:\r\search" && ownBranch == "main", "Hand off: with no outside change, the run's own repo and base, in its folder");
+        var wide = new FactoryRun { Id = "r2", Department = FactoryDepartment.Research, Folder = @"C:\r", FolderWide = true, Result = "x" };
+        Check(Factory.HandOffTask(wide, IsRepo).Repo == "", "Hand off: a folder-wide run names no repo - the new run finds it");
+
+        // another repo named by a plan or a revision: a repo under the run's folder, never the run's own or a made-up one
+        string[] repos = [@"C:\r\search", @"C:\r\client", @"C:\r\core"];
+        Check(Factory.OtherRepoTarget(@"C:\r\client", @"C:\r", @"C:\r\search", repos) == @"C:\r\client", "Linked run: another repo under the folder is the target");
+        Check(Factory.OtherRepoTarget("client", @"C:\r", @"C:\r\search", repos) == @"C:\r\client", "Linked run: a folder named relative to the run's folder");
+        Check(Factory.OtherRepoTarget(@"C:\r\search", @"C:\r", @"C:\r\search", repos) == null, "Linked run: the run's own repo is not another");
+        Check(Factory.OtherRepoTarget(@"C:\x\client", @"C:\r", @"C:\r\search", repos) == null, "Linked run: a repo outside the folder is never started");
+        // measured 2026-10-29: the model wrote an en dash after the folder, and the whole line was taken for a path
+        Check(Factory.OtherRepoLine("`C:\\r\\client` – branch from dev; add the sort option") is (@"C:\r\client", "branch from dev; add the sort option"),
+            "Linked run: the folder and the task split on an en dash too - got " + Factory.OtherRepoLine("`C:\\r\\client` – branch from dev; add the sort option"));
+        Check(Factory.OtherRepoLine("client - add the sort") is ("client", "add the sort"), "Linked run: the folder and the task split on ' - '");
+        Check(Factory.OtherRepoLine("C:\\r\\client") is (@"C:\r\client", @"C:\r\client"), "Linked run: a folder alone is also the task");
+        Check(Factory.ElsewhereOnly("TITLE: x\n1. change the api\nCHANGE: elsewhere\nOTHER_REPO: client - y") && !Factory.ElsewhereOnly("CHANGE: none") && !Factory.ElsewhereOnly("1. edit a.cs"),
+            "Plan: CHANGE: elsewhere says this repo has no part of its own");
         var diagnosed = new FactoryRun { Id = "d1", Title = "Login fails", Department = FactoryDepartment.Troubleshooting, Task = "login 500", Repo = @"C:\r\web", BaseBranch = "dev", Result = "Null session." };
         Check(Factory.HandOffTask(diagnosed, IsRepo).Task.Contains("Fix the problem diagnosed by the troubleshooting run"), "Hand off: a diagnosis is still handed over as a fix");
     }
