@@ -221,6 +221,45 @@ public static class ClaudeSessions
     /// turn of an open one 2.9-3.0 s, and the open process still knew the earlier turns. A stopped or failed turn
     /// ends the process; the next turn starts a new one that resumes the session.
     /// </summary>
+    /// <summary>
+    /// The messages written to a turn while it runs. Measured (claude -p, stream-json, --replay-user-messages): one is
+    /// echoed back when Claude takes it in, at its next tool step, and the turn's one result follows. One not echoed
+    /// before the result came too late for that turn: it gets a turn of its own, whose result is the one to wait for.
+    /// </summary>
+    public sealed class SteerTracker
+    {
+        private readonly List<string> _pending = [];
+
+        public void Sent(string text)
+        {
+            lock (_pending) _pending.Add(text);
+        }
+
+        /// <summary>An echoed user message: true when it is one of ours (taken in now), false for the turn's own prompt.</summary>
+        public bool Echoed(string text)
+        {
+            lock (_pending) return _pending.Remove(text);
+        }
+
+        public bool TurnEnds()
+        {
+            lock (_pending) return _pending.Count == 0;
+        }
+
+        /// <summary>The text of an echoed user message; null for anything else (a tool result, an assistant line).</summary>
+        public static string? EchoText(JsonElement root)
+        {
+            if (!root.TryGetProperty("type", out JsonElement type) || type.GetString() != "user") return null;
+            if (!root.TryGetProperty("message", out JsonElement message) || !message.TryGetProperty("content", out JsonElement content)) return null;
+            if (content.ValueKind == JsonValueKind.String) return content.GetString();
+            if (content.ValueKind != JsonValueKind.Array) return null;
+            var texts = content.EnumerateArray()
+                .Where(b => b.TryGetProperty("type", out JsonElement k) && k.GetString() == "text" && b.TryGetProperty("text", out _))
+                .Select(b => b.GetProperty("text").GetString() ?? "").ToList();
+            return texts.Count > 0 ? string.Concat(texts) : null;
+        }
+    }
+
     public sealed class LiveSession : IDisposable
     {
         private readonly Process _process;
@@ -266,11 +305,12 @@ public static class ClaudeSessions
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
-            foreach (string arg in new[] { "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions" })
+            // --replay-user-messages: a message written while a turn runs is echoed when Claude takes it in (SteerTracker)
+            foreach (string arg in new[] { "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--replay-user-messages", "--permission-mode", "bypassPermissions" })
             {
                 start.ArgumentList.Add(arg);
             }
-            start.ArgumentList.Add(isNew ? "--session-id" : "--resume");
+            start.ArgumentList.Add(StartsNew(isNew, FileOf(id)) ? "--session-id" : "--resume");
             start.ArgumentList.Add(id);
             foreach (string arg in extra) start.ArgumentList.Add(arg);
             CliSetup.UseCompactWindow(start);
@@ -283,6 +323,10 @@ public static class ClaudeSessions
             process.BeginErrorReadLine();
             return live;
         }
+
+        // measured: --session-id on an id that already has a transcript fails "Session ID ... is already in use", so a new
+        // turn on a session that has one resumes it - as it does when the session's open process is reused
+        internal static bool StartsNew(bool isNew, string? transcript) => isNew && transcript == null;
 
         public static string KeyOf(string folder, string id, IEnumerable<string>? extraArgs) =>
             folder + "|" + id + "|" + string.Join(" ", extraArgs ?? []);
@@ -319,6 +363,39 @@ public static class ClaudeSessions
         }
 
         /// <summary>One turn: the prompt goes in as the next user message; it ends at the turn's result line.</summary>
+        private readonly object _turnLock = new();
+        private bool _inTurn;
+        private SteerTracker _steers = new();
+
+        private static string UserMessage(string text) => JsonSerializer.Serialize(new
+        {
+            type = "user",
+            message = new { role = "user", content = new[] { new { type = "text", text } } },
+        });
+
+        /// <summary>
+        /// Writes a message into the turn that runs now - Claude takes it in at its next step. False when no turn runs
+        /// (the caller keeps it for the next one).
+        /// </summary>
+        public bool Steer(string text)
+        {
+            lock (_turnLock)
+            {
+                if (!_inTurn || !Usable) return false;
+                try
+                {
+                    _process.StandardInput.WriteLine(UserMessage(text));
+                    _process.StandardInput.Flush();
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+                {
+                    return false;
+                }
+                _steers.Sent(text);
+                return true;
+            }
+        }
+
         public async Task TurnAsync(string prompt, Action<SessionEntry> onEntry, CancellationToken cancel, Action<JsonElement>? onLine = null)
         {
             bool finished = false;
@@ -327,20 +404,35 @@ public static class ClaudeSessions
                 try
                 {
                     if (!_initialized) await InitializeAsync(cancel);
-                    string message = JsonSerializer.Serialize(new
+                    lock (_turnLock)
                     {
-                        type = "user",
-                        message = new { role = "user", content = new[] { new { type = "text", text = prompt } } },
-                    });
-                    await _process.StandardInput.WriteLineAsync(message);
-                    await _process.StandardInput.FlushAsync();
+                        _steers = new SteerTracker();
+                        _process.StandardInput.WriteLine(UserMessage(prompt));
+                        _process.StandardInput.Flush();
+                        _inTurn = true;
+                    }
                     while (await _process.StandardOutput.ReadLineAsync() is { } line)
                     {
-                        if (ReadLine(line, onEntry, onLine))
+                        if (line.Contains("\"type\":\"user\"", StringComparison.Ordinal) && line.StartsWith('{'))
                         {
-                            finished = true;
-                            break;
+                            try
+                            {
+                                using JsonDocument echo = JsonDocument.Parse(line);
+                                if (SteerTracker.EchoText(echo.RootElement) is { } said) _steers.Echoed(said);
+                            }
+                            catch (JsonException)
+                            {
+                            }
                         }
+                        if (!ReadLine(line, onEntry, onLine)) continue;
+                        // a result: the end, unless a message written into this turn was not taken in - its own turn follows
+                        lock (_turnLock)
+                        {
+                            if (!_steers.TurnEnds()) continue;
+                            _inTurn = false;
+                        }
+                        finished = true;
+                        break;
                     }
                 }
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
@@ -354,6 +446,8 @@ public static class ClaudeSessions
                     return;
                 }
             }
+            // however it ended, no turn runs now: a message written from here on waits for the next one
+            lock (_turnLock) _inTurn = false;
             if (cancel.IsCancellationRequested)
             {
                 onEntry(new SessionEntry(SessionEntryKind.Error, "Stopped."));
@@ -500,15 +594,20 @@ public static class ClaudeSessions
     /// The session's running cost as its file last recorded it (the last cost-state line's totalCostUSD), 0 without one.
     /// Measured: a process resuming the session carries this total on in its results' total_cost_usd.
     /// </summary>
-    public static double LastCost(string id)
+    public static double LastCost(string id) => FileOf(id) is { } file ? LastCostIn(file) : 0;
+
+    // the end of the file first; the CLI writes the line rarely, so it can lie further back (424 KB from the end of a
+    // 13 MB session: missed, its next turn showed the whole session's $7.53 as its own cost) - then the whole file
+    internal static double LastCostIn(string file) => LastCostIn(file, 256 * 1024) ?? LastCostIn(file, long.MaxValue) ?? 0;
+
+    private static double? LastCostIn(string file, long tail)
     {
-        if (FileOf(id) is not { } file) return 0;
         try
         {
             using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            stream.Seek(Math.Max(0, stream.Length - 256 * 1024), SeekOrigin.Begin);
+            stream.Seek(Math.Max(0, stream.Length - tail), SeekOrigin.Begin);
             using var reader = new StreamReader(stream);
-            double cost = 0;
+            double? cost = null;
             while (reader.ReadLine() is { } line)
             {
                 if (!line.Contains("\"cost-state\"", StringComparison.Ordinal)) continue;
@@ -525,7 +624,7 @@ public static class ClaudeSessions
         }
         catch (IOException)
         {
-            return 0;
+            return null;
         }
     }
 

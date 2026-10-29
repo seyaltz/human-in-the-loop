@@ -308,7 +308,7 @@ public partial class FactoryView : UserControl
         var status = new TextBlock { FontSize = 11.5, Foreground = (Brush)FindResource("InkSoftBrush"), TextTrimming = TextTrimming.CharacterEllipsis };
         _rows[run.Id] = (light, status);
         var text = new StackPanel();
-        text.Children.Add(new TextBlock { Text = run.Title, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, FontSize = 13.5 });
+        text.Children.Add(new TextBlock { Text = FactoryDigest.Headline(run.Result, run.Title), FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, FontSize = 13.5 });
         text.Children.Add(status);
         var row = new DockPanel { Margin = new Thickness(2, 6, 4, 6) };
         DockPanel.SetDock(light, Dock.Left);
@@ -324,7 +324,7 @@ public partial class FactoryView : UserControl
         if (!_rows.TryGetValue(run.Id, out var row)) return;
         SetLight(row.Light, run);
         row.Status.Text = $"{(run.Department != FactoryDepartment.Development ? run.Department + " · " : "")}{(run.Revision > 1 ? $"revision {run.Revision} · " : "")}{System.IO.Path.GetFileName(run.Repo.Length > 0 ? run.Repo : run.Folder)} · {StatusText(run)}";
-        if (((row.Status.Parent as StackPanel)?.Children[0]) is TextBlock title) title.Text = run.Title;
+        if (((row.Status.Parent as StackPanel)?.Children[0]) is TextBlock title) title.Text = FactoryDigest.Headline(run.Result, run.Title);
     }
 
     private void RunList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -414,13 +414,9 @@ public partial class FactoryView : UserControl
 
     private void CopyResult_Click(object sender, RoutedEventArgs e)
     {
-        if (ResultText.Text.Length > 0) Clipboard.SetText(ResultText.Text);
+        if (_shown is { Result.Length: > 0 } run) Clipboard.SetText(run.Result);
     }
 
-    private async void Worktree_Click(object sender, RoutedEventArgs e)
-    {
-        if (_shown != null) await Factory.UseWorktreeAsync(_shown);
-    }
 
     // a clean up shows what it deletes - and any work that would be lost - before it does
     private async void Clean_Click(object sender, RoutedEventArgs e)
@@ -619,10 +615,13 @@ public partial class FactoryView : UserControl
         EmptyText.Visibility = Visibility.Collapsed;
         RunArea.Visibility = Visibility.Visible;
         SetLight(Light, run);
-        RunTitle.Text = run.Title;
-        RunMeta.Text = Meta(run);
+        // the answer's own headline says what the task found; the words it was started with go under it
+        string headline = FactoryDigest.Headline(run.Result, run.Title);
+        RunTitle.Text = headline;
+        RunMeta.Text = Meta(run) + (headline != run.Title ? "   ·   asked: " + Short(run.Title.Replace("\n", " "), 90) : "");
         ShowPipeline(run);
         ShowCard(run);
+        Dispatcher.BeginInvoke(FitCard, System.Windows.Threading.DispatcherPriority.Loaded);
         // the menu: what is there to open, and what may be cleaned up or deleted now
         SessionItem.IsEnabled = !run.Working && Directory.Exists(run.Worktree);
         FolderItem.IsEnabled = Directory.Exists(run.Worktree);
@@ -686,8 +685,7 @@ public partial class FactoryView : UserControl
         }
         else if (waiting)
         {
-            title = run.ManagerCase.Length > 0 ? "Needs you - the department manager could not get it going"
-                : run.Stage == FactoryStage.Stopped ? "Stopped" : "Needs you";
+            title = run.Stage == FactoryStage.Stopped ? "Stopped - what you can do" : "Needs you - what to do";
             text = run.ManagerCase.Length > 0 ? run.ManagerCase : run.Note.Trim();
             border = "CoralInkBrush";
         }
@@ -705,22 +703,44 @@ public partial class FactoryView : UserControl
             border = "LineBrush";
         }
         if (run.CleanedUp && !working) title += " · cleaned up - the record stays";
+        // what to do stays in the card; the technical reason it stopped folds away under it
+        (string action, string why) = FactoryDigest.SplitNote(text);
+        if (working) (action, why) = (text, "");
         NextTitle.Text = title;
         NextTitle.Foreground = (Brush)FindResource(waiting ? "CoralInkBrush" : "InkBrush");
-        if (NextText.Text != text) NextText.Text = text;
-        NextText.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        NextWhen.Text = !working && run.Log.Count > 0 ? (waiting ? "stopped " : "") + FactoryDigest.Ago(run.Log[^1].At, DateTime.Now) : "";
+        action = FactoryDigest.Clean(action);
+        if (NextText.Text != action) NextText.Text = action;
+        NextText.Visibility = action.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        WhyBox.Visibility = why.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (WhyText.Text != why) WhyText.Text = why;
         NextCard.BorderBrush = (Brush)FindResource(border);
         NextCard.Background = (Brush)FindResource(waiting ? "CoralTintBrush" : working || reviewable ? "VioletTintBrush" : "CardBrush");
 
-        // what the manager proposes to change in the factory, until the developer puts it away
+        // what the manager proposes to change in the factory, folded, until the developer puts it away
         bool fixes = !working && run.FactoryFixes.Count > 0 && !run.FixesSeen;
         FixesBox.Visibility = fixes ? Visibility.Visible : Visibility.Collapsed;
+        FixesHeader.Text = $"Factory improvements proposed ({run.FactoryFixes.Count}) - for you to approve";
         string fixesText = string.Join("\n\n", run.FactoryFixes.Select((f, i) => $"{i + 1}. {f}"));
         if (fixes && FixesText.Text != fixesText) FixesText.Text = fixesText;
 
-        // what it hands back, ready to use
+        // the questions its answer asks, to answer with one click
+        List<FactoryQuestion> questions = !working && !run.CleanedUp && canTalk ? FactoryDigest.Questions(run.Result) : [];
+        ShowQuestions(run, questions);
+
+        // what it hands back: the findings, formatted, and what it could not verify folded away
         ResultBox.Visibility = run.Result.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        if (ResultText.Text != run.Result) ResultText.Text = run.Result;
+        if (_shownResult != run.Id + "|" + run.Result)
+        {
+            _shownResult = run.Id + "|" + run.Result;
+            (string body, string notVerified) = FactoryDigest.Body(run.Result);
+            ResultHeadline.Text = FactoryDigest.Headline(run.Result, "");
+            ResultHeadline.Visibility = ResultHeadline.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            ResultText.Document = CodeRenderer.Render(body);
+            NotVerifiedBox.Visibility = notVerified.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            NotVerifiedHeader.Text = $"⚠ Not verified ({notVerified.Split('\n').Count(l => l.TrimStart().StartsWith('-') || l.TrimStart().StartsWith('*'))})";
+            NotVerifiedText.Document = CodeRenderer.Render(notVerified);
+        }
 
         // the decisions it took on its own, while it waits for the review
         ShowDecisions(run, reviewable);
@@ -736,16 +756,24 @@ public partial class FactoryView : UserControl
         // the actions: one primary for the state, and only the others that apply
         Visibility On(bool on) => on ? Visibility.Visible : Visibility.Collapsed;
         StopButton.Visibility = On(working);
+        TakeAnywayButton.Visibility = On(working && run.WaitingFor.Length > 0);
+        SteerPanel.Visibility = On(working);
+        if (!working) SteerSent.Visibility = Visibility.Collapsed;
         ContinueButton.Visibility = On(waiting);
-        WorktreeButton.Visibility = On(waiting && !run.InCheckout && !run.UseWorktree && run.Stage == FactoryStage.NeedsYou
-            && run.Note.Contains("Use a separate worktree", StringComparison.Ordinal));
         AnywayButton.Visibility = On(waiting && run.Department == FactoryDepartment.Development && run.Plan.Length > 0 && run.PrUrl.Length == 0);
         OpenPrButton.Visibility = On(!working && run.PrUrl.Length > 0);
         ReportButton.Visibility = On(!working && run.ReportFile.Length > 0 && File.Exists(run.ReportFile));
         AcceptButton.Visibility = On(reviewable && !_changing);
+        AcceptButton.Content = questions.Count > 0 ? $"Accept - {questions.Count} question{(questions.Count > 1 ? "s" : "")} unanswered" : "Accept";
         ChangesButton.Visibility = On(done && canTalk && !_changing);
         CancelChangeButton.Visibility = On(change);
-        FixItButton.Visibility = On(done && run.Department == FactoryDepartment.Troubleshooting && run.Result.Length > 0);
+        // a diagnosis goes to Development as its fix; research findings as the change they proved (a PR to approve)
+        bool research = run.Department == FactoryDepartment.Research;
+        FixItButton.Visibility = On(done && (research || run.Department == FactoryDepartment.Troubleshooting) && run.Result.Length > 0);
+        FixItButton.Content = research ? "Build it in Development" : "Fix it in Development";
+        FixItButton.ToolTip = research
+            ? "Start a Development task from these findings: it makes the change they proved on its own branch, in the repo the research changed, proves it and opens a draft PR"
+            : "Start a Development task from this diagnosis: the root cause and the fix it named";
         // the first action shown is the primary one; a PR or report next to Accept steps back to secondary
         OpenPrButton.Style = ReportButton.Style = (Style)FindResource(reviewable ? "SecondaryButton" : "PrimaryButton");
         NextButtons.Visibility = NextButtons.Children.OfType<Button>().Any(b => b.Visibility == Visibility.Visible) ? Visibility.Visible : Visibility.Collapsed;
@@ -987,6 +1015,120 @@ public partial class FactoryView : UserControl
         await Factory.FeedbackAsync(_shown, text, kind);
     }
 
+    // the room under the header and the line is shared: the card takes at most half and scrolls, the activity the rest
+    // (a fixed 190 px for the activity left it ~100 px of a 1080p screen once the tabs took theirs)
+    internal static double CardMaxHeight(double room) => Math.Max(180, Math.Round(room / 2));
+
+    private void RunArea_SizeChanged(object sender, SizeChangedEventArgs e) => FitCard();
+
+    private void FitCard()
+    {
+        if (!NextCard.IsVisible) return;
+        double top = NextCard.TranslatePoint(new Point(0, 0), RunArea).Y;
+        NextScroll.MaxHeight = CardMaxHeight(RunArea.ActualHeight - top);
+    }
+
+    // the result's text boxes sit inside the card's scroll: the wheel scrolls the card, not a box that has nothing to scroll
+    private void CardWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+    {
+        NextScroll.ScrollToVerticalOffset(NextScroll.VerticalOffset - e.Delta / 3.0);
+        e.Handled = true;
+    }
+
+    // --- while it works: your words go into the step that runs now, or the next one; nothing stops ---
+
+    private void Steer_Click(object sender, RoutedEventArgs e)
+    {
+        string text = SteerBox.Text.Trim();
+        if (_shown == null || text.Length == 0) return;
+        bool now = Factory.Steer(_shown, text);
+        SteerBox.Clear();
+        SteerSent.Text = (now ? "Sent - it takes it in at its next step: " : "Held - it goes in with its next step: ") + Short(text, 120);
+        SteerSent.Visibility = Visibility.Visible;
+    }
+
+    private void SteerBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter || (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0) return;
+        e.Handled = true;
+        Steer_Click(sender, e);
+    }
+
+    // --- the questions its answer asks: yes as suggested, no, or your own words - sent back as one message ---
+
+    private string _shownResult = "", _questionsFor = "";
+    private readonly List<(FactoryQuestion Question, Func<string?> Answer)> _questionRows = [];
+
+    private void ShowQuestions(FactoryRun run, List<FactoryQuestion> questions)
+    {
+        QuestionsPanel.Visibility = questions.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        string key = questions.Count > 0 ? $"{run.Id}|{run.Revision}|{run.Result.GetHashCode()}" : "";
+        if (key == _questionsFor) return;
+        _questionsFor = key;
+        QuestionList.Children.Clear();
+        _questionRows.Clear();
+        QuestionsLabel.Text = $"It asks you {questions.Count} question{(questions.Count > 1 ? "s" : "")}:";
+        foreach (FactoryQuestion q in questions)
+        {
+            var row = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+            row.Children.Add(new TextBlock { Text = $"{q.Number}.  {FactoryDigest.Clean(q.Ask)}", FontWeight = FontWeights.SemiBold, FontSize = 13, TextWrapping = TextWrapping.Wrap });
+            if (q.Suggested.Length > 0)
+            {
+                row.Children.Add(new TextBlock
+                {
+                    Text = "Suggested: " + FactoryDigest.Clean(q.Suggested), Style = (Style)FindResource("Caption"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(20, 2, 0, 0),
+                });
+            }
+            var choices = new WrapPanel { Margin = new Thickness(20, 6, 0, 0) };
+            string group = $"q{q.Number}-{key.GetHashCode()}";
+            RadioButton Choice(string label) => new() { Content = label, GroupName = group, Style = (Style)FindResource("PillRadio"), Margin = new Thickness(0, 0, 6, 0) };
+            RadioButton yes = Choice(q.Suggested.Length > 0 ? "Yes, as suggested" : "Yes"), no = Choice("No"), own = Choice("Answer…");
+            AutomationProperties.SetName(yes, $"Question {q.Number}: yes");
+            AutomationProperties.SetName(no, $"Question {q.Number}: no");
+            AutomationProperties.SetName(own, $"Question {q.Number}: answer");
+            var words = new TextBox
+            {
+                Style = (Style)FindResource("NotebookBox"), FontSize = 12.5, Margin = new Thickness(20, 6, 0, 0), Padding = new Thickness(8, 4, 8, 4),
+                TextWrapping = TextWrapping.Wrap, AcceptsReturn = true, Visibility = Visibility.Collapsed, ToolTip = "Your answer, in your words",
+            };
+            AutomationProperties.SetName(words, $"Question {q.Number}: your answer");
+            foreach (RadioButton choice in new[] { yes, no, own })
+            {
+                choices.Children.Add(choice);
+                choice.Checked += (_, _) =>
+                {
+                    words.Visibility = own.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+                    if (own.IsChecked == true) words.Focus();
+                    CountAnswers();
+                };
+            }
+            words.TextChanged += (_, _) => CountAnswers();
+            row.Children.Add(choices);
+            row.Children.Add(words);
+            QuestionList.Children.Add(row);
+            _questionRows.Add((q, () => yes.IsChecked == true ? FactoryDigest.Yes : no.IsChecked == true ? FactoryDigest.No
+                : own.IsChecked == true && words.Text.Trim().Length > 0 ? words.Text.Trim() : null));
+        }
+        CountAnswers();
+    }
+
+    private void CountAnswers()
+    {
+        int answered = _questionRows.Count(r => r.Answer() != null);
+        SendAnswersButton.IsEnabled = answered > 0;
+        SendAnswersButton.Content = answered > 0 ? $"Send answers ({answered} of {_questionRows.Count})" : "Send answers";
+    }
+
+    private async void SendAnswers_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown == null) return;
+        var answers = _questionRows.Where(r => r.Answer() != null).ToDictionary(r => r.Question.Number, r => r.Answer()!);
+        if (answers.Count == 0) return;
+        string text = FactoryDigest.Answers(_questionRows.Select(r => r.Question).ToList(), answers);
+        _questionsFor = "";
+        await Factory.FeedbackAsync(_shown, text);
+    }
+
     // --- the review of finished work: its own decisions, then accept it or ask for changes ---
 
     private string _reviewFor = "";
@@ -1184,6 +1326,12 @@ public partial class FactoryView : UserControl
     private void Stop_Click(object sender, RoutedEventArgs e)
     {
         if (_shown != null) Factory.Stop(_shown);
+    }
+
+    private void TakeAnyway_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown != null) _shown.TakeAnyway = true;
+        TakeAnywayButton.Visibility = Visibility.Collapsed;
     }
 
     private async void Anyway_Click(object sender, RoutedEventArgs e)

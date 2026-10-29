@@ -20,7 +20,12 @@ public partial class SessionPane
 {
     // the review is suggested (never run on its own) for a turn this big
     private const int ReviewFiles = 3, ReviewLines = 150;
-    private const int GradeFrom = 5;
+    internal const int GradeFrom = 5;
+
+    /// <summary>A turn worth grading - and over: one that ends while a background task runs comes back when the task ends,
+    /// so its "running in the background" is a progress note, not the answer (graded, it was flagged as skipping the check).</summary>
+    internal static bool Gradable(TurnLog log, int backgroundTasks) =>
+        backgroundTasks == 0 && log.Steps.Count(s => !s.Sub) >= GradeFrom && log.Answer.Length > 0;
 
     // the turn ended: did it check what it claims, and how does its ending grade
     private void CheckQuality(SessionState state)
@@ -30,7 +35,7 @@ public partial class SessionPane
         {
             Raise(state, new CoachFlag("Claims done, not verified after the last change", Evidence(log), nudge, "unverified"));
         }
-        if (SessionSettings.Of(state.Info.Id).Grade && !state.Grading && log.Steps.Count(s => !s.Sub) >= GradeFrom && log.Answer.Length > 0)
+        if (SessionSettings.Of(state.Info.Id).Grade && !state.Grading && Gradable(log, state.Tasks.Count))
         {
             Logged(Grade(state, log), "grade");
         }

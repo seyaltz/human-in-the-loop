@@ -75,6 +75,10 @@ public sealed class SessionState
     /// <summary>Where the CLI compacts on its own (autoCompactThreshold), 0 before it is known.</summary>
     public double CompactAt { get; set; }
 
+    /// <summary>The compaction running now (its live line in the chat), and when the recent ones ended.</summary>
+    internal CompactLine? Compacting { get; set; }
+    internal List<DateTime> Compactions { get; } = [];
+
     /// <summary>The last turn's time and cost, from its result line (for its devbreak.log line).</summary>
     public double LastTurnSeconds { get; set; }
     public double LastTurnCost { get; set; }
@@ -94,8 +98,15 @@ public sealed class SessionState
     /// <summary>The pane showing this session, if any.</summary>
     internal SessionPane? ShownIn { get; set; }
 
-    /// <summary>A turn or a "!" shell command runs.</summary>
-    public bool Working => Running != null || Shell != null;
+    /// <summary>A turn, a turn the CLI started itself after a background task, or a "!" shell command runs.</summary>
+    public bool Working => Running != null || Shell != null || FollowUp;
+
+    /// <summary>The CLI carries on by itself after a background task ended: a message now joins that turn.</summary>
+    internal bool FollowUp { get; set; }
+    /// <summary>The handover a heavy session's next message starts fresh from (asked for when its last turn ended).</summary>
+    internal System.Threading.Tasks.Task<string>? Handover { get; set; }
+    /// <summary>The background tasks' cards in the chat, by task id.</summary>
+    internal Dictionary<string, BackgroundCard> Cards { get; } = [];
 
     /// <summary>The "!" shell command running, if one does.</summary>
     internal CancellationTokenSource? Shell { get; set; }

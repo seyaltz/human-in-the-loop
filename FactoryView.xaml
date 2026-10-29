@@ -165,7 +165,7 @@
                             <TextBlock x:Name="EmptyHowText" TextWrapping="Wrap" FontSize="13" LineHeight="19" Foreground="{StaticResource InkSoftBrush}" />
                         </StackPanel>
                     </ScrollViewer>
-                    <DockPanel x:Name="RunArea" Visibility="Collapsed">
+                    <DockPanel x:Name="RunArea" Visibility="Collapsed" SizeChanged="RunArea_SizeChanged">
                         <!-- the header: what the task is, where it works, and everything else behind ⋯ -->
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                             <Button x:Name="MoreButton" DockPanel.Dock="Right" Content="⋯" Style="{StaticResource SecondaryButton}" Height="36" Width="44"
@@ -225,18 +225,81 @@
                         <!-- the task's production line: the one place its progress is shown -->
                         <ContentControl x:Name="LineHost" DockPanel.Dock="Top" Margin="0,0,0,12" AutomationProperties.Name="Production line" />
                         <!-- the next step: one card for the task's state, with what you can do now -->
-                        <Border x:Name="NextCard" DockPanel.Dock="Top" BorderThickness="2" CornerRadius="12" Padding="14,10,14,12" Margin="0,0,0,12">
+                        <Border x:Name="NextCard" DockPanel.Dock="Top" BorderThickness="2" CornerRadius="12" Padding="14,10,6,12" Margin="0,0,0,12">
+                            <!-- a long card scrolls, so the activity under it stays in view -->
+                            <ScrollViewer x:Name="NextScroll" VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
                             <StackPanel>
-                                <TextBlock x:Name="NextTitle" FontWeight="Bold" FontSize="14" TextWrapping="Wrap" />
+                                <DockPanel>
+                                    <TextBlock x:Name="NextWhen" DockPanel.Dock="Right" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="10,0,0,0"
+                                               AutomationProperties.Name="When" ToolTip="When the task stopped or finished" />
+                                    <TextBlock x:Name="NextTitle" FontWeight="Bold" FontSize="14" TextWrapping="Wrap" />
+                                </DockPanel>
                                 <TextBox x:Name="NextText" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0"
-                                         FontSize="13" MaxHeight="170" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0" AutomationProperties.Name="What it needs" />
-                                <!-- what the department manager proposes to change in the factory itself, for you to approve -->
-                                <Border x:Name="FixesBox" Visibility="Collapsed" BorderBrush="{StaticResource VioletBrush}" BorderThickness="1.5"
-                                        CornerRadius="10" Padding="10,6" Margin="0,8,0,0">
+                                         FontSize="13.5" Margin="0,4,0,0" PreviewMouseWheel="CardWheel" AutomationProperties.Name="What it needs" />
+                                <!-- while it works: your words go into the running step (or the next one) - it does not stop -->
+                                <StackPanel x:Name="SteerPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                                    <DockPanel>
+                                        <Button x:Name="SteerButton" DockPanel.Dock="Right" Content="Tell it now" Style="{StaticResource PrimaryButton}"
+                                                Height="40" Padding="16,0" Margin="8,0,0,0" VerticalAlignment="Top" Click="Steer_Click"
+                                                ToolTip="It takes your words in at its next step and goes on - nothing stops (Ctrl+Enter)" />
+                                        <TextBox x:Name="SteerBox" Style="{StaticResource NotebookBox}" FontSize="13" MinHeight="40" MaxHeight="110" Padding="10,7"
+                                                 TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" PreviewKeyDown="SteerBox_KeyDown"
+                                                 AutomationProperties.Name="Tell it while it works"
+                                                 ToolTip="Steer it while it works - e.g. do everything locally, use the prod read access, skip X" />
+                                    </DockPanel>
+                                    <TextBlock x:Name="SteerSent" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="2,4,0,0" Visibility="Collapsed" />
+                                </StackPanel>
+                                <!-- the questions its answer asks you: one click each, then one message back -->
+                                <StackPanel x:Name="QuestionsPanel" Visibility="Collapsed" Margin="0,8,0,0">
+                                    <TextBlock x:Name="QuestionsLabel" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,2" />
+                                    <StackPanel x:Name="QuestionList" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <Button x:Name="SendAnswersButton" Content="Send answers" Style="{StaticResource PrimaryButton}" Height="34" Padding="14,0"
+                                                Click="SendAnswers_Click" IsEnabled="False"
+                                                ToolTip="Your answers go to the task as one message - it works them into the next revision" />
+                                    </StackPanel>
+                                </StackPanel>
+                                <!-- what the task hands back: its headline, the findings to read, what it could not verify -->
+                                <Border x:Name="ResultBox" Visibility="Collapsed" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource InkBrush}"
+                                        BorderThickness="1.5" CornerRadius="10" Padding="12,8" Margin="0,10,0,0">
                                     <StackPanel>
-                                        <TextBlock Text="The manager proposes these changes to the factory - for you to approve" FontWeight="SemiBold" FontSize="12.5" />
+                                        <DockPanel>
+                                            <Button x:Name="CopyResultButton" DockPanel.Dock="Right" Content="Copy" Style="{StaticResource SecondaryButton}"
+                                                    Height="30" Padding="12,0" Margin="8,0,0,0" VerticalAlignment="Top" Click="CopyResult_Click"
+                                                    ToolTip="Copy the whole answer, as it came" />
+                                            <StackPanel>
+                                                <TextBlock Text="RESULT" Style="{StaticResource Eyebrow}" />
+                                                <TextBlock x:Name="ResultHeadline" FontWeight="Bold" FontSize="14.5" TextWrapping="Wrap" Margin="0,2,0,0"
+                                                           AutomationProperties.Name="Result headline" />
+                                            </StackPanel>
+                                        </DockPanel>
+                                        <RichTextBox x:Name="ResultText" Style="{StaticResource ReadingBox}" FontSize="13" Margin="-4,6,0,0" PreviewMouseWheel="CardWheel"
+                                                     Background="Transparent" BorderThickness="0" AutomationProperties.Name="Result" />
+                                        <Expander x:Name="NotVerifiedBox" Visibility="Collapsed" Margin="0,6,0,0" IsExpanded="False">
+                                            <Expander.Header>
+                                                <TextBlock x:Name="NotVerifiedHeader" FontWeight="SemiBold" FontSize="12.5" Foreground="{StaticResource CoralInkBrush}" />
+                                            </Expander.Header>
+                                            <RichTextBox x:Name="NotVerifiedText" Style="{StaticResource ReadingBox}" FontSize="12.5" Margin="14,4,0,0" PreviewMouseWheel="CardWheel"
+                                                         Background="Transparent" BorderThickness="0" AutomationProperties.Name="Not verified" />
+                                        </Expander>
+                                    </StackPanel>
+                                </Border>
+                                <!-- the technical reason it stopped, out of the way of what to do -->
+                                <Expander x:Name="WhyBox" Visibility="Collapsed" Margin="0,8,0,0" IsExpanded="False">
+                                    <Expander.Header>
+                                        <TextBlock Text="Why it stopped (technical)" FontWeight="SemiBold" FontSize="12.5" Foreground="{StaticResource InkSoftBrush}" />
+                                    </Expander.Header>
+                                    <TextBox x:Name="WhyText" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0"
+                                             FontSize="12.5" Margin="14,4,0,0" AutomationProperties.Name="Why it stopped" />
+                                </Expander>
+                                <!-- what the department manager proposes to change in the factory itself, for you to approve -->
+                                <Expander x:Name="FixesBox" Visibility="Collapsed" Margin="0,6,0,0" IsExpanded="False">
+                                    <Expander.Header>
+                                        <TextBlock x:Name="FixesHeader" FontWeight="SemiBold" FontSize="12.5" Foreground="{StaticResource VioletBrush}" />
+                                    </Expander.Header>
+                                    <StackPanel Margin="14,4,0,0">
                                         <TextBox x:Name="FixesText" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0"
-                                                 FontSize="12.5" MaxHeight="140" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0" AutomationProperties.Name="Proposed changes" />
+                                                 FontSize="12.5" MaxHeight="200" VerticalScrollBarVisibility="Auto" AutomationProperties.Name="Proposed changes" />
                                         <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                             <Button x:Name="CopyFixesButton" Content="Copy" Style="{StaticResource SecondaryButton}" Height="30" Padding="12,0" Margin="0,0,8,0"
                                                     Click="CopyFixes_Click" ToolTip="Copy them, to ask for them in a Claude session or a Development task" />
@@ -244,18 +307,7 @@
                                                     Click="FixesSeen_Click" ToolTip="Put them away - they stay in the task's log" />
                                         </StackPanel>
                                     </StackPanel>
-                                </Border>
-                                <!-- what the task hands back (a curl, an answer, a link), ready to use -->
-                                <Border x:Name="ResultBox" Visibility="Collapsed" Background="{StaticResource MarkerBrush}" BorderBrush="{StaticResource InkBrush}"
-                                        BorderThickness="1.5" CornerRadius="10" Padding="10,6" Margin="0,8,0,0">
-                                    <DockPanel>
-                                        <Button x:Name="CopyResultButton" DockPanel.Dock="Right" Content="Copy" Style="{StaticResource SecondaryButton}"
-                                                Height="30" Padding="12,0" Margin="8,0,0,0" VerticalAlignment="Top" Click="CopyResult_Click" />
-                                        <TextBox x:Name="ResultText" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent"
-                                                 FontFamily="{StaticResource MonoFont}" FontSize="12.5" MaxHeight="150" VerticalScrollBarVisibility="Auto"
-                                                 AutomationProperties.Name="Result" />
-                                    </DockPanel>
-                                </Border>
+                                </Expander>
                                 <!-- the decisions it took on its own, to untick and change -->
                                 <TextBlock x:Name="ReviewDecisionsLabel" Text="Decisions it took on its own - untick one to change it, and say how:"
                                            Style="{StaticResource Caption}" Margin="0,10,0,2" Visibility="Collapsed" />
@@ -279,6 +331,8 @@
                                 </StackPanel>
                                 <WrapPanel x:Name="NextButtons" Margin="0,10,0,0">
                                     <Button x:Name="StopButton" Content="Stop" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="Stop_Click" />
+                                    <Button x:Name="TakeAnywayButton" Content="Take it anyway" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="TakeAnyway_Click"
+                                            ToolTip="The task waits for a session working in this repo. Switch the branch now anyway - that session's uncommitted changes are stashed only on a conflict" />
                                     <Button x:Name="ContinueButton" Content="Continue" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" Click="Continue_Click"
                                             ToolTip="Pick up where the task stopped and go on along the line" />
                                     <Button x:Name="AcceptButton" Content="Accept" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" Click="Accept_Click"
@@ -291,13 +345,11 @@
                                     <Button x:Name="ReportButton" Content="Open report" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" Click="Report_Click"
                                             ToolTip="The designed report, in your browser" />
                                     <Button x:Name="FixItButton" Content="Fix it in Development" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="FixIt_Click"
-                                            ToolTip="Start a Development task from this diagnosis: the root cause and the fix it named" />
-                                    <Button x:Name="WorktreeButton" Content="Use a separate worktree" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
-                                            Click="Worktree_Click" ToolTip="Leave your checkout as it is: the task goes on in its own worktree beside the repo" />
-                                    <Button x:Name="AnywayButton" Content="Draft PR anyway" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
+                                            ToolTip="Start a Development task from this diagnosis: the root cause and the fix it named" />                                    <Button x:Name="AnywayButton" Content="Draft PR anyway" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
                                             Click="Anyway_Click" ToolTip="Open the draft PR even though a check failed - its description says what failed" />
                                 </WrapPanel>
                             </StackPanel>
+                            </ScrollViewer>
                         </Border>
                         <!-- what happened: the activity, the evidence, the trace (each step with its tools), what it learned -->
                         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">

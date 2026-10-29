@@ -243,20 +243,29 @@ public partial class SessionPane
         process.Ask += ask => Dispatcher.Invoke(() => ShowAsk(state, process, ask));
         process.SystemEvent += (subtype, line) => Dispatcher.Invoke(() =>
         {
+            OnCompactEvent(state, subtype, line);
             string id = line.TryGetProperty("task_id", out JsonElement t) ? t.GetString() ?? "" : "";
             if (subtype == "task_started" && id.Length > 0)
             {
                 state.Tasks[id] = line.TryGetProperty("description", out JsonElement d) && d.GetString() is { Length: > 0 } what ? what : "a task";
+                ShowBackground(state, id, line.TryGetProperty("tool_use_id", out JsonElement u) ? u.GetString() ?? "" : "", state.Tasks[id]);
                 state.Notify();
             }
             else if (subtype is "task_notification" or "task_updated" && id.Length > 0
-                     && line.TryGetProperty("status", out JsonElement s) && s.GetString() is "completed" or "failed" or "stopped" or "killed")
+                     && Status(line) is "completed" or "failed" or "stopped" or "killed")
             {
                 state.Tasks.Remove(id);
+                EndBackground(state, id, Status(line), line.TryGetProperty("summary", out JsonElement sum) ? sum.GetString() ?? "" : "");
                 state.Notify();
             }
         });
     }
+
+    // a task's status: task_notification has it, task_updated in its patch (measured: {"patch":{"status":"completed"}})
+    private static string Status(JsonElement line) =>
+        line.TryGetProperty("status", out JsonElement s) ? s.GetString() ?? ""
+        : line.TryGetProperty("patch", out JsonElement p) && p.ValueKind == JsonValueKind.Object && p.TryGetProperty("status", out JsonElement ps) ? ps.GetString() ?? ""
+        : "";
 
     /// <summary>Dev break's own "/" commands, listed with the CLI's: /btw is the terminal's aside, which -p does not have.</summary>
     internal static readonly SlashCommand[] OwnCommands =
@@ -294,9 +303,7 @@ public partial class SessionPane
         string handover;
         try
         {
-            SessionProcess process = await ProcessFor(state);
-            JsonElement reply = await process.ControlAsync("side_question", new() { ["question"] = Watch.HandoverQuestion }, TimeSpan.FromMinutes(3));
-            handover = reply.TryGetProperty("response", out JsonElement r) ? r.GetString()?.Trim() ?? "" : "";
+            handover = await AskHandover(state);
         }
         catch (Exception ex)
         {
@@ -309,12 +316,51 @@ public partial class SessionPane
             return;
         }
         CloseAction();
-        var info = new SessionInfo(Guid.NewGuid().ToString(), state.Info.Folder, "Fresh: " + state.Info.Title, DateTime.Now);
+        StartFresh(state);
+        PutInBox("Continue this task. A handover from the previous session:\n\n" + handover);
+    }
+
+    // the handover, as a side question: Claude reads the conversation and adds nothing to it
+    private async Task<string> AskHandover(SessionState state)
+    {
+        SessionProcess process = await ProcessFor(state);
+        JsonElement reply = await process.ControlAsync("side_question", new() { ["question"] = Watch.HandoverQuestion }, TimeSpan.FromMinutes(3));
+        return reply.TryGetProperty("response", out JsonElement r) ? r.GetString()?.Trim() ?? "" : "";
+    }
+
+    // a new session in the same folder, with this one's mode, model and effort, shown in this pane; the old one stays listed
+    private SessionState? StartFresh(SessionState state)
+    {
+        string title = state.Info.Title.StartsWith("Fresh: ", StringComparison.Ordinal) ? state.Info.Title : "Fresh: " + state.Info.Title;
+        var info = new SessionInfo(Guid.NewGuid().ToString(), state.Info.Folder, title, DateTime.Now);
         SessionSetting mine = SessionSettings.Of(state.Info.Id), next = SessionSettings.Of(info.Id);
         (next.Mode, next.Model, next.Effort) = (mine.Mode, mine.Model, mine.Effort);
         SessionSettings.Save();
         NewSessionRequested?.Invoke(this, info, null, false);
-        PutInBox("Continue this task. A handover from the previous session:\n\n" + handover);
+        return _state?.Info.Id == info.Id ? _state : null;
+    }
+
+    // a heavy session's next message: it goes to a fresh session, after the handover written when the last turn ended
+    // (or here, to the old session, when there is none)
+    private async Task GoFresh(SessionState state, Task<string> handover, string message)
+    {
+        Add(state, new SessionEntry(SessionEntryKind.Note, "Starting a fresh session from the handover..."));
+        string text = "";
+        try
+        {
+            text = await handover;
+        }
+        catch (Exception ex)
+        {
+            Log("handover failed: " + ex.Message);
+        }
+        if (text.Length == 0 || StartFresh(state) is not { } fresh)
+        {
+            Add(state, new SessionEntry(SessionEntryKind.Note, "No handover - the message goes to this session."));
+            await RunTurn(state, message);
+            return;
+        }
+        await RunTurn(fresh, Watch.FreshMessage(text, message));
     }
 
     private void CloseAside_Click(object sender, RoutedEventArgs e) => AsideBox.Visibility = Visibility.Collapsed;

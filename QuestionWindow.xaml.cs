@@ -44,6 +44,10 @@ public partial class QuestionWindow : Window
     {
         _pool = pool;
         InitializeComponent();
+        // on top only to get the hourly question seen: once another app comes to the front it goes behind like any
+        // window, until the next question puts it back on top
+        var front = new ForegroundWatch(() => Topmost = false);
+        Closed += (_, _) => front.Dispose();
         AddTopicChips();
         // a factory run's session continues in Sessions
         FactoryView.OpenSessionRequested += info =>

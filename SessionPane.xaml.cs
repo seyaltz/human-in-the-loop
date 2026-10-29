@@ -317,7 +317,12 @@ public partial class SessionPane : UserControl
         _pending.Clear();
         Attachments.Children.Clear();
         Attachments.Visibility = Visibility.Collapsed;
-        if (!state.Working)
+        if (!state.Working && state.Handover is { } handover && !text.StartsWith('/'))
+        {
+            state.Handover = null;
+            Logged(GoFresh(state, handover, message), "fresh session");
+        }
+        else if (!state.Working)
         {
             _ = RunTurn(state, message);
         }
@@ -346,6 +351,8 @@ public partial class SessionPane : UserControl
 
     private async Task RunTurn(SessionState state, string message)
     {
+        // a turn here after all (a queued message, a /command): the handover would miss it
+        state.Handover = null;
         Add(state, new SessionEntry(SessionEntryKind.You, message));
         state.Running = new CancellationTokenSource();
         state.Steps = 0;
@@ -386,6 +393,15 @@ public partial class SessionPane : UserControl
         state.Running.Dispose();
         state.Running = null;
         state.Stopping = false;
+        TurnEnded(state);
+        if (wasNew && !state.IsNew) SessionSaved?.Invoke();
+        await WrapUp(state);
+    }
+
+    // a turn ended - one Dev break sent, or one the CLI started itself after a background task: the coach, the grade,
+    // the lessons and the call-back
+    private void TurnEnded(SessionState state)
+    {
         CloseCards(state, "No longer asked - the turn ended.");
         try
         {
@@ -398,13 +414,25 @@ public partial class SessionPane : UserControl
         }
         CallBack(state, "Claude finished: " + SessionAnswers.FirstLine(state.TurnQuestion));
         state.Notify();
-        if (wasNew && !state.IsNew) SessionSaved?.Invoke();
+    }
+
+    // then the session file as the turn left it (else its own writes look like someone else's and the next message
+    // restarts the process, stopping its background tasks), the context, the log line and the next queued message
+    private async Task WrapUp(SessionState state)
+    {
         Stamp(state);
         StampLater(state);
         await RefreshContext(state);
         if (state.Log is { } done)
         {
             Log($"turn ({state.Info.Id[..8]}): " + Watch.TurnSummary(done, state.LastTurnSeconds, state.LastTurnCost, state.ContextTokens, state.CompactAt, state.AiChecks));
+        }
+        // heavy and idle: the handover is written now, while nothing waits on it, and the next message starts fresh
+        if (state.Handover == null && Watch.GoFresh(state.ContextTokens, state.Working, state.Tasks.Count, state.Queued.Count))
+        {
+            state.Handover = AskHandover(state);
+            Add(state, new SessionEntry(SessionEntryKind.Note,
+                $"Context {Math.Round(state.ContextTokens / 1000):0}k - your next message starts a fresh session from a short handover, instead of re-sending all of this."));
         }
         if (state.Queued.Count > 0)
         {
@@ -476,6 +504,26 @@ public partial class SessionPane : UserControl
             state.Cost += process.LastTurnCost;
             state.Notify();
         });
+        process.FollowUpStarted += () => Dispatcher.Invoke(() =>
+        {
+            if (state.Process != process) return;
+            state.FollowUp = true;
+            state.Notify();
+        });
+        process.FollowUpEnded += () => Dispatcher.Invoke(async () =>
+        {
+            if (state.Process != process) return;
+            state.FollowUp = false;
+            try
+            {
+                TurnEnded(state);
+                await WrapUp(state);
+            }
+            catch (Exception ex)
+            {
+                Log("follow-up wrap-up failed: " + ex);
+            }
+        });
         process.UserMessage += (uuid, before) => Dispatcher.Invoke(() =>
         {
             // the turn on screen gets its rewind point once (a message sent during the turn joins it)
@@ -489,6 +537,7 @@ public partial class SessionPane : UserControl
             // a process replaced or closed on purpose is not the session's any more: its end is no error
             if (state.Process != process) return;
             state.Process = null;
+            state.FollowUp = false;
             if (state.Working && !state.Stopping)
             {
                 Add(state, new SessionEntry(SessionEntryKind.Error, "claude exited" + (err.Length > 0 ? ": " + err : "")));
@@ -500,7 +549,10 @@ public partial class SessionPane : UserControl
     {
         if (state.FileStamp is not { } stamp || ClaudeSessions.FileOf(state.Info.Id) is not { } file) return false;
         var info = new System.IO.FileInfo(file);
-        return info.Length != stamp.Length || info.LastWriteTimeUtc != stamp.Time;
+        if (info.Length == stamp.Length && info.LastWriteTimeUtc == stamp.Time) return false;
+        // written while this session's own process was talking: its own write (a background task's notification lands in
+        // the file before its follow-up turn shows), not someone else's
+        return state.Process is not { } process || info.LastWriteTimeUtc > process.LastActivity.ToUniversalTime().AddSeconds(5);
     }
 
     // the session file as its process left it: taken when the turn ends and again a few seconds later, as the CLI

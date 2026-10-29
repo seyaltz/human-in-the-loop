@@ -26,6 +26,13 @@ public static class Selftest
             TurnLogCases();
             StatsCases();
             WaitCases();
+            ResendCases();
+            BusyRepoCases();
+            DigestCases();
+            SteerCases();
+            HandOffCases();
+            FreshCases();
+            BackgroundCases();
             FlagCases();
             QualityCases();
             LessonCases();
@@ -33,9 +40,18 @@ public static class Selftest
             ReviewFixCases();
             ContextCases();
             TelemetryCases();
+            JudgeCases();
             Check(CliSetup.CompactWindowOf("{\"autoCompactWindow\": 200000}") == "200000", "Compact window: read from the user's settings");
             Check(CliSetup.CompactWindowOf("{\"env\": {}}") == null, "Compact window: none set -> none passed");
             Check(CliSetup.CompactWindowOf("not json") == null, "Compact window: unreadable settings -> none passed");
+            // the compaction line: numbers from compact_metadata (measured: pre 43480, post 14212, 6755 ms, manual)
+            Check(Compaction.Running(TimeSpan.FromSeconds(83)) == "⧗ Compacting the conversation · 1:23", "Compaction: the live line counts up");
+            string once = Compaction.Done(43480, 14212, 6755, "manual", 1);
+            Check(once == "✓ Compacted 43k → 14k in 7 s (/compact)", "Compaction: one compaction says what it did - got: " + once);
+            string twice = Compaction.Done(97000, 22000, 38000, "auto", 2);
+            Check(twice.EndsWith("· 2 in the last 10 min") && !twice.Contains("loop"), "Compaction: two close together are counted - got: " + twice);
+            Check(Compaction.Done(97000, 22000, 38000, "auto", 3).Contains("a loop"), "Compaction: three in 10 min are called a loop");
+            Check(Compaction.Done(0, 0, 0, "", 1) == "✓ Compacted", "Compaction: no metadata - no invented numbers");
             Check(Watch.IsQuickStep("commit and push"), "Quick step: \"commit and push\"");
             Check(Watch.IsQuickStep("rebuild and restart dev break"), "Quick step: \"rebuild and restart dev break\"");
             Check(!Watch.IsQuickStep("design a watcher that coaches long turns"), "Quick step: a design ask is not one");
@@ -99,6 +115,12 @@ public static class Selftest
             Lines.Add($"real: week {w.Start:yyyy-MM-dd} active {w.ActiveH:0.0} h, wait {w.WaitH:0.0}, tools {w.ToolH:0.0}, model {w.ModelH:0.0}, you {w.UserH:0.0}, calls {w.Calls}, failed {w.Failed}, interrupts {w.Interrupts}, corrections {w.Corrections}");
         }
         Lines.Add($"real: families in 3+ sessions: {data.Families(3).Count}");
+        // DEVBREAK_BUSY_CHECK="<transcript>|<repo>|<since, UTC>": replays the busy-repo check on a real transcript
+        if (Environment.GetEnvironmentVariable("DEVBREAK_BUSY_CHECK") is { Length: > 0 } spec && spec.Split('|') is [var transcript, var repo, var since])
+        {
+            DateTime at = DateTime.Parse(since, null, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal);
+            Lines.Add($"real: busy {repo} since {since}: {Factory.SessionInRepo(File.ReadLines(transcript), repo, at) ?? "no session working there"}");
+        }
     }
 
     // a log of finished calls: (tool, summary, error, result), a second apart, starting 10 minutes ago
@@ -138,12 +160,40 @@ public static class Selftest
             "Telemetry: an empty turn, context unknown");
     }
 
+    // the grade is only as good as its record: a judge shown "ok" for every step flagged a right answer's numbers 5
+    // times; a turn waiting on a background task is not over; a session's cost total can be far back in a big file
+    private static void JudgeCases()
+    {
+        var log = new TurnLog("recheck the map page");
+        log.Read(ToolUse("r1", "mcp__playwright__browser_run_code_unsafe", new { code = "open the map page" }));
+        log.Read(ToolResult("r1", false, new string('.', 400) + "39 destinations, from $138"));
+        string prompt = Rubric.Prompt(log, "The page shows 39 items from $138.");
+        Check(prompt.Contains("39 destinations, from $138"), "Judge: a step's result is in the record, not just \"ok\"");
+        Check(prompt.Contains("open the map page"), "Judge: a step with a blank summary shows its input");
+
+        var finished = new TurnLog("restart") { Answer = "Restarted, 12/12 up." };
+        for (int i = 0; i < SessionPane.GradeFrom; i++) finished.Read(ToolUse("g" + i, "Read", new { file_path = "f" + i }));
+        Check(SessionPane.Gradable(finished, 0), "Judge: a finished turn is graded");
+        Check(!SessionPane.Gradable(finished, 1), "Judge: a turn with a background task still running is not graded yet");
+
+        string file = Path.Combine(Path.GetTempPath(), "devbreak-cost-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        File.WriteAllText(file, "{\"type\":\"cost-state\",\"totalCostUSD\":7.53}\n" + string.Concat(Enumerable.Repeat("{\"type\":\"user\",\"pad\":\"" + new string('x', 1000) + "\"}\n", 400)));
+        try
+        {
+            Check(Math.Abs(ClaudeSessions.LastCostIn(file) - 7.53) < 1e-9, "Cost: the session's total is found 400 KB before the end");
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
     // 4 different Playwright scripts: the tool keeps its script in "code", which the summary does not show (it is blank),
     // so only the whole input tells them apart - the case that flagged real progress as stuck
     private static void SameInputCases()
     {
         string[] scripts = ["open the deal link", "close the other tabs, go to the page", "take a screenshot", "type into the chat box"];
-        TurnLog different = new("check the radar"), same = new("check the radar");
+        TurnLog different = new("check the map page"), same = new("check the map page");
         for (int i = 0; i < 4; i++)
         {
             different.Read(ToolUse("d" + i, "mcp__playwright__browser_run_code_unsafe", new { code = scripts[i] }));
@@ -155,9 +205,31 @@ public static class Selftest
         Check(Watch.FlagRule(same, DateTime.Now, false)?.Rule == "same-4", "Flag: 4 identical scripts are the same call");
     }
 
+    // one step polling a page that never loads: 3 minutes in one browser call, which the step rules (they read finished
+    // steps) and "silent" (a running step is waiting) both let through
+    private static void SlowStepCases()
+    {
+        DateTime now = DateTime.Now;
+        TurnLog Running(string tool, string command, double minutes)
+        {
+            TurnLog log = LogOf(("Read", "a.cs", false, "x"));
+            log.Steps.Add(new TurnStep("r", tool, "", tool, now.AddMinutes(-minutes), false) { Command = command, Input = "{\"code\":\"poll the deal page\"}" });
+            return log;
+        }
+        (string Rule, string Reason)? polling = Watch.FlagRule(Running("mcp__playwright__browser_run_code_unsafe", "", 3), now, true);
+        Check(polling?.Rule == "slow-step" && polling.Value.Reason.Contains("3 min") && polling.Value.Reason.Contains("poll the deal page"),
+            "Slow step: one browser call 3 min with nothing back is flagged, with what it runs - got: " + polling?.Reason);
+        Check(Watch.FlagRule(Running("mcp__playwright__browser_run_code_unsafe", "", 1.5), now, true) == null, "Slow step: 1.5 min is not yet");
+        Check(Watch.FlagRule(Running("Bash", "npm run build", 4), now, true, TimeSpan.FromMinutes(6)) == null,
+            "Slow step: a build that usually takes 6 min is not slow at 4");
+        Check(Watch.FlagRule(Running("Bash", "npm run build", 10), now, true, TimeSpan.FromMinutes(6))?.Rule == "slow-step",
+            "Slow step: the same build at 10 min is");
+    }
+
     private static void FlagCases()
     {
         SameInputCases();
+        SlowStepCases();
         DateTime now = DateTime.Now;
         var failing = ("Bash", "npm run build", true, "error TS2304");
         Check(Watch.Flag(LogOf(failing, failing, failing), now.AddMinutes(-9.9), false)?.StartsWith("the same Bash call failed 3 times in a row") == true,
@@ -283,6 +355,269 @@ public static class Selftest
         List<SessionStats.CommandFamily> left = SessionStats.Uncovered(families, skills);
         Check(left.Select(f => f.Key).SequenceEqual(["docker compose"]),
             "Learn: a family a skill already names (gcloud run) and an ad-hoc one (python -) are left out - got: " + string.Join(", ", left.Select(f => f.Key)));
+    }
+
+    private static void BackgroundCases()
+    {
+        // measured: the CLI writes a background task's output to %TEMP%\claude\<project>\<session>\tasks\<id>.output
+        string root = Path.Combine(Path.GetTempPath(), "devbreak-selftest-bg");
+        string tasks = Path.Combine(root, "C--some-folder", "sess-1", "tasks");
+        Directory.CreateDirectory(tasks);
+        File.WriteAllText(Path.Combine(tasks, "b1.output"), "x");
+        try
+        {
+            Check(BackgroundWatch.OutputFile(root, "sess-1", "b1") == Path.Combine(tasks, "b1.output"), "Background: the task's output file is found by session and task id");
+            Check(BackgroundWatch.OutputFile(root, "sess-1", "b2") == null, "Background: no file yet -> null");
+        }
+        finally { Directory.Delete(root, true); }
+
+        Check(BackgroundWatch.Tail("a\n\nb\r50%\r100%\nc\n", 2).SequenceEqual(["100%", "c"]),
+            "Background: the tail keeps the last lines, a progress line as it ends (after its last \\r), no blanks - got: " +
+            string.Join("|", BackgroundWatch.Tail("a\n\nb\r50%\r100%\nc\n", 2)));
+
+        const string waitOnBuild = "id=502f6581-c16f-4e20-8fb7-f941fc479266; until s=$(gcloud builds describe $id --project=my-project --region=me-west1 --format=\"value(status)\"); do sleep 10; done";
+        Check(BackgroundWatch.CloudBuild(waitOnBuild, "") == ("502f6581-c16f-4e20-8fb7-f941fc479266", "my-project", "me-west1"),
+            "Background: a wait on a Cloud Build gives its id, project and region");
+        Check(BackgroundWatch.CloudBuild("gcloud builds triggers run t1 --project=p1 --region=r1", "1282b8f8-526d-4f56-9af1-ee30f0863344\tabc") == ("1282b8f8-526d-4f56-9af1-ee30f0863344", "p1", "r1"),
+            "Background: a triggered build's id is read from its output");
+        Check(BackgroundWatch.CloudBuild("npm run build", "") == null, "Background: a local build is not a Cloud Build");
+
+        List<(string Name, string Status)> steps = BackgroundWatch.BuildSteps(
+            """{"status":"WORKING","steps":[{"id":"build","status":"SUCCESS"},{"name":"gcr.io/cloud-builders/docker","status":"WORKING"},{"id":"push"}]}""");
+        Check(steps.SequenceEqual([("build", "SUCCESS"), ("docker", "WORKING"), ("push", "QUEUED")]),
+            "Background: build steps by id, else the builder's last name; no status yet is QUEUED - got: " + string.Join(", ", steps));
+
+        Check(BackgroundWatch.Rollout("gcloud deploy rollouts describe ro-1 --release=r-1 --delivery-pipeline=pipe --project=p --region=r --format=\"value(state)\"")
+              == ("ro-1", "r-1", "pipe", "p", "r"), "Background: a wait on a Cloud Deploy rollout gives its rollout, release, pipeline, project and region");
+        Check(BackgroundWatch.Rollout("ro=r-c55-0001; until s=$(gcloud deploy rollouts describe $ro --release=r-c55 --delivery-pipeline=web --project=p --region=r); do sleep 5; done")
+              == ("r-c55-0001", "r-c55", "web", "p", "r"), "Background: the rollout name is read from the variable it was set in");
+        // the values go back into a gcloud command: anything a shell would read as code means no poll at all
+        Check(BackgroundWatch.Rollout("ro=$(touch x); gcloud deploy rollouts describe $ro --release=r --delivery-pipeline=p --project=p --region=r") == null,
+            "Background: a rollout name with shell code in it is not polled");
+        Check(BackgroundWatch.Rollout("gcloud deploy rollouts describe r1 --release=`id` --delivery-pipeline=p --project=p --region=r") == null,
+            "Background: a flag with shell code in it is not polled");
+        Check(BackgroundWatch.CloudBuild("gcloud builds describe 502f6581-c16f-4e20-8fb7-f941fc479266 --project=$(id) --region=r", "") == null,
+            "Background: a build with shell code in its project is not polled");
+    }
+
+    private static void FreshCases()
+    {
+        Check(Watch.GoFresh(165_000, working: false, backgroundTasks: 0, queued: 0), "Fresh: an idle session at 165k goes fresh on the next message");
+        Check(!Watch.GoFresh(119_000, false, 0, 0), "Fresh: under 120k it stays");
+        Check(!Watch.GoFresh(165_000, true, 0, 0), "Fresh: not while a turn runs");
+        Check(!Watch.GoFresh(165_000, false, 1, 0), "Fresh: not while a background task runs - its result comes back to this session");
+        Check(!Watch.GoFresh(165_000, false, 0, 1), "Fresh: not with a queued message - it goes to this session first");
+        string first = Watch.FreshMessage("Goal: deploy.", "now check the logs");
+        Check(first.Contains("Goal: deploy.") && first.EndsWith("now check the logs"), "Fresh: the first message is the handover, then what you wrote - got: " + first);
+    }
+
+    private static void DigestCases()
+    {
+        // the shapes of two real answers (2026-10-28): one with TITLE:, one opening with a bold sentence
+        const string answer = """
+            TITLE: Hotel search reproduced locally: about 2 s on a warm search service
+
+            **I reproduced it locally.** I sent the search three times.
+
+            | Call | Time |
+            |---|---|
+            | 1 | 1925 ms |
+
+            **Not verified:**
+            - **A cold-JVM first call.** It needs a restart of its PID.
+            - Which jar the JVM loaded.
+
+            The rerun script is `time-search.ps1`.
+
+            QUESTIONS:
+            1. Should I restart search service and run the script right after startup? Suggested answer: yes. Today's numbers come from a warm JVM.
+            2. Should a follow-up task look at the Redis list at `CacheConfig.java:100-102`? Suggested answer: only as a proposal,
+               since core library changes need it.
+
+            EVIDENCE: api, logs, perf
+            """;
+        Check(FactoryDigest.Headline(answer, "resend the request") == "Hotel search reproduced locally: about 2 s on a warm search service",
+            "Digest: the headline is the answer's TITLE - got: " + FactoryDigest.Headline(answer, "x"));
+        Check(FactoryDigest.Headline("**The first search is slow only on a fresh instance.** About four caches...", "https://x/y") == "The first search is slow only on a fresh instance.",
+            "Digest: with no TITLE, the answer's opening bold sentence");
+        Check(FactoryDigest.Headline("Plain answer.", "the task title") == "the task title", "Digest: else the task's own title");
+
+        List<FactoryQuestion> asks = FactoryDigest.Questions(answer);
+        Check(asks.Count == 2, "Digest: both questions are found - got " + asks.Count);
+        Check(asks.Count == 2 && asks[0].Ask == "Should I restart search service and run the script right after startup?"
+              && asks[0].Suggested == "yes. Today's numbers come from a warm JVM.", "Digest: a question splits into the ask and its suggested answer - got: " + (asks.Count > 0 ? asks[0] : null));
+        Check(asks.Count == 2 && asks[1].Suggested == "only as a proposal, since core library changes need it.", "Digest: a question that wraps onto the next line is read whole - got: " + (asks.Count > 1 ? asks[1].Suggested : ""));
+        Check(FactoryDigest.Questions("1. Should the caches go into Redis? I suggest yes, after a check.").Count == 0, "Digest: numbered lines outside QUESTIONS: are not questions");
+        bool overflowSafe;
+        try { overflowSafe = FactoryDigest.Questions("QUESTIONS:\n99999999999. Too big a number?\n2. Fine?").Count == 1; }
+        catch (OverflowException) { overflowSafe = false; }
+        Check(overflowSafe, "Digest: a question number too big for an int is skipped, not thrown on every refresh");
+        List<FactoryQuestion> suggest = FactoryDigest.Questions("QUESTIONS:\n1. Should the caches go into Redis? I suggest yes, after a check.");
+        Check(suggest.Count == 1 && suggest[0].Suggested == "yes, after a check.", "Digest: 'I suggest' reads as the suggested answer");
+
+        (string body, string notVerified) = FactoryDigest.Body(answer);
+        Check(!body.Contains("TITLE:") && !body.Contains("QUESTIONS:") && !body.Contains("EVIDENCE:") && !body.Contains("Should I restart"),
+            "Digest: the body leaves out the title, the questions and the evidence line - got: " + body);
+        Check(body.Contains("I reproduced it locally") && body.Contains("| 1 | 1925 ms |") && body.Contains("time-search.ps1"), "Digest: the body keeps the findings, tables and what follows");
+        Check(!body.Contains("Not verified") && notVerified.Contains("A cold-JVM first call") && notVerified.Contains("Which jar"),
+            "Digest: 'Not verified' is set apart - got: " + notVerified);
+
+        const string note = "Read the report and answer questions 1-4.\n\nWhy it stopped: Could not switch your checkout: fatal: invalid reference\n\nProposed changes to the factory (for you to approve):\n- Retry a busy session.";
+        (string action, string why) = FactoryDigest.SplitNote(note);
+        Check(action == "Read the report and answer questions 1-4." && why == "Could not switch your checkout: fatal: invalid reference",
+            $"Digest: the manager's note splits into what to do and why it stopped - got: {action} | {why}");
+        Check(FactoryDigest.SplitNote("Claude needs you: sign in.") == ("Claude needs you: sign in.", ""), "Digest: a note with no 'Why it stopped' is all action");
+
+        string sent = FactoryDigest.Answers(asks, new Dictionary<int, string> { [1] = FactoryDigest.Yes, [2] = "no - leave the core library as it is" });
+        Check(sent.Contains("1. Should I restart search service") && sent.Contains("Yes, as you suggested: yes. Today's numbers")
+              && sent.Contains("2. Should a follow-up task") && sent.Contains("no - leave the core library as it is"), "Digest: the answers go back as one message - got: " + sent);
+        Check(FactoryDigest.Answers(asks, new Dictionary<int, string> { [2] = FactoryDigest.No }) is var one && !one.Contains("1.") && one.Contains("No."),
+            "Digest: only the answered questions are sent");
+
+        Check(FactoryDigest.Clean("Add them to `CacheConfig.java:100-102`, **then** check") == "Add them to CacheConfig.java:100-102, then check",
+            "Digest: plain text for a label has no markdown marks - got: " + FactoryDigest.Clean("Add them to `CacheConfig.java:100-102`, **then** check"));
+        // 1920x1080, 2026-10-28: the card took ~650 of the ~760 px under the line and left Activity ~100 px
+        Check(FactoryView.CardMaxHeight(760) == 380, "Card: half the room under the line, the activity gets the other half - got " + FactoryView.CardMaxHeight(760));
+        Check(FactoryView.CardMaxHeight(300) == 180, "Card: never under 180 px on a small window");
+        DateTime now = new(2026, 10, 28, 14, 0, 0);
+        Check(FactoryDigest.Ago(new DateTime(2026, 10, 28, 11, 58, 0), now) == "11:58 · 2 h ago", "Digest: when it stopped - got: " + FactoryDigest.Ago(new DateTime(2026, 10, 28, 11, 58, 0), now));
+        Check(FactoryDigest.Ago(new DateTime(2026, 10, 28, 13, 55, 0), now) == "13:55 · 5 min ago", "Digest: minutes ago");
+        Check(FactoryDigest.Ago(new DateTime(2026, 10, 27, 9, 0, 0), now) == "27/10 09:00 · 1 d ago", "Digest: another day");
+    }
+
+    private static void HandOffCases()
+    {
+        // a research run that proved a change by editing another repo (2026-10-28): Development takes it in that repo
+        static bool IsRepo(string dir) => dir == @"C:\r\core";
+        const string outside = @"C:\r\core\ext\src\Cache.java - added ""Places"" to the Redis list, plus its registration - C:\r\core\ext\src\Cache.java.bak";
+        Check(Factory.OutsideRepo([outside], @"C:\r", IsRepo) == @"C:\r\core", "Hand off: the repo of the change it made outside its own - got " + Factory.OutsideRepo([outside], @"C:\r", IsRepo));
+        Check(Factory.OutsideRepo(["changed the proxy settings"], @"C:\r", IsRepo) == null, "Hand off: an outside change with no path names no repo");
+        Check(Factory.OutsideRepo([@"D:\elsewhere\x.txt - y"], @"C:\r", IsRepo) == null, "Hand off: a path in no repo names none");
+        // the path is the model's text: it may only pick a repo inside the folder the research ran in
+        static bool AnyRepo(string dir) => dir is @"C:\other\repo" or @"C:\r\core";
+        Check(Factory.OutsideRepo([@"C:\other\repo\a.cs - x"], @"C:\r", AnyRepo) == null, "Hand off: a repo outside the run's folder is never the target");
+        Check(Factory.OutsideRepo([@"C:\r\..\other\repo\a.cs - x"], @"C:\r", AnyRepo) == null, "Hand off: '..' cannot climb out of the run's folder");
+        Check(Factory.OutsideRepo([@"C:\rx\core\a.cs - x"], @"C:\r", d => d == @"C:\rx\core") == null, "Hand off: a sibling folder sharing the name's start is outside");
+
+        var research = new FactoryRun
+        {
+            Id = "r1", Title = "First search slow", Department = FactoryDepartment.Research, Task = "reproduce it locally",
+            Repo = @"C:\r\search", BaseBranch = "main", Folder = @"C:\r", Result = "Places in Redis: the first search 14 s -> 6 s.",
+        };
+        research.OutsideChanges.Add(outside);
+        (string task, string folder, string branch) = Factory.HandOffTask(research, IsRepo);
+        Check(folder == @"C:\r\core" && branch == "", "Hand off: research goes to the repo it changed, on that repo's own branch - got " + folder + " / " + branch);
+        Check(task.Contains("research run \"First search slow\"") && task.Contains("Places in Redis: the first search 14 s -> 6 s.")
+              && task.Contains("Cache.java - added \"Places\"") && task.Contains("draft PR"), "Hand off: the task carries the findings and the change it tested - got: " + task);
+        research.OutsideChanges.Clear();
+        (_, string ownFolder, string ownBranch) = Factory.HandOffTask(research, IsRepo);
+        Check(ownFolder == @"C:\r\search" && ownBranch == "main", "Hand off: with no outside change, the run's own repo and base");
+        var diagnosed = new FactoryRun { Id = "d1", Title = "Login fails", Department = FactoryDepartment.Troubleshooting, Task = "login 500", Repo = @"C:\r\web", BaseBranch = "dev", Result = "Null session." };
+        Check(Factory.HandOffTask(diagnosed, IsRepo).Task.Contains("Fix the problem diagnosed by the troubleshooting run"), "Hand off: a diagnosis is still handed over as a fix");
+    }
+
+    private static void SteerCases()
+    {
+        // measured 2026-10-28 (claude -p stream-json, --replay-user-messages): a message written mid-turn is echoed back
+        // when Claude takes it in, at its next tool step, and the same turn ends with one result that follows it
+        var steers = new ClaudeSessions.SteerTracker();
+        Check(steers.TurnEnds(), "Steer: with nothing sent, a result ends the turn");
+        steers.Sent("do it all locally");
+        Check(!steers.TurnEnds(), "Steer: a message not taken in yet - the result is not the end, its own turn follows");
+        Check(!steers.Echoed("Run the search twice."), "Steer: the turn's own prompt echoed back is not a steer");
+        Check(steers.Echoed("do it all locally") && steers.TurnEnds(), "Steer: once it is echoed back, the next result ends the turn");
+
+        string Echo(string content) => """{"type":"user","message":{"role":"user","content":""" + content + "}}";
+        JsonElement Root(string json) => JsonDocument.Parse(json).RootElement;
+        Check(ClaudeSessions.SteerTracker.EchoText(Root(Echo("\"do it all locally\""))) == "do it all locally", "Steer: an echo with text content is read");
+        Check(ClaudeSessions.SteerTracker.EchoText(Root(Echo("""[{"type":"text","text":"do it all locally"}]"""))) == "do it all locally", "Steer: an echo with text blocks is read");
+        Check(ClaudeSessions.SteerTracker.EchoText(Root(Echo("""[{"type":"tool_result","tool_use_id":"t1","content":"one"}]"""))) == null, "Steer: a tool result is not an echo");
+        Check(ClaudeSessions.SteerTracker.EchoText(Root("""{"type":"assistant","message":{"content":[]}}""")) == null, "Steer: an assistant line is not an echo");
+
+        Check(Factory.SteerMessage("do it all locally").EndsWith("do it all locally") && Factory.SteerMessage("x").Contains("while you work"),
+            "Steer: the message says it comes from the developer while the task works");
+        Check(Factory.WithSteers("Plan the change.", ["use the local stack", "no prod calls"]) is var p
+              && p.Contains("- use the local stack") && p.Contains("- no prod calls") && p.EndsWith("Plan the change."), "Steer: held messages go first in the next turn - got: " + Factory.WithSteers("Plan.", ["a"]));
+        Check(Factory.WithSteers("Plan the change.", []) == "Plan the change.", "Steer: no held messages, the prompt as it is");
+    }
+
+    private static void ResendCases()
+    {
+        // measured: claude --session-id on an id that has a transcript fails "Session ID ... is already in use"; a reply
+        // to an investigation asks for a new session on the run's own id (13:18, after a restart closed the open process)
+        Check(!ClaudeSessions.LiveSession.StartsNew(isNew: true, transcript: @"C:\x\0a1b2c3d.jsonl"), "Session: a new turn on a session with a transcript resumes it");
+        Check(ClaudeSessions.LiveSession.StartsNew(isNew: true, transcript: null), "Session: a new turn with no transcript yet starts the session");
+        Check(!ClaudeSessions.LiveSession.StartsNew(isNew: false, transcript: null), "Session: a resume stays a resume");
+
+        // an answered run's branch is deleted when it finishes; its changes ask for no branch (10:32 "invalid reference")
+        var answered = new FactoryRun { Id = "t1", Department = FactoryDepartment.Research, NoChange = true, Result = "The first search is slow." };
+        Check(!Factory.NeedsBranch(answered), "Resend: an answered run is revised without its (deleted) branch");
+        var built = new FactoryRun { Id = "t2", Department = FactoryDepartment.Development, Result = "" };
+        Check(Factory.NeedsBranch(built), "Resend: a run that built a change is revised on its branch");
+        Check(!Factory.NeedsBranch(new FactoryRun { Id = "t3", FolderWide = true }), "Resend: a folder-wide run has no branch");
+        // Continue takes the same rule (11:57 "invalid reference" on Continue)
+        answered.InCheckout = built.InCheckout = true;
+        Check(!Factory.ResumesOnBranch(answered), "Continue: an answered run in the checkout goes on without its (deleted) branch");
+        Check(Factory.ResumesOnBranch(built), "Continue: a run that built a change goes on on its branch");
+        string gone = Factory.SwitchFailed("devbreak/x-1", "fatal: invalid reference: devbreak/x-1");
+        Check(gone.Contains("no longer exists") && !gone.Contains("fatal:"), "Continue: a deleted branch is said plainly - got: " + gone);
+        // git's own words (2.52) when local changes block a switch: then they are stashed and the switch tried again
+        Check(Factory.SwitchBlockedByLocalChanges("error: Your local changes to the following files would be overwritten by checkout:\n\tb.txt\nAborting"),
+            "Checkout: a switch blocked by local changes is seen");
+        Check(Factory.SwitchBlockedByLocalChanges("error: The following untracked working tree files would be overwritten by checkout:\n\tc.txt"),
+            "Checkout: a switch blocked by untracked files is seen");
+        Check(!Factory.SwitchBlockedByLocalChanges("fatal: invalid reference: devbreak/x-1"), "Checkout: a missing branch is not stashed for");
+        Check(Factory.SwitchFailed("devbreak/x-1", "error: your local changes would be overwritten").Contains("would be overwritten"),
+            "Continue: another switch failure keeps git's words");
+
+        Check(Factory.LatestArtifact(answered).Contains("The first search is slow.") && !Factory.LatestArtifact(answered).Contains("report:"),
+            "Resend: the revision carries the latest answer, and no report line while there is no report");
+        string report = Path.Combine(AppContext.BaseDirectory, "traces", "t1-report.html");
+        Directory.CreateDirectory(Path.GetDirectoryName(report)!);
+        File.WriteAllText(report, "<html></html>");
+        try
+        {
+            Check(Factory.LatestArtifact(answered).Contains("Its report: " + report),
+                "Resend: the report on disk is named even after a failed round cleared the run's link - got: " + Factory.LatestArtifact(answered));
+        }
+        finally { File.Delete(report); }
+    }
+
+    // a session working in the repo a run would take: measured on 2026-10-29, a research run switched a checkout
+    // at 07:07:44 while a session had edited a stylesheet there minutes before
+    private static void BusyRepoCases()
+    {
+        string repo = @"C:\work\repos\app";
+        DateTime since = new(2026, 10, 29, 4, 55, 0, DateTimeKind.Utc);
+        string Step(string at, string tool, string input) =>
+            $$$"""{"type":"assistant","timestamp":"{{{at}}}","message":{"content":[{"type":"tool_use","id":"t","name":"{{{tool}}}","input":{{{input}}}}]}}""";
+        string edit = Step("2026-10-29T04:58:35.120Z", "Edit", """{"file_path":"C:\\Work\\Repos\\App\\src\\map\\Card.sass","old_string":"a","new_string":"b"}""");
+        Check(Factory.SessionInRepo([edit], repo, since) is { } e && e.Contains("Card.sass"),
+            "Busy repo: a session that edited a file in the repo (any case) is working there - got: " + Factory.SessionInRepo([edit], repo, since));
+        string bash = Step("2026-10-29T05:03:20.000Z", "Bash", """{"command":"cd /c/work/repos/app && git switch -c feature/x"}""");
+        Check(Factory.SessionInRepo([bash], repo, since) != null, "Busy repo: a shell command run in the repo (Git Bash path) counts");
+        string borrow = Step("2026-10-29T05:01:36.000Z", "Bash", """{"command":"node -e \"require('C:/work/repos/app/node_modules/playwright')\""}""");
+        Check(Factory.SessionInRepo([borrow], repo, since) == null, "Busy repo: a command that only loads a file from the repo does not work there");
+        string gitC = Step("2026-10-29T05:01:40.000Z", "PowerShell", """{"command":"git -C 'C:\\work\\repos\\app' stash"}""");
+        Check(Factory.SessionInRepo([gitC], repo, since) != null, "Busy repo: git -C on the repo counts");
+        string sibling = Step("2026-10-29T05:00:00.000Z", "Edit", """{"file_path":"C:\\work\\repos\\app-peek\\src\\a.ts"}""");
+        Check(Factory.SessionInRepo([sibling], repo, since) == null, "Busy repo: a sibling folder with the same prefix is another repo");
+        string old = Step("2026-10-29T04:40:00.000Z", "Edit", """{"file_path":"C:\\work\\repos\\app\\src\\a.ts"}""");
+        Check(Factory.SessionInRepo([old], repo, since) == null, "Busy repo: an edit before the quiet window is not working now");
+        string read = Step("2026-10-29T05:01:00.000Z", "Read", """{"file_path":"C:\\work\\repos\\app\\src\\a.ts"}""");
+        Check(Factory.SessionInRepo([read], repo, since) == null, "Busy repo: only reading the repo does not hold it");
+        Check(Factory.SessionInRepo(["not json", "{\"type\":\"user\"}"], repo, since) == null, "Busy repo: lines that are not steps are skipped");
+
+        // research and answers read the checkout as it is - only a change to build takes it (switches the branch)
+        var reading = new FactoryRun { Id = "r1", Repo = repo, Worktree = repo, Branch = "devbreak/x-r1", BaseBranch = "feature/card" };
+        string where = Factory.WhereText(reading);
+        Check(where.Contains("as it is") && where.Contains("feature/card") && where.Contains("Change no file") && !where.StartsWith("You are working"),
+            "Checkout: before the build the run reads the checkout as it is, on the developer's branch - got: " + where);
+        Check(Factory.NeedsCheckout(reading), "Checkout: a run not yet on its branch takes the checkout to build");
+        reading.InCheckout = true;
+        Check(!Factory.NeedsCheckout(reading) && Factory.WhereText(reading).StartsWith("You are working") && Factory.WhereText(reading).Contains("on a new branch"),
+            "Checkout: a run already on its branch builds there");
+        Check(!Factory.NeedsCheckout(new FactoryRun { Id = "r2", FolderWide = true }), "Checkout: a folder-wide run never takes a checkout");
     }
 
     private static void WaitCases()

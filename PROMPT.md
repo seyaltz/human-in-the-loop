@@ -412,9 +412,24 @@ started in a folder or continued, worked in like the CLI, and continuable with `
   of a 1M window hid that (`get_context_usage`: `totalTokens`, `maxTokens`, `percentage`, `autoCompactThreshold`,
   `categories`; tooltip and menu list them, coral from 150k or 80%; the menu offers "/compact " and "Fresh session
   from a handover": a side question writes a short handover, and a new session in the folder starts with it in the
-  box, unsent); "$x.xx this run"; and a
-  "⧗ <what>  ×" chip per background task (`task_started`, gone at `task_notification` / `task_updated` with a final
-  status; × sends `stop_task`). Mode, model and effort are kept per session in `session-settings.json` next to the app
+  box, unsent). A session idle at 120k+ (`Watch.GoFresh`: no background task, nothing queued) gets that handover asked
+  for when its turn ends, and the next message starts the fresh session with "handover + the message" (compaction
+  left 66k and refilled to 167k in 30-45 min; `DEVBREAK_FRESH_AT` lowers the limit for a test copy). A compaction
+  gets a line in the chat, since nothing else shows while it runs (30-60 s on a big session): "⧗ Compacting the
+  conversation · m:ss", counting up from the `status: "compacting"` system line, then "✓ Compacted 98k → 22k in 38 s
+  (auto)" from `compact_boundary`'s `compact_metadata` (`pre_tokens`, `post_tokens`, `duration_ms`, `trigger`), or "✗
+  Compaction failed: <why>" from a `compact_result` that is not success. Two within 10 minutes add "· N in the last 10
+  min"; three are called a loop - what loads again after each one fills the context back to the limit (measured: 7 in
+  7 minutes, 79k right after each against a 97k limit) - with the way out: a fresh session from a handover, or a
+  bigger `autoCompactWindow`, which a running process keeps the old value of until it restarts; "$x.xx this
+  run"; and a "⧗ <what>  ×" chip per background task (`task_started`, gone at `task_notification` / `task_updated`
+  with a final status in its `patch`; × sends `stop_task`). Each background task also gets a **card** in the chat
+  (`SessionPane.Background`, `BackgroundWatch`), folded to "⧗ <what> · m:ss · <last output line>": every 2 s it reads
+  the task's output file (`%TEMP%\claude\<project>\<session>\tasks\<id>.output`), and when the command runs or waits
+  on a Cloud Build (`gcloud builds` + a build id in the command or output) or a Cloud Deploy rollout, every 15 s
+  `gcloud builds describe` / `gcloud deploy rollouts describe` on this machine - steps with ✓ ⧗ ✗ and "build 9/15".
+  Open, it shows the command, those steps and the last 12 lines; it ends "✓ <the notification's summary> · m:ss".
+  Nothing is asked of Claude. Mode, model and effort are kept per session in `session-settings.json` next to the app
   (the user's data); a session never set starts in Bypass with the CLI's default model and effort.
   **Cards** (`SessionPane.Controls`) - the CLI's `can_use_tool` questions, in the transcript (violet tint, violet
   edge, rounded); the live box says "Waiting for you: ...". A tool: "Claude wants to use <tool>", the whole of what it
@@ -595,30 +610,43 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      only `Read,Grep,Glob` (read-only, enforced); a Jira issue or a spec needs the machine's own tools to be read, so
      it gets the developer's setup with bypass minus `Edit`, `Write`, `NotebookEdit` and the publish denies (the
      shell can still change files - the same access the plan turn has). Then the base branch and the remembered verify command for it.
-  1. **Workspace - the developer's own checkout by default** (no copy: its dependencies and build output are already
-     there; a worktree is a second copy of the files - 603 MB with a fresh `npm ci` in a measured run - and a deep
-     repo can pass Windows' 260-character path limit under a longer folder). The run checks the checkout can be used
+  1. **Workspace - always the developer's own checkout, never a worktree** (no copy: its dependencies and build output
+     are already there, and what runs locally is served from it; a worktree is a second copy of the files - 603 MB with
+     a fresh `npm ci` in a measured run - whose work had to be merged back by hand). **Until there is a change to build
+     the run only reads the checkout as it is** - the developer's branch and uncommitted work, nothing switched, no lock
+     (the plan, research and answer sessions are told so, and to change, switch, stash or commit nothing): research and
+     answers never change a file, and switching for them once pulled the branch from under a session editing there.
+     The workspace step below runs when the build starts. **A session working in the repo first gets to finish**: any
+     Claude session transcript (Dev break's or a terminal's, not the run's own) that edited a file in the repo, or ran a
+     command that goes into it (cd, pushd, Set-Location, git -C - not one that only loads a file from it), in the last
+     10 minutes makes the run wait ("Waiting: a Claude session (<id>) edited <file> at <time> ..."); it re-reads the
+     transcripts every 30 s, goes on by itself when they are quiet, and **Take it anyway** goes on at once. Stop ends
+     the wait. Then the base commit is read again (the session may have committed). The run checks the checkout can be used
      and **asks when it cannot** (stops at Needs you with the question): another run working in it ("... Wait for it
-     and press Continue - or press Use a separate worktree ...") or git cannot read it. Then it notes the branch the checkout is on (or its commit when
+     and press Continue.") or git cannot read it. Then it notes the branch the checkout is on (or its commit when
      detached), `git switch -c devbreak/<slug>-<id> <base commit>` (or `git switch` to it when the branch exists) and
      works there. **The developer's own local changes do not block it** (temp files, local settings - modified,
-     staged or untracked): their paths are noted with a SHA-256 fingerprint of the content and logged ("Your N local
-     changes stay yours ..."); the switch carries them along untouched. They are never committed: "did the run change
+     staged or untracked): their paths are noted with a SHA-256 fingerprint of the content, a snapshot of them is taken
+     with `git stash create` (nothing in the checkout changes), and they are logged ("Your N local changes stay in place
+     ..."); the switch carries them along untouched. They are never committed: "did the run change
      anything" and "is its work committed" count only the run's own changes (a noted file counts only once its
      content differs); the review diff is `git diff <base> -- . :(exclude,literal)<each local file>` with the run's new
      files marked `--intent-to-add -- :(literal)<file>` (no `git add -A`, so the developer's index is untouched;
      literal, because a plain pathspec is a glob: excluding `f[1].txt` also hid `f1.txt` from the reviewer in a test); the PR step is told the files
-     and to stage only the change's files by name. Before verify and before the PR, a local change whose content
-     differs stops the run and asks ("The change touched files that hold your own local changes: ... undo the run's
-     edits there and press Continue - or commit or stash your own changes first, or run it in a separate worktree").
-     A switch git refuses (a local change in the way) stops it too. When a run (or its continue, feedback, PR anyway)
+     and to stage only the change's files by name. **On a conflict the developer's changes are stashed, not the run
+     stopped.** Before verify and before the PR, a local change whose content differs (the run edited that file): the
+     run's edits alone are worked out with `git merge-file --object-id <branch blob> <their blob from the snapshot>
+     <the file now>`, their version is put back (`git restore --source=<snapshot>`) and stashed by path (`git stash
+     push -m "devbreak <id>: your local changes in N files the run needed" -- <files>`), and the merged file is
+     written (`git cat-file --filters`, so line endings stay); the files leave the local list and are logged. Only an
+     overlapping edit (merge-file reports conflicts) or a file that was not in git stops the run and asks. A switch git
+     refuses ("would be overwritten by checkout") stashes all local changes (`git stash push --include-untracked -m
+     "devbreak <id>: your local changes, stashed to switch to <branch>"`), notes them again and switches. When a run (or its continue, feedback, PR anyway)
      is done, the checkout goes back to that branch - local changes carried along - if the run's own work is
      committed; otherwise it stays on the run's branch and the run says so. Continue, feedback and PR anyway first
      switch the checkout to the run's branch.
-     **Use a separate worktree** (when the run asked): `git -c core.longpaths=true worktree add <beside the repo:
-     <repo>-<4 of the id>> -b <branch> <base commit>` (or the existing branch), and the run goes on there, the
-     checkout untouched. A worktree shares its repo's Claude memory (verified: both report the same `memory_paths.auto`).
-  2. **Plan**: a new Claude Code session in the worktree (as in Sessions: full setup, bypass) reads the task - Jira
+     Old records with a separate worktree still show and clean up; no new run makes one.
+  2. **Plan**: a new Claude Code session in the repo folder (as in Sessions: full setup, bypass) reads the task - Jira
      and spec with the tools on the machine - first understands the mission with the machine's skills, MCP servers
      and tools (running the app or its services, reading logs or data, inspecting or debugging a running service),
      learns how the repo is built, run and tested and how the change can be seen in the running app, and replies `TITLE:`, numbered steps and, when no verify command was
@@ -662,7 +690,7 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   4b. **Prove**: the session proves the change - starts the app and the services it needs with the machine's skills,
      MCP servers and tools, from the worktree; exercises what the task changed; stops what it started - and produces
      **the proof the plan chose** for this feature. The plan ends with `EVIDENCE: <kinds>` from **screenshots** (the
-     running app at the sizes that matter, a "before" from the base commit in a separate worktree when it helps),
+     running app at the sizes that matter, a "before" taken before the change when it helps - never in a worktree),
      **video** (a short recording of the interaction), **red-green** (the new tests fail without the change and pass
      with it, both outputs), **coverage** (of the changed lines, with the uncovered ones), **mutation** (scoped to the
      changed files - the score and surviving mutants), **crap** (complexity and coverage of the changed methods),
@@ -731,7 +759,8 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
     service's config): each file copied to `<file>.bak-devbreak` first and reported as `OUTSIDE: <path> - <what> -
     <backup>`, logged and listed in the PR; never secrets, credentials or logins. `NEEDS_YOU:` is only for what no tool
     can do (a login in a browser, a credential, an access grant).
-  - Another run working in the checkout: this one goes on in a separate worktree.
+  - Another run working in the checkout: this one waits for it (Needs you, then Continue) - never a separate worktree.
+  - A Claude session working in the repo when the run would switch it: the run waits for it (Take it anyway to go on).
   - Stuck on its checks (verify, prove or review still failing): one **fresh attempt** - a new session plans again with
     what went wrong (the note, the last verify, review findings and app check), builds, checks, PR. Stuck again, or
     NEEDS_YOU: it stops - the developer is told by a Windows notification - and Learn is asked what would have let it
@@ -810,7 +839,7 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
     its backend existed, and a run restarted a service another was proving against).
   - **One run per checkout across Dev breaks**: a lock file `.git\devbreak-run.lock` (pid, app folder, run, title),
     taken when a run works in the checkout and freed when its drive ends; a live lock of another run makes the
-    checkout busy (autonomous: a separate worktree); a dead holder is free. `Busy` is saved with the run while it is
+    checkout busy (autonomous too); a dead holder is free. `Busy` is saved with the run while it is
     driven (also during Learn and the manager), and a restart marks a busy run stopped.
   - **Proof scripts kept**: each repo has `factory-knowledge\<repo>\proof-scripts`; prove and answer checks are told
     to reuse and adapt those and save new ones there, and to keep evidence to the manifest and about 15 files.
@@ -885,8 +914,11 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
   **Request changes** puts each unticked decision ("Your decision "..." is not what I want: <how>") into the feedback
   box and picks "Change design" unless a kind chip is chosen (Wrong behaviour, Missing, Change design, Bug).
   Send (`FeedbackAsync(text, kind)`) records it as `FactoryFeedback { Kind, Revision = Revision + 1 }`, clears the
-  report (each revision writes its own) and: an answered run (`NoChange` with a Result) gets a turn "reviewed your
-  answer (revision N) and asks for changes" that starts with `UNDERSTOOD:`, then the answer check again; a built run
+  report (each revision writes its own) and: an answered run (`NoChange` with a Result) is revised without its branch
+  (`NeedsBranch`: an answer-only run deletes its empty branch when it finishes, so switching to it failed with
+  "invalid reference") and gets a turn "reviewed your answer (revision N) and asks for changes" with the latest
+  answer, its report and its evidence to build on (`LatestArtifact`, read from disk), that starts with
+  `UNDERSTOOD:`, then the answer check again; a built run
   goes to `ReviseAsync`: one turn that first says `UNDERSTOOD: <what done now means>`, names an earlier decision it
   overturns (and follows the developer), adds `OTHER_REPO: <folder> - <task>` for a part in another repository, then
   changes the files - verify, prove, review and the PR update follow, and `Revision` becomes N. Not autonomous, that
@@ -999,16 +1031,38 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
     - **Working** (violet): "Working · <station> · <time at it>", the step and its latest tool call; **Stop**.
     - **Needs you** (coral): "Needs you" (or "Stopped", or "Needs you - the department manager could not get it
       going" with the manager's case); the whole reason; a **reply** box ("Send reply" - answers its question or says
-      what to do, through `FeedbackAsync`) when the task has a session; **Continue**, and only when they apply **Use a
-      separate worktree** and **Draft PR anyway** (Development, with a plan, no PR).
+      what to do, through `FeedbackAsync`) when the task has a session; **Continue**, and only when it applies
+      **Draft PR anyway** (Development, with a plan, no PR).
     - **Done**: "Review revision N - the draft PR / report / answer is ready" (violet while it waits for the review),
-      or "Accepted - revision N"; the note; the **Result** (marker yellow, mono, **Copy**); the decisions it took on
+      or "Accepted - revision N"; the note; the **Result** (see "Reading the result" below, **Copy** copies it whole); the decisions it took on
       its own as ticked boxes (unticking one opens "How should it be instead?" and the change box); **Accept**
       (primary - `AcceptAsync` marks it accepted, records the rating good and learns from it) and **Request changes**
       (shows the kinds - Wrong behaviour / Missing / Change design / Bug - and the box; **Send to the next revision**
       sends the unticked decisions and the words, kind "change design" when only decisions were unticked); **Open PR**
-      / **Open report** (secondary next to Accept); **Fix it in Development** for a troubleshooting diagnosis.
+      / **Open report** (secondary next to Accept); **Fix it in Development** for a troubleshooting diagnosis; **Build it in Development** for research findings (`HandOffTask`: the change the research proved, made again properly on its own branch with tests and a draft PR - in the repo of the change it made outside its own (`OutsideRepo`: the nearest folder holding .git above the path the change names), on that repo's own branch; with no such change, the run's repo and base).
       There is no separate Good/Bad rating: Accept and Request changes are the verdict.
+    - **Reading the result** (`FactoryDigest`, tested in `DigestCases`): the task's title and its list row show the
+      answer's headline - its `TITLE:` line, else its opening bold sentence, else the words it was started with (those
+      go to the meta line, "asked: ..."). The card's title says what to do ("Needs you - what to do"), with when it
+      stopped on the right ("stopped 11:58 · 2 h ago"). The manager's note is split: what to do stays, its
+      "Why it stopped:" folds into **Why it stopped (technical)**, the proposals into **Factory improvements proposed
+      (N)** (Copy / Got it inside). The answer's `QUESTIONS:` become rows - the ask, "Suggested: ...", and
+      **Yes, as suggested** / **No** / **Answer…** (a box for your words); **Send answers (n of m)** sends the answered
+      ones as one message through `FeedbackAsync` (the next revision). **Accept** reads "Accept - N questions
+      unanswered" while there are some. The **Result** box: RESULT, the headline in bold, the findings rendered like
+      the chats (tables, lists, code - `CodeRenderer`) without the title, the questions and the EVIDENCE line, and its
+      "Not verified" bullets folded into **⚠ Not verified (N)**. The room under the header and the line is shared: the
+      card takes at most half and scrolls (`FitCard`, `CardMaxHeight`, at least 180 px), the activity the rest; the
+      wheel over its text scrolls the card.
+    - **Tell it now** (while a task works): a box under the card's line with **Tell it now** (Ctrl+Enter). `Factory.Steer`
+      writes the words into the Claude turn that runs now (`LiveSession.Steer`, as "The developer adds this while you
+      work - take it into account from your next step on: ..."); measured with `claude -p` stream-json: the message is
+      taken in at Claude's next tool step and the same turn ends with one result. With `--replay-user-messages` each
+      message is echoed when it is taken in (`SteerTracker`); one not echoed before the result came too late, so the
+      turn reads on to the result of the turn it gets (no stray result is left for the next step). When no Claude turn
+      runs (the manager, Learn, a check), the words are held (`FactoryRun.Steers`) and go first in the task's next turn
+      ("The developer told you this while the task worked - it overrides what follows where they differ"). Both are
+      logged ("You told it while it works: ..."); the caption under the box says "Sent" or "Held". Nothing stops.
     Then the tabs **Activity** (the log, rendered like the chats) · **Evidence (N)** (the proof chosen and what was
     not produced; a card per piece: kind, ✓ pass / ✗ fail / – skipped, what it proves, its numbers, an image shown
     (click to open), **Open <file>** for a video, report or any file, a note when the file is missing) · **Trace (N)**

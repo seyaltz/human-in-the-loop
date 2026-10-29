@@ -17,6 +17,7 @@ public static class Watch
         @"is not recognized as|unexpected EOF|ParserError|Unexpected token|command not found", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly TimeSpan Silent = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan SlowStep = TimeSpan.FromMinutes(2);
     private const int NoProgress = 12;
 
     /// <summary>
@@ -30,7 +31,7 @@ public static class Watch
     public static string? Flag(TurnLog log, DateTime now, bool busy) => FlagRule(log, now, busy)?.Reason;
 
     /// <summary>The flag with a fixed id for its rule (a reason can carry a live count; Dismiss keys on the id).</summary>
-    public static (string Rule, string Reason)? FlagRule(TurnLog log, DateTime now, bool busy)
+    public static (string Rule, string Reason)? FlagRule(TurnLog log, DateTime now, bool busy, TimeSpan? usual = null)
     {
         List<TurnStep> done = [.. log.Steps.Where(s => !s.Sub && s.End != null)];
         if (done.Count > 0)
@@ -42,6 +43,14 @@ public static class Watch
             if (Same(4, _ => true)) return ("same-4", $"it ran the same {last.Tool} call 4 times in a row: {last.Summary}");
             if (done.TakeLast(10).Count(s => s.Error) >= 5) return ("errors", "5 of its last 10 tool calls failed");
             if (last.Error && Dialect.IsMatch(last.Result)) return ("dialect", "a command written for another shell: " + Short(last.Result, 90));
+        }
+        // one step running long with nothing back - a page polled while it never loads ran 3 min in one browser call
+        // unflagged; a command is slow only past 1.5x its usual time
+        if (log.Running is { Sub: false } running && now - running.Start is var ran
+            && ran >= (usual is { } u && u * 1.5 > SlowStep ? u * 1.5 : SlowStep))
+        {
+            string what = LeadingCd.Replace(running.Command.Length > 0 ? running.Command : running.Summary.Length > 0 ? running.Summary : running.Input, "");
+            return ("slow-step", $"one {running.Tool} step has run {(int)ran.TotalMinutes} min with nothing back: {Short(what, 70)} - is it waiting on something stuck?");
         }
         DateTime lastMove = log.Steps.Where(s => !s.Sub).Select(s => s.End ?? s.Start).DefaultIfEmpty(log.Start).Max();
         if (!busy && now - lastMove >= Silent) return ("silent", "no new step for 5 minutes, and nothing is running");
@@ -165,6 +174,22 @@ public static class Watch
         "Write a handover of this conversation for a new session that will not see it. Plain text, under 300 words: " +
         "the goal in the user's words; what is done, with file paths; decisions made and why; what is left, in order; " +
         "commands that work here; anything that failed and must not be retried. No preamble.";
+
+    /// <summary>
+    /// A session this heavy starts the next message fresh, from a handover: compaction left 66k (an 18k summary over
+    /// 47k fixed) and refilled to 167k in 30-45 min, and every step re-sends all of it. Only when nothing still
+    /// belongs to this session - a running turn, a background task's result, a queued message.
+    /// </summary>
+    public static bool GoFresh(double tokens, bool working, int backgroundTasks, int queued) =>
+        tokens >= FreshAt && !working && backgroundTasks == 0 && queued == 0;
+
+    // DEVBREAK_FRESH_AT lowers it, to see the switch in a test copy without filling 120k first
+    public static readonly double FreshAt = double.TryParse(Environment.GetEnvironmentVariable("DEVBREAK_FRESH_AT"), out double at) ? at : 120_000;
+
+    /// <summary>The fresh session's first message: the handover, then what the developer wrote.</summary>
+    public static string FreshMessage(string handover, string message) =>
+        "Continue this task. A handover from the previous session (it ran out of room):\n\n" + handover.Trim() +
+        "\n\nThe developer's next message:\n" + message;
 
     /// <summary>
     /// The footer's context: every step re-sends the whole conversation, so the size in tokens is what each step costs -

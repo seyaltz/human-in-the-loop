@@ -60,6 +60,16 @@ public sealed class SessionProcess : IDisposable
 
     public bool Usable => !_closed && !_process.HasExited;
     public bool Working => _turn != null;
+
+    /// <summary>
+    /// A turn the CLI started by itself: a background task ended after its turn did, and it carries on with the task's
+    /// result (measured: task_started, the turn's result, then task_notification, a new init, the reply and a second
+    /// result). Nobody sent a message, so nothing waits on its result.
+    /// </summary>
+    public bool FollowUp { get; private set; }
+
+    public event Action? FollowUpStarted;
+    public event Action? FollowUpEnded;
     public DateTime LastActivity { get; private set; } = DateTime.Now;
 
     /// <summary>What the last turn cost. Measured: a result's total_cost_usd is the process's total so far (0.0047, 0.0101,
@@ -320,12 +330,20 @@ public sealed class SessionProcess : IDisposable
             LastTurnCost = total.GetDouble() - _costSoFar;
             _costSoFar = total.GetDouble();
         }
+        if (type == "assistant" && _turn == null && !FollowUp)
+        {
+            FollowUp = true;
+            FollowUpStarted?.Invoke();
+        }
         if (ClaudeSessions.ReadLine(line, e => Entry?.Invoke(e.Kind == SessionEntryKind.Done ? e with { Text = Done(root) } : e), null))
         {
             Result?.Invoke(root);
             TaskCompletionSource<bool>? turn = _turn;
             _turn = null;
             turn?.TrySetResult(true);
+            bool followUp = FollowUp;
+            FollowUp = false;
+            if (turn == null && followUp) FollowUpEnded?.Invoke();
         }
     }
 
