@@ -612,7 +612,16 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      shell can still change files - the same access the plan turn has). Then the base branch and the remembered verify command for it.
   1. **Workspace - always the developer's own checkout, never a worktree** (no copy: its dependencies and build output
      are already there, and what runs locally is served from it; a worktree is a second copy of the files - 603 MB with
-     a fresh `npm ci` in a measured run - whose work had to be merged back by hand). The run checks the checkout can be used
+     a fresh `npm ci` in a measured run - whose work had to be merged back by hand). **Until there is a change to build
+     the run only reads the checkout as it is** - the developer's branch and uncommitted work, nothing switched, no lock
+     (the plan, research and answer sessions are told so, and to change, switch, stash or commit nothing): research and
+     answers never change a file, and switching for them once pulled the branch from under a session editing there.
+     The workspace step below runs when the build starts. **A session working in the repo first gets to finish**: any
+     Claude session transcript (Dev break's or a terminal's, not the run's own) that edited a file in the repo, or ran a
+     command that goes into it (cd, pushd, Set-Location, git -C - not one that only loads a file from it), in the last
+     10 minutes makes the run wait ("Waiting: a Claude session (<id>) edited <file> at <time> ..."); it re-reads the
+     transcripts every 30 s, goes on by itself when they are quiet, and **Take it anyway** goes on at once. Stop ends
+     the wait. Then the base commit is read again (the session may have committed). The run checks the checkout can be used
      and **asks when it cannot** (stops at Needs you with the question): another run working in it ("... Wait for it
      and press Continue.") or git cannot read it. Then it notes the branch the checkout is on (or its commit when
      detached), `git switch -c devbreak/<slug>-<id> <base commit>` (or `git switch` to it when the branch exists) and
@@ -637,7 +646,7 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
      committed; otherwise it stays on the run's branch and the run says so. Continue, feedback and PR anyway first
      switch the checkout to the run's branch.
      Old records with a separate worktree still show and clean up; no new run makes one.
-  2. **Plan**: a new Claude Code session in the worktree (as in Sessions: full setup, bypass) reads the task - Jira
+  2. **Plan**: a new Claude Code session in the repo folder (as in Sessions: full setup, bypass) reads the task - Jira
      and spec with the tools on the machine - first understands the mission with the machine's skills, MCP servers
      and tools (running the app or its services, reading logs or data, inspecting or debugging a running service),
      learns how the repo is built, run and tested and how the change can be seen in the running app, and replies `TITLE:`, numbered steps and, when no verify command was
@@ -751,6 +760,7 @@ repo's Claude harness. Runs are kept in `factory.json` next to the exe (git-igno
     <backup>`, logged and listed in the PR; never secrets, credentials or logins. `NEEDS_YOU:` is only for what no tool
     can do (a login in a browser, a credential, an access grant).
   - Another run working in the checkout: this one waits for it (Needs you, then Continue) - never a separate worktree.
+  - A Claude session working in the repo when the run would switch it: the run waits for it (Take it anyway to go on).
   - Stuck on its checks (verify, prove or review still failing): one **fresh attempt** - a new session plans again with
     what went wrong (the note, the last verify, review findings and app check), builds, checks, PR. Stuck again, or
     NEEDS_YOU: it stops - the developer is told by a Windows notification - and Learn is asked what would have let it

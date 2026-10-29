@@ -24,7 +24,7 @@ public static class FactoryLine
         "Each kind of work has its own line: a change, a customer's problem, a question, a company matter.");
 
     private static readonly Station WorkspaceStation = new("Workspace", [FactoryStage.Worktree], false,
-        "Puts your checkout on a new branch for the task and locks it; your local changes stay, stashed only on a conflict.",
+        "Reads your checkout as it is; only a change to build puts it on a new branch and locks it - after any session working there has finished. Your local changes stay, stashed only on a conflict.",
         "Your own uncommitted files are recorded, so they can never be part of what ships; no other run uses the checkout meanwhile.",
         "The task works where you work, without touching what is yours.");
 

@@ -27,6 +27,7 @@ public static class Selftest
             StatsCases();
             WaitCases();
             ResendCases();
+            BusyRepoCases();
             DigestCases();
             SteerCases();
             HandOffCases();
@@ -114,6 +115,12 @@ public static class Selftest
             Lines.Add($"real: week {w.Start:yyyy-MM-dd} active {w.ActiveH:0.0} h, wait {w.WaitH:0.0}, tools {w.ToolH:0.0}, model {w.ModelH:0.0}, you {w.UserH:0.0}, calls {w.Calls}, failed {w.Failed}, interrupts {w.Interrupts}, corrections {w.Corrections}");
         }
         Lines.Add($"real: families in 3+ sessions: {data.Families(3).Count}");
+        // DEVBREAK_BUSY_CHECK="<transcript>|<repo>|<since, UTC>": replays the busy-repo check on a real transcript
+        if (Environment.GetEnvironmentVariable("DEVBREAK_BUSY_CHECK") is { Length: > 0 } spec && spec.Split('|') is [var transcript, var repo, var since])
+        {
+            DateTime at = DateTime.Parse(since, null, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal);
+            Lines.Add($"real: busy {repo} since {since}: {Factory.SessionInRepo(File.ReadLines(transcript), repo, at) ?? "no session working there"}");
+        }
     }
 
     // a log of finished calls: (tool, summary, error, result), a second apart, starting 10 minutes ago
@@ -574,6 +581,43 @@ public static class Selftest
                 "Resend: the report on disk is named even after a failed round cleared the run's link - got: " + Factory.LatestArtifact(answered));
         }
         finally { File.Delete(report); }
+    }
+
+    // a session working in the repo a run would take: measured on 2026-10-29, a research run switched a checkout
+    // at 07:07:44 while a session had edited a stylesheet there minutes before
+    private static void BusyRepoCases()
+    {
+        string repo = @"C:\work\repos\app";
+        DateTime since = new(2026, 10, 29, 4, 55, 0, DateTimeKind.Utc);
+        string Step(string at, string tool, string input) =>
+            $$$"""{"type":"assistant","timestamp":"{{{at}}}","message":{"content":[{"type":"tool_use","id":"t","name":"{{{tool}}}","input":{{{input}}}}]}}""";
+        string edit = Step("2026-10-29T04:58:35.120Z", "Edit", """{"file_path":"C:\\Work\\Repos\\App\\src\\map\\Card.sass","old_string":"a","new_string":"b"}""");
+        Check(Factory.SessionInRepo([edit], repo, since) is { } e && e.Contains("Card.sass"),
+            "Busy repo: a session that edited a file in the repo (any case) is working there - got: " + Factory.SessionInRepo([edit], repo, since));
+        string bash = Step("2026-10-29T05:03:20.000Z", "Bash", """{"command":"cd /c/work/repos/app && git switch -c feature/x"}""");
+        Check(Factory.SessionInRepo([bash], repo, since) != null, "Busy repo: a shell command run in the repo (Git Bash path) counts");
+        string borrow = Step("2026-10-29T05:01:36.000Z", "Bash", """{"command":"node -e \"require('C:/work/repos/app/node_modules/playwright')\""}""");
+        Check(Factory.SessionInRepo([borrow], repo, since) == null, "Busy repo: a command that only loads a file from the repo does not work there");
+        string gitC = Step("2026-10-29T05:01:40.000Z", "PowerShell", """{"command":"git -C 'C:\\work\\repos\\app' stash"}""");
+        Check(Factory.SessionInRepo([gitC], repo, since) != null, "Busy repo: git -C on the repo counts");
+        string sibling = Step("2026-10-29T05:00:00.000Z", "Edit", """{"file_path":"C:\\work\\repos\\app-peek\\src\\a.ts"}""");
+        Check(Factory.SessionInRepo([sibling], repo, since) == null, "Busy repo: a sibling folder with the same prefix is another repo");
+        string old = Step("2026-10-29T04:40:00.000Z", "Edit", """{"file_path":"C:\\work\\repos\\app\\src\\a.ts"}""");
+        Check(Factory.SessionInRepo([old], repo, since) == null, "Busy repo: an edit before the quiet window is not working now");
+        string read = Step("2026-10-29T05:01:00.000Z", "Read", """{"file_path":"C:\\work\\repos\\app\\src\\a.ts"}""");
+        Check(Factory.SessionInRepo([read], repo, since) == null, "Busy repo: only reading the repo does not hold it");
+        Check(Factory.SessionInRepo(["not json", "{\"type\":\"user\"}"], repo, since) == null, "Busy repo: lines that are not steps are skipped");
+
+        // research and answers read the checkout as it is - only a change to build takes it (switches the branch)
+        var reading = new FactoryRun { Id = "r1", Repo = repo, Worktree = repo, Branch = "devbreak/x-r1", BaseBranch = "feature/card" };
+        string where = Factory.WhereText(reading);
+        Check(where.Contains("as it is") && where.Contains("feature/card") && where.Contains("Change no file") && !where.StartsWith("You are working"),
+            "Checkout: before the build the run reads the checkout as it is, on the developer's branch - got: " + where);
+        Check(Factory.NeedsCheckout(reading), "Checkout: a run not yet on its branch takes the checkout to build");
+        reading.InCheckout = true;
+        Check(!Factory.NeedsCheckout(reading) && Factory.WhereText(reading).StartsWith("You are working") && Factory.WhereText(reading).Contains("on a new branch"),
+            "Checkout: a run already on its branch builds there");
+        Check(!Factory.NeedsCheckout(new FactoryRun { Id = "r2", FolderWide = true }), "Checkout: a folder-wide run never takes a checkout");
     }
 
     private static void WaitCases()

@@ -92,7 +92,10 @@ folder where your repos are; Claude finds the one the task is for and learns how
 in **your own checkout**, on a new branch from the base - no copy, your dependencies already installed - and switches
 back to your branch when it is done. Your own local changes (temp files, local settings) don't stop it - they are
 never committed; if the feature needs one of those files (or they block the branch switch), your changes are stashed
-(`git stash list`, "devbreak <id>: ..."). It never makes a worktree; when another run is already working in that checkout, it waits for **Continue**. The steps:
+(`git stash list`, "devbreak <id>: ..."). It never makes a worktree. Research and answers read your checkout as it is and
+switch nothing; only a change to build takes it. When a Claude session (in Dev break or a terminal) has edited a file or
+run a command in that repo in the last 10 minutes, the run waits and goes on by itself once the session leaves the repo
+alone - or press **Take it anyway**. When another run is already working in that checkout, it waits for **Continue**. The steps:
 **gate → workspace → plan → build → verify → review → prove → ship (draft PR) → learn**. Claude understands the mission with your skills,
 MCP servers and tools, plans and builds; Dev break runs your verify command (or one Claude proposes) and Claude
 fixes until it passes; then Claude **runs the app** with the change and proves it with the evidence the feature

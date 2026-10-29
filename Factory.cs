@@ -266,6 +266,9 @@ public sealed class FactoryRun
     /// <summary>A commit of the developer's local changes when they were noted (git stash create), to stash their version from.</summary>
     public string LocalSnapshot { get; set; } = "";
 
+    /// <summary>The session the run waits for before taking the checkout ("" when it does not wait), and the developer's go-ahead.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public string WaitingFor { get; set; } = "";
+    [System.Text.Json.Serialization.JsonIgnore] public bool TakeAnyway { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public CancellationTokenSource? Running { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public bool Working => Running != null;
     /// <summary>Saved with the run: it is being driven right now (also while Learn or the manager runs) - for anything
@@ -497,7 +500,7 @@ public static class Factory
         if (run.AutoDepartment && !await RouteAsync(run, cancel)) return false;
         await ChooseLaneAsync(run, cancel);
         if (!await LocateAsync(run, cancel)) return false;
-        if (!run.FolderWide && !await WorktreeAsync(run, cancel)) return false;
+        if (!run.FolderWide && !await ReadInPlaceAsync(run)) return false;
         // from here on there is something to learn from
         if (!await PlanAsync(run, cancel)) return true;
         if (run.NoChange) return await AnswerAsync(run, cancel);
@@ -594,7 +597,7 @@ public static class Factory
         }
         else if (run.Worktree.Length == 0 || !Directory.Exists(run.Worktree))
         {
-            if (!await WorktreeAsync(run, cancel)) return false;
+            if (!await ReadInPlaceAsync(run)) return false;
         }
         if (run.Plan.Length == 0)
         {
@@ -1300,18 +1303,52 @@ public static class Factory
         return null;
     }
 
-    // where the run works: always the developer's own checkout, on the run's new branch - never a worktree (what runs
+    // before the plan: the run reads the developer's checkout as it is - their branch, their uncommitted work - and
+    // switches nothing. Research and answers change no file (3 of 3 runs on 2026-10-28/29 needed no change, yet each
+    // switched the branch - once under a session editing there); the checkout is taken only to build a change.
+    private static async Task<bool> ReadInPlaceAsync(FactoryRun run)
+    {
+        (int exit, string output) = await GitSpanAsync(run, run.Repo, "rev-parse", run.BaseBranch);
+        if (exit != 0) return Wait(run, $"Can't find branch {run.BaseBranch} in {run.Repo}: {output.Trim()}");
+        run.BaseCommit = output.Trim();
+        run.Worktree = run.Repo;
+        Enter(run, FactoryStage.Worktree, $"Reading your checkout {run.Repo} as it is ({run.BaseBranch}) - nothing is switched. " +
+            "It takes the checkout, on a new branch, only when there is a change to build.");
+        return true;
+    }
+
+    /// <summary>What the run's sessions are told about where they work.</summary>
+    internal static string WhereText(FactoryRun run) =>
+        run.FolderWide ? $"You are working in the folder {run.Folder}: the item belongs to no single repo, so read across the repos and systems under it as needed. Change nothing."
+        : run.InCheckout ? $"You are working in the developer's own checkout of {run.Repo}, on a new branch {run.Branch} (from {run.BaseBranch})."
+        : HasOwnWorktree(run) ? $"You are working in a separate git worktree of {run.Repo}, on a new branch {run.Branch} (from {run.BaseBranch})."
+        : $"You are reading the developer's own checkout of {run.Repo} as it is - on their branch {run.BaseBranch}, with their uncommitted work; " +
+          "another session may be working in it. Change no file there, and do not switch, stash or commit: a change to make is put on a " +
+          $"new branch {run.Branch} when the build starts.";
+
+    /// <summary>The run builds a change and is not on its branch yet: it takes the developer's checkout first.</summary>
+    internal static bool NeedsCheckout(FactoryRun run) => !run.FolderWide && !run.InCheckout && !HasOwnWorktree(run);
+
+    // how long a session must leave the repo alone before a waiting run takes it
+    private static readonly TimeSpan SessionQuiet = TimeSpan.FromMinutes(10);
+
+    // where the run builds: always the developer's own checkout, on the run's new branch - never a worktree (what runs
     // locally is served from the checkout; a worktree's work had to be merged back by hand). A dirty checkout is
-    // worked in as it is; only a conflict with the developer's changes stashes them.
-    private static async Task<bool> WorktreeAsync(FactoryRun run, CancellationToken cancel)
+    // worked in as it is; only a conflict with the developer's changes stashes them. A session working in the repo
+    // first gets to finish: the run waits instead of switching the branch under it.
+    private static async Task<bool> TakeCheckoutAsync(FactoryRun run, CancellationToken cancel)
     {
         (int exit, string output) = await GitSpanAsync(run, run.Repo, "rev-parse", run.BaseBranch);
         if (exit != 0) return Wait(run, $"Can't find branch {run.BaseBranch} in {run.Repo}: {output.Trim()}");
         run.BaseCommit = output.Trim();
         cancel.ThrowIfCancellationRequested();
         bool branchExists = (await GitAsync(run.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/" + run.Branch)).Exit == 0;
-        Enter(run, FactoryStage.Worktree, $"Working in your checkout {run.Repo}, on a new branch {run.Branch} from {run.BaseBranch}.");
+        Enter(run, FactoryStage.Worktree, $"Taking your checkout {run.Repo} to build: a new branch {run.Branch} from {run.BaseBranch}.");
         if (await CheckoutProblemAsync(run, "start") is { } problem) return Wait(run, problem);
+        await WaitForSessionsAsync(run, cancel);
+        // the base may have moved while the run waited (the session committed): build on where it is now
+        (exit, output) = await GitAsync(run.Repo, "rev-parse", run.BaseBranch);
+        if (exit == 0) run.BaseCommit = output.Trim();
         await RememberLocalChangesAsync(run);
         if (run.LocalChanges.Count > 0)
         {
@@ -1329,6 +1366,134 @@ public static class Factory
         Log(run, $"Your checkout is on {run.Branch}; it goes back to {run.ReturnTo} when the run is done.");
         return true;
     }
+
+    // a Claude session - in Dev break or a terminal - working in the repo: the run waits until it has left the repo alone
+    // for SessionQuiet, or the developer presses Take it anyway. Stop ends the wait like any step.
+    private static async Task WaitForSessionsAsync(FactoryRun run, CancellationToken cancel)
+    {
+        string told = "";
+        // the run list is the UI thread's: read it here, the transcripts on a pool thread
+        var own = Runs.Select(r => r.SessionId).Where(id => id.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        while (!run.TakeAnyway && await Task.Run(() => LiveSessionIn(run.Repo, own)) is { } busy)
+        {
+            if (busy.Id != told)
+            {
+                told = busy.Id;
+                run.WaitingFor = $"a Claude session ({busy.Id[..Math.Min(8, busy.Id.Length)]}) {busy.What}";
+                Log(run, $"Waiting: {run.WaitingFor} - switching the branch now would pull it from under that session. The run goes on by itself " +
+                    $"once the session leaves the repo alone for {SessionQuiet.TotalMinutes:0} minutes, or press Take it anyway.");
+            }
+            // the button is seen within seconds; the transcripts are read again every 30
+            for (int i = 0; i < 6 && !run.TakeAnyway; i++) await Task.Delay(TimeSpan.FromSeconds(5), cancel);
+        }
+        if (run.TakeAnyway && told.Length > 0) Log(run, "You took the checkout anyway.");
+        run.WaitingFor = "";
+        run.TakeAnyway = false;
+    }
+
+    // the newest Claude session that changed something in the run's repo within SessionQuiet - not the run's own
+    private static (string Id, string What)? LiveSessionIn(string repo, HashSet<string> own)
+    {
+        DateTime since = DateTime.UtcNow - SessionQuiet;
+        try
+        {
+            if (!Directory.Exists(ClaudeProjects.ProjectsDir)) return null;
+            foreach (FileInfo file in new DirectoryInfo(ClaudeProjects.ProjectsDir).EnumerateDirectories()
+                         .SelectMany(d => d.EnumerateFiles("*.jsonl")).Where(f => f.LastWriteTimeUtc >= since).OrderByDescending(f => f.LastWriteTimeUtc))
+            {
+                string id = Path.GetFileNameWithoutExtension(file.Name);
+                if (own.Contains(id)) continue;
+                if (SessionInRepo(TailLines(file.FullName, 1 << 20), repo, since) is { } what) return (id, what);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // a folder that cannot be read is no evidence of a session
+        }
+        return null;
+    }
+
+    // the last bytes of a file another process is writing, as whole lines
+    private static IEnumerable<string> TailLines(string path, int bytes)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            long start = Math.Max(0, stream.Length - bytes);
+            stream.Seek(start, SeekOrigin.Begin);
+            string text = new StreamReader(stream, Encoding.UTF8).ReadToEnd();
+            string[] lines = text.Split('\n');
+            return start > 0 ? lines.Skip(1) : lines;
+        }
+        catch (IOException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// What a session did in the repo since a time - "edited Card.sass at 07:05" - from its transcript lines, or null
+    /// when it did not work there. Writing a file or running a command there counts; reading does not hold the repo.
+    /// </summary>
+    internal static string? SessionInRepo(IEnumerable<string> lines, string repo, DateTime sinceUtc)
+    {
+        string root = repo.Replace('/', '\\').TrimEnd('\\');
+        string slashed = root.Replace('\\', '/').ToLowerInvariant();
+        string[] forms = [slashed, slashed.Length > 2 && slashed[1] == ':' ? "/" + slashed[0] + slashed[2..] : slashed];
+        bool InRepo(string path)
+        {
+            string p = path.Replace('/', '\\');
+            return p.Equals(root, StringComparison.OrdinalIgnoreCase) || p.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase);
+        }
+        // a command works in the repo when it goes into it (cd, pushd, Set-Location, git -C) - a path it only loads a
+        // file from (measured: a script requiring playwright from another repo's node_modules) is not working there
+        bool Mentions(string command)
+        {
+            string c = command.Replace('\\', '/').ToLowerInvariant();
+            foreach (string form in forms)
+            {
+                for (int i = c.IndexOf(form, StringComparison.Ordinal); i >= 0; i = c.IndexOf(form, i + 1, StringComparison.Ordinal))
+                {
+                    int end = i + form.Length;
+                    bool whole = end == c.Length || !(char.IsLetterOrDigit(c[end]) || c[end] is '-' or '_' or '.');
+                    if (whole && GoesInto.IsMatch(c[..i])) return true;
+                }
+            }
+            return false;
+        }
+        string? found = null;
+        foreach (string line in lines)
+        {
+            if (!line.Contains("\"tool_use\"", StringComparison.Ordinal)) continue;
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(line);
+                JsonElement top = doc.RootElement;
+                if (!top.TryGetProperty("timestamp", out JsonElement ts) || !DateTime.TryParse(ts.GetString(), null,
+                        System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out DateTime at) || at < sinceUtc) continue;
+                if (!top.TryGetProperty("message", out JsonElement message) || !message.TryGetProperty("content", out JsonElement content)
+                    || content.ValueKind != JsonValueKind.Array) continue;
+                foreach (JsonElement block in content.EnumerateArray())
+                {
+                    if (!block.TryGetProperty("type", out JsonElement type) || type.GetString() != "tool_use" || !block.TryGetProperty("input", out JsonElement input)) continue;
+                    string tool = block.TryGetProperty("name", out JsonElement name) ? name.GetString() ?? "" : "";
+                    string Field(string key) => input.ValueKind == JsonValueKind.Object && input.TryGetProperty(key, out JsonElement v) && v.ValueKind == JsonValueKind.String ? v.GetString()! : "";
+                    string local = at.ToLocalTime().ToString("HH:mm");
+                    if (tool is "Edit" or "Write" or "MultiEdit" or "NotebookEdit" && (Field("file_path") is { Length: > 0 } file ? file : Field("notebook_path")) is { Length: > 0 } path && InRepo(path))
+                        found = $"edited {Path.GetFileName(path)} at {local}";
+                    else if (tool is "Bash" or "PowerShell" && Mentions(Field("command")))
+                        found = $"ran a command there at {local}";
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+        return found;
+    }
+
+    // what a command says right before a folder it works in: cd, pushd, Set-Location (sl), git -C - with an optional quote
+    private static readonly Regex GoesInto = new(@"(?:^|[\s;&|(])(?:cd|pushd|set-location|sl|-c)\s+(?:-literalpath\s+|-path\s+)?['""]?$", RegexOptions.Compiled);
 
     // the remote as the run found it - its branches and the settings that decide where a push goes - so the PR step
     // can tell what reached it during the run. A block inside Claude's shell can be undone by Claude (a pushurl, an
@@ -1654,9 +1819,7 @@ public static class Factory
               own commands needed, e.g. $env:JAVA_HOME='...'; before the build. Say in one line before it why these
               tests are the regression scope.{(run.VerifyHint.Length > 0 ? $"\nThis repo was verified before with: {run.VerifyHint}\nReuse its environment and flags; choose the tests for this change." : "")}
               """;
-        string where = run.FolderWide
-            ? $"You are working in the folder {run.Folder}: the item belongs to no single repo, so read across the repos and systems under it as needed. Change nothing."
-            : $"You are working in {(run.InCheckout ? "the developer's own checkout of " + run.Repo : "a separate git worktree of " + run.Repo)}, on a new branch {run.Branch} (from {run.BaseBranch}).";
+        string where = WhereText(run);
         if (run.Department != FactoryDepartment.Development) return await InvestigateAsync(run, where, task, cancel);
         string prompt = $"""
             {where}
@@ -1974,6 +2137,7 @@ public static class Factory
 
     private static async Task<bool> BuildAsync(FactoryRun run, CancellationToken cancel)
     {
+        if (NeedsCheckout(run) && !await TakeCheckoutAsync(run, cancel)) return false;
         Enter(run, FactoryStage.Build, "Claude implements the plan.");
         (string answer, string? error) = await TurnAsync(run, isNew: false, """
             Now implement the plan in this folder. Change only what the task needs, and add or update tests for it.

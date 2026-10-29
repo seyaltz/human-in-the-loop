@@ -756,6 +756,7 @@ public partial class FactoryView : UserControl
         // the actions: one primary for the state, and only the others that apply
         Visibility On(bool on) => on ? Visibility.Visible : Visibility.Collapsed;
         StopButton.Visibility = On(working);
+        TakeAnywayButton.Visibility = On(working && run.WaitingFor.Length > 0);
         SteerPanel.Visibility = On(working);
         if (!working) SteerSent.Visibility = Visibility.Collapsed;
         ContinueButton.Visibility = On(waiting);
@@ -1325,6 +1326,12 @@ public partial class FactoryView : UserControl
     private void Stop_Click(object sender, RoutedEventArgs e)
     {
         if (_shown != null) Factory.Stop(_shown);
+    }
+
+    private void TakeAnyway_Click(object sender, RoutedEventArgs e)
+    {
+        if (_shown != null) _shown.TakeAnyway = true;
+        TakeAnywayButton.Visibility = Visibility.Collapsed;
     }
 
     private async void Anyway_Click(object sender, RoutedEventArgs e)
